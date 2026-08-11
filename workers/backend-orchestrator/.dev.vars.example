@@ -1,0 +1,5 @@
+# Deployment bootstrap
+MEDIA_PANEL_BASE_URL=https://your-media-panel-domain.com
+BACKEND_ORCHESTRATOR_SHARED_SECRET=replace-with-a-long-random-secret
+
+# `npm run deploy` retrieves all runtime bindings from the panel.

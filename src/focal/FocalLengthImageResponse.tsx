@@ -1,0 +1,46 @@
+import type { Media } from '../media';
+import ImageCaption from '@/image-response/components/ImageCaption';
+import ImageMediaGrid from '@/image-response/components/ImageMediaGrid';
+import ImageContainer from '@/image-response/components/ImageContainer';
+import type { NextImageSize } from '@/platforms/next-image';
+import { formatFocalLength } from '@/focal';
+import IconFocalLength from '@/components/icons/IconFocalLength';
+
+export default function FocalLengthImageResponse({
+  focal,
+  photos,
+  width,
+  height,
+  fontFamily,
+}: {
+  focal: number,
+  photos: Media[]
+  width: NextImageSize
+  height: number
+  fontFamily: string
+}) {  
+  return (
+    <ImageContainer solidBackground={photos.length === 0}>
+      <ImageMediaGrid
+        {...{
+          photos,
+          width,
+          height,
+        }}
+      />
+      <ImageCaption {...{
+        width,
+        height,
+        fontFamily,
+        icon: <span style={{
+          display: 'flex',
+          transform: `translateY(${height * .002}px)`,
+          marginRight: height * .01,
+        }}>
+          <IconFocalLength size={height * .075} />
+        </span>,
+        title: formatFocalLength(focal),
+      }} />
+    </ImageContainer>
+  );
+}

@@ -1,0 +1,132 @@
+name: Backend Processor
+
+on:
+  push:
+    paths:
+      - .github/workflows/backend-processor.yml
+      - workers/backend-processor/**
+  pull_request:
+    paths:
+      - .github/workflows/backend-processor.yml
+      - workers/backend-processor/**
+  workflow_dispatch:
+    inputs:
+      run_once:
+        description: Process one claimed batch and exit successfully
+        required: false
+        type: boolean
+        default: false
+      run_minutes:
+        description: Max runtime when run_once is disabled
+        required: false
+        default: '55'
+
+concurrency:
+  group: backend-processor-${{ github.event_name }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    if: github.event_name == 'push' || github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: workers/backend-processor
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: workers/backend-processor/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+  run:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    defaults:
+      run:
+        working-directory: workers/backend-processor
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: workers/backend-processor/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Prepare worker env
+        shell: bash
+        env:
+          ORCHESTRATOR_URL: ${{ vars.BACKEND_ORCHESTRATOR_BASE_URL || secrets.BACKEND_ORCHESTRATOR_BASE_URL }}
+          PROCESSOR_SECRET: ${{ secrets.BACKEND_PROCESSOR_SHARED_SECRET }}
+        run: |
+          if [ -s .env ]; then
+            if ! grep -q '^BACKEND_ORCHESTRATOR_BASE_URL=.' .env; then
+              echo "Processor .env is missing BACKEND_ORCHESTRATOR_BASE_URL"
+              exit 1
+            fi
+            if ! grep -q '^BACKEND_PROCESSOR_SHARED_SECRET=.' .env; then
+              echo "Processor .env is missing BACKEND_PROCESSOR_SHARED_SECRET"
+              exit 1
+            fi
+            chmod 600 .env
+            echo "Using checked-in workers/backend-processor/.env"
+            exit 0
+          fi
+
+          if [ -z "${ORCHESTRATOR_URL}" ]; then
+            echo "Missing BACKEND_ORCHESTRATOR_BASE_URL GitHub variable or secret"
+            exit 1
+          fi
+          if [ -z "${PROCESSOR_SECRET}" ]; then
+            echo "Missing BACKEND_PROCESSOR_SHARED_SECRET GitHub secret"
+            exit 1
+          fi
+
+          printf 'BACKEND_ORCHESTRATOR_BASE_URL=%s\n' \
+            "${ORCHESTRATOR_URL}" > .env
+          printf 'BACKEND_PROCESSOR_SHARED_SECRET=%s\n' \
+            "${PROCESSOR_SECRET}" >> .env
+
+          chmod 600 .env
+
+      - name: Run processor
+        shell: bash
+        run: |
+          if [ "${RUN_ONCE}" = "1" ]; then
+            npm run start
+            exit 0
+          fi
+
+          set +e
+          timeout "${RUN_MINUTES}m" npm run start
+          status=$?
+          set -e
+          if [ "${status}" -ne 0 ] && [ "${status}" -ne 124 ]; then
+            exit "${status}"
+          fi
+        env:
+          RUN_ONCE: ${{ inputs.run_once && '1' || '0' }}
+          RUN_MINUTES: ${{ inputs.run_minutes || '55' }}

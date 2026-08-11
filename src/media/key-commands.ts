@@ -1,0 +1,16 @@
+export const KEY_COMMANDS = {
+  full: 'F',
+  grid: 'G',
+  admin: 'A',
+  prev: ['J', 'ARROWLEFT'],
+  next: ['L', 'ARROWRIGHT'],
+  edit: 'E',
+  quickEdit: 'Q',
+  favorite: 'P',
+  unfavorite: 'X',
+  togglePrivate: 'M',
+  download: 'D',
+  sync: 'S',
+  search: ['⌘', 'K'],
+  delete: ['⌘', 'BACKSPACE'],
+} as const;
