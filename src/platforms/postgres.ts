@@ -1,11 +1,20 @@
-import { POSTGRES_SSL_ENABLED } from '@/app/config';
+import {
+  ACTIVE_POSTGRES_URL,
+  POSTGRES_PROVIDER,
+  POSTGRES_SSL_ENABLED,
+} from '@/app/config';
 import { removeParamsFromUrl } from '@/utility/url';
 import { Pool, PoolClient, QueryResult, QueryResultRow } from 'pg';
 
+const SUPABASE_LOCK_LEASE_MS = 10 * 60 * 1000;
+const SUPABASE_LOCK_RENEW_MS = 60 * 1000;
+const SUPABASE_LOCK_WAIT_MS = 100;
+const SUPABASE_LOCK_MAX_WAIT_MS = 10 * 60 * 1000;
+
 const pool = new Pool({
-  ...process.env.POSTGRES_URL && {
+  ...ACTIVE_POSTGRES_URL && {
     connectionString: removeParamsFromUrl(
-      process.env.POSTGRES_URL,
+      ACTIVE_POSTGRES_URL,
       ['sslmode'],
     ),
   },
@@ -41,6 +50,66 @@ export const withPostgresAdvisoryLock = async <T>(
   lockB: number,
   callback: () => Promise<T>,
 ) => {
+  if (POSTGRES_PROVIDER === 'supabase') {
+    const token = crypto.randomUUID();
+    await query(`
+      CREATE TABLE IF NOT EXISTS media_panel_lock (
+        lock_a INTEGER NOT NULL,
+        lock_b INTEGER NOT NULL,
+        lock_token TEXT NOT NULL,
+        expires_at TIMESTAMP WITH TIME ZONE NOT NULL,
+        PRIMARY KEY (lock_a, lock_b)
+    `);
+    await query('ALTER TABLE media_panel_lock ENABLE ROW LEVEL SECURITY');
+    await query('REVOKE ALL ON TABLE media_panel_lock FROM PUBLIC');
+    await query('REVOKE ALL ON TABLE media_panel_lock FROM anon, authenticated');
+
+    const startedAt = Date.now();
+    let acquired = false;
+    while (!acquired) {
+      const result = await query<{ lock_token: string }>(`
+        INSERT INTO media_panel_lock (
+          lock_a,
+          lock_b,
+          lock_token,
+          expires_at
+        ) VALUES ($1, $2, $3, now() + ($4 || ' milliseconds')::interval)
+        ON CONFLICT (lock_a, lock_b) DO UPDATE SET
+          lock_token=EXCLUDED.lock_token,
+          expires_at=EXCLUDED.expires_at
+        WHERE media_panel_lock.expires_at < now()
+        RETURNING lock_token
+      `, [lockA, lockB, token, String(SUPABASE_LOCK_LEASE_MS)]);
+      acquired = result.rows[0]?.lock_token === token;
+      if (acquired) { break; }
+      if (Date.now() - startedAt >= SUPABASE_LOCK_MAX_WAIT_MS) {
+        throw new Error('Timed out waiting for Supabase transaction-pool lock');
+      }
+      await new Promise(resolve => setTimeout(resolve, SUPABASE_LOCK_WAIT_MS));
+    }
+
+    const renewal = setInterval(() => {
+      void query(`
+        UPDATE media_panel_lock
+        SET expires_at=now() + ($1 || ' milliseconds')::interval
+        WHERE lock_a=$2 AND lock_b=$3 AND lock_token=$4
+      `, [
+        String(SUPABASE_LOCK_LEASE_MS),
+        lockA,
+        lockB,
+        token,
+      ]).catch(() => undefined);
+    }, SUPABASE_LOCK_RENEW_MS);
+    try {
+      return await callback();
+    } finally {
+      clearInterval(renewal);
+      await query(`
+        DELETE FROM media_panel_lock
+        WHERE lock_a=$1 AND lock_b=$2 AND lock_token=$3
+      `, [lockA, lockB, token]).catch(() => undefined);
+    }
+  }
   const client = await pool.connect();
   try {
     await client.query('SELECT pg_advisory_lock($1, $2)', [lockA, lockB]);

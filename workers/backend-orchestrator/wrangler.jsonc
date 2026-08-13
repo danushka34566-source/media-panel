@@ -2,6 +2,7 @@
   "name": "backend-orchestrator",
   "main": "src/index.ts",
   "compatibility_date": "2026-05-05",
+  "compatibility_flags": ["nodejs_compat"],
   "triggers": {
     "crons": [
       "* * * * *"

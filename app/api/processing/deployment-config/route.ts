@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import {
+  ACTIVE_POSTGRES_URL,
   BACKEND_ORCHESTRATOR_SHARED_SECRET,
+  POSTGRES_SSL_ENABLED,
 } from '@/app/config';
 import { getProcessingSettingsSafe } from '@/processing/settings';
 
@@ -29,7 +31,8 @@ export async function POST(request: NextRequest) {
   const panelBaseUrl = publicUrl(process.env.NEXT_PUBLIC_DOMAIN) ||
     request.nextUrl.origin;
   const config: Record<string, string | undefined> = {
-    POSTGRES_URL: value(process.env.POSTGRES_URL),
+    POSTGRES_URL: value(ACTIVE_POSTGRES_URL),
+    DISABLE_POSTGRES_SSL: POSTGRES_SSL_ENABLED ? '0' : '1',
     MEDIA_PANEL_BASE_URL: panelBaseUrl,
     AUTOMATION_API_SECRET: BACKEND_ORCHESTRATOR_SHARED_SECRET,
     BACKEND_ORCHESTRATOR_SHARED_SECRET,

@@ -1,5 +1,6 @@
 import { neon } from '@neondatabase/serverless';
 import { AwsClient } from 'aws4fetch';
+import { Client } from 'pg';
 
 type ScheduledController = {
   cron: string
@@ -61,6 +62,7 @@ type UploadRegistrationHintRow = {
 
 export interface Env {
   POSTGRES_URL: string
+  DISABLE_POSTGRES_SSL?: string
   MEDIA_PANEL_BASE_URL?: string
   AUTOMATION_API_SECRET?: string
   R2_PUBLIC_BASE_URL: string
@@ -791,7 +793,52 @@ const resolveRegistrationTitle = ({
   );
 };
 
-const sqlForEnv = (env: Env) => neon(env.POSTGRES_URL);
+type SqlQuery = (...parts: any[]) => Promise<unknown[]>;
+const connectionStringWithoutSslMode = (value: string) => {
+  try {
+    const url = new URL(value);
+    url.searchParams.delete('sslmode');
+    return url.toString();
+  } catch {
+    return value;
+  }
+};
+const supabaseSqlForEnv = (env: Env): SqlQuery => {
+  const sql = async (strings: TemplateStringsArray, ...values: unknown[]) => {
+    let text = strings[0] || '';
+    for (let index = 1; index < strings.length; index += 1) {
+      text += `$${index}${strings[index] || ''}`;
+    }
+    const client = new Client({
+      connectionString: connectionStringWithoutSslMode(env.POSTGRES_URL),
+      // SSL is required by Supabase by default. Disable only explicitly.
+      ssl: env.DISABLE_POSTGRES_SSL === '1' ? false : true,
+    });
+    await client.connect();
+    try {
+      const result = await client.query(text, values);
+      return result.rows;
+    } finally {
+      await client.end().catch(() => undefined);
+    }
+  };
+  return sql as SqlQuery;
+};
+
+const isSupabasePostgresUrl = (value: string) => {
+  try {
+    const hostname = new URL(value).hostname;
+    return /(?:^|\.)supabase\.co$/i.test(hostname) ||
+      /\.pooler\.supabase\.com$/i.test(hostname);
+  } catch {
+    return false;
+  }
+};
+
+const sqlForEnv = (env: Env) =>
+  isSupabasePostgresUrl(env.POSTGRES_URL)
+    ? supabaseSqlForEnv(env)
+    : neon(env.POSTGRES_URL);
 
 type BackendActivity = {
   category: 'orchestrator' | 'registration' | 'processing' | 'processor'

@@ -158,6 +158,22 @@ export const PAGE_ABOUT =
 // STORAGE: DATABASE
 export const HAS_DATABASE =
   Boolean(process.env.POSTGRES_URL);
+export type PostgresProvider = 'neon' | 'supabase';
+const primaryPostgresUrl = process.env.POSTGRES_URL?.trim() || '';
+const isSupabasePostgresUrl = (value: string) => {
+  try {
+    const hostname = new URL(value).hostname;
+    return /(?:^|\.)supabase\.co$/i.test(hostname) ||
+      /\.pooler\.supabase\.com$/i.test(hostname);
+  } catch {
+    return false;
+  }
+};
+export const POSTGRES_PROVIDER: PostgresProvider =
+  isSupabasePostgresUrl(primaryPostgresUrl)
+    ? 'supabase'
+    : 'neon';
+export const ACTIVE_POSTGRES_URL = primaryPostgresUrl;
 export const POSTGRES_SSL_ENABLED =
   process.env.DISABLE_POSTGRES_SSL === '1' ? false : true;
 

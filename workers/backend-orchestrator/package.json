@@ -11,7 +11,8 @@
   },
   "dependencies": {
     "@neondatabase/serverless": "^0.10.4",
-    "aws4fetch": "^1.0.20"
+    "aws4fetch": "^1.0.20",
+    "pg": "^8.16.3"
   },
   "devDependencies": {
     "wrangler": "^4.15.2"
