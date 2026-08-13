@@ -59,6 +59,7 @@ export const withPostgresAdvisoryLock = async <T>(
         lock_token TEXT NOT NULL,
         expires_at TIMESTAMP WITH TIME ZONE NOT NULL,
         PRIMARY KEY (lock_a, lock_b)
+      )
     `);
     await query('ALTER TABLE media_panel_lock ENABLE ROW LEVEL SECURITY');
     await query('REVOKE ALL ON TABLE media_panel_lock FROM PUBLIC');
