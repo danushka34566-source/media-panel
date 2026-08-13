@@ -1,12 +1,9 @@
-import { buildStagedUploadKey } from '@/media/storage/upload-key';
+import { isUploadPathnameValid } from '@/media/storage';
 
 describe('panel upload storage keys', () => {
-  it('keeps the current filename while isolating each upload', () => {
-    expect(buildStagedUploadKey('Same File.mp4', 'first-upload')).toBe(
-      'uploads/first-upload/Same File.mp4',
-    );
-    expect(buildStagedUploadKey('Same File.mp4', 'second-upload')).toBe(
-      'uploads/second-upload/Same File.mp4',
-    );
+  it('accepts only a filename at the bucket root', () => {
+    expect(isUploadPathnameValid('Same-File.mp4')).toBeTruthy();
+    expect(isUploadPathnameValid('uploads/first-upload/Same-File.mp4')).toBeFalsy();
+    expect(isUploadPathnameValid('../Same-File.mp4')).toBeFalsy();
   });
 });

@@ -255,7 +255,16 @@ export const getMediaNearIdCached = (
   getMediaNearId,
   [KEY_MEDIA, ...getMediaCacheKeys(args[1])],
   getCacheOptions([KEY_MEDIA, args[0], ...getMediaCacheKeys(args[1])]),
-)(...args).then(({ photos, indexNumber }) => {
+)(...args).catch(async error => {
+  // Do not turn a transient related-items query failure into a broken detail
+  // page. The primary item is independently readable and can render alone.
+  console.error('Failed to load related media', { photoId: args[0], error });
+  const photo = await getMediaCached(args[0]);
+  return {
+    photos: photo ? [photo] : [],
+    indexNumber: photo ? 1 : undefined,
+  };
+}).then(({ photos, indexNumber }) => {
   const [photoId] = args;
   const photo = photos.find(({ id }) => id === photoId);
   const currentIndex = photos.findIndex(p => p.id === photoId);

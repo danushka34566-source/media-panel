@@ -174,8 +174,12 @@ export const POSTGRES_PROVIDER: PostgresProvider =
     ? 'supabase'
     : 'neon';
 export const ACTIVE_POSTGRES_URL = primaryPostgresUrl;
+// The SSL override exists only for Supabase pooler compatibility. Neon keeps
+// TLS enabled regardless of that Supabase-specific switch.
 export const POSTGRES_SSL_ENABLED =
-  process.env.DISABLE_POSTGRES_SSL === '1' ? false : true;
+  POSTGRES_PROVIDER === 'supabase'
+    ? process.env.DISABLE_POSTGRES_SSL !== '1'
+    : true;
 
 // STORAGE: REDIS
 export const HAS_REDIS_STORAGE =

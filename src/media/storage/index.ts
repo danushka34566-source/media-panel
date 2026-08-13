@@ -6,13 +6,11 @@ import {
   generateMediaStorageId,
   getFileNamePartsFromStorageUrl,
   getCurrentStorageUrlsForPrefix,
-  generateStorageId,
   sanitizeStorageFileNameBase,
   uploadFileFromClient,
 } from '@/platforms/storage';
 import type { OnUploadProgressCallback } from '@/platforms/storage/types';
 import { MediaType, isVideoMedia, type Media } from '..';
-import { buildStagedUploadKey } from './upload-key';
 
 const PREFIX_POSTER = 'poster';
 const PREFIX_PREVIEW = 'preview';
@@ -150,14 +148,12 @@ export const uploadMediaFromClient = (
   )
     ? normalizedOriginalBase
     : generatedFallbackBase;
-  const stagedUploadKey = buildStagedUploadKey(
-    `${uploadBase}.${extensionToUse}`,
-    generateStorageId(),
-  );
   return uploadFileFromClient(
     file,
-    stagedUploadKey.replace(/\.[^/.]+$/, ''),
+    uploadBase,
     extensionToUse,
+    // Commit the sanitized filename directly at the bucket root. Do not add
+    // an upload ID or any generated suffix to the user's filename.
     { addRandomSuffix: false, abortSignal, onUploadProgress },
   ).then(url => ({
     url,

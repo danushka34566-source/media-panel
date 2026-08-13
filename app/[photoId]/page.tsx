@@ -20,19 +20,31 @@ export const maxDuration = 60;
 const getMediaNearIdCachedCached = cache(async (photoId: string) => {
   const photo = await getMediaCached(photoId);
   // Omit related photos when photo is excluded from feeds
-  return photo?.excludeFromFeeds
-    ? {
-      photo: photo,
-      photos: [],
-      photosGrid: [],
-      indexNumber: 0,
+  if (!photo?.excludeFromFeeds) {
+    try {
+      return await getMediaNearIdCached(
+        photoId, {
+          limit: (RELATED_GRID_MEDIA_TO_SHOW * 2) + 1,
+          excludeFromFeeds: true,
+        },
+      );
+    } catch (error) {
+      // A related-media query must not make the primary detail page fail.
+      // This is especially important with Supabase transaction-pooler
+      // connections, where a transient read can fail independently.
+      console.error('Failed to load related media; rendering the primary item', {
+        photoId,
+        error,
+      });
     }
-    :getMediaNearIdCached(
-      photoId, {
-        limit: (RELATED_GRID_MEDIA_TO_SHOW * 2) + 1,
-        excludeFromFeeds: true,
-      },
-    );
+  }
+
+  return {
+    photo,
+    photos: [],
+    photosGrid: [],
+    indexNumber: 0,
+  };
 });
 
 export const generateStaticParams = staticallyGenerateMediaIfConfigured(
