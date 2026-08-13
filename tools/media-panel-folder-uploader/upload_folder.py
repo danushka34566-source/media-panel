@@ -11,6 +11,7 @@ import argparse
 import base64
 import concurrent.futures
 import ctypes
+import hashlib
 import json
 import mimetypes
 import os
@@ -32,10 +33,18 @@ from ctypes import wintypes
 
 
 STATE_VERSION = 2
+# Keep private credentials and resumable upload traces outside the repository.
+# LOCALAPPDATA is available for every Windows user and is created on demand.
+# XDG_DATA_HOME provides the equivalent location on Linux/macOS environments.
+DATA_DIRECTORY = Path(
+    os.getenv("LOCALAPPDATA")
+    or os.getenv("XDG_DATA_HOME")
+    or (Path.home() / ".local" / "share")
+) / "MediaPanelUploader"
 DEFAULT_STATE_NAME = "upload-data.json"
-DEFAULT_STATE_PATH = Path(__file__).resolve().parent / DEFAULT_STATE_NAME
-SETTINGS_PATH = Path(__file__).resolve().parent / "uploader-settings.json"
-CREDENTIALS_PATH = Path(__file__).resolve().parent / "credentials.json"
+DEFAULT_STATE_PATH = DATA_DIRECTORY / DEFAULT_STATE_NAME
+SETTINGS_PATH = DATA_DIRECTORY / "uploader-settings.json"
+CREDENTIALS_PATH = DATA_DIRECTORY / "credentials.json"
 PRINT_LOCK = threading.Lock()
 
 
@@ -58,7 +67,24 @@ def format_bytes(value: int) -> str:
 
 def log(message: str) -> None:
     with PRINT_LOCK:
-        print(message, flush=True)
+        try:
+            print(message, flush=True)
+        except (UnicodeEncodeError, OSError, ValueError):
+            try:
+                output = getattr(sys.stdout, "buffer", None)
+                if output is not None:
+                    output.write((message + "\n").encode("utf-8", errors="replace"))
+                    output.flush()
+                else:
+                    print(message.encode("ascii", errors="replace").decode("ascii"), flush=True)
+            except (OSError, ValueError):
+                # Logging must never turn a completed upload into a failure.
+                pass
+
+
+def log_progress(source: str, message: str) -> None:
+    """Emit a structured, replaceable progress update for the desktop UI."""
+    log(f"\x1ePROGRESS\t{source}\t{message}")
 
 
 def sanitize_file_name(name: str) -> str:
@@ -67,8 +93,35 @@ def sanitize_file_name(name: str) -> str:
     stem = re.sub(r"[^a-zA-Z0-9._@-]+", "-", path.stem)
     stem = re.sub(r"\.{2,}", ".", stem).strip("-._@")[:120]
     if not stem or not re.match(r"^[a-zA-Z0-9]", stem):
-        stem = uuid.uuid4().hex[:12]
+        # Do not use a random fallback: a given original name must always
+        # receive the same normalized bucket-name base on every computer/run.
+        stem = f"file-{hashlib.sha256(name.encode('utf-8')).hexdigest()[:12]}"
     return f"{stem}.{extension.lower()}" if extension else stem
+
+
+def storage_key_for_source(relative: str) -> str:
+    """Store every selected file directly at the configured bucket root."""
+    name = sanitize_file_name(Path(relative).name)
+    if not name:
+        raise UploadError(f"Invalid source path: {relative}")
+    return name
+
+
+def unique_storage_key(base_key: str, occupied: set[str]) -> tuple[str, int]:
+    """Keep root-level names readable without ever overwriting another file.
+
+    ``clip.mp4`` remains unchanged, then normalisation collisions become
+    ``clip-1.mp4``, ``clip-2.mp4`` and so on.
+    """
+    if base_key not in occupied:
+        return base_key, 0
+    path = Path(base_key)
+    index = 1
+    while True:
+        candidate = f"{path.stem}-{index}{path.suffix}"
+        if candidate not in occupied:
+            return candidate, index
+        index += 1
 
 
 def folder_identity(folder: Path) -> str:
@@ -76,13 +129,20 @@ def folder_identity(folder: Path) -> str:
     return resolved.casefold() if os.name == "nt" else resolved
 
 
+def trace_identity(profile: str, folder: Path) -> str:
+    """Keep resumable file traces separate for every credential profile."""
+    return f"{profile.strip() or 'default'}\x00{folder_identity(folder)}"
+
+
 def new_folder_state(
     folder: Path,
     drive_url: str,
     project_id: str,
     bucket: str,
+    profile: str = "default",
 ) -> dict[str, Any]:
     return {
+        "profile": profile.strip() or "default",
         "folder": str(folder),
         "drive_url": drive_url.rstrip("/"),
         "project_id": project_id,
@@ -101,7 +161,9 @@ class StateStore:
         drive_url: str,
         project_id: str,
         bucket: str,
+        profile: str = "default",
     ) -> None:
+        self.save_lock = threading.RLock()
         self.path = path
         self.backup_path = path.with_name(f"{path.name}.bak")
         if path.exists() or self.backup_path.exists():
@@ -127,10 +189,10 @@ class StateStore:
                 self.root = self.data
             else:
                 raise UploadError(f"Unsupported state version in {path}")
-            identity = folder_identity(folder)
+            identity = trace_identity(profile, folder)
             self.data = self.root.setdefault("folders", {}).setdefault(
                 identity,
-                new_folder_state(folder, drive_url, project_id, bucket),
+                new_folder_state(folder, drive_url, project_id, bucket, profile),
             )
             recorded_url = str(
                 self.data.get("drive_url") or (
@@ -150,6 +212,7 @@ class StateStore:
                     )
                 self.data[field] = actual
             self.data["drive_url"] = drive_url.rstrip("/")
+            self.data["profile"] = profile.strip() or "default"
             self.data.pop("base_url", None)
         else:
             self.data = new_folder_state(
@@ -157,27 +220,31 @@ class StateStore:
                 drive_url,
                 project_id,
                 bucket,
+                profile,
             )
             self.root = {
                 "version": STATE_VERSION,
                 "created_at": utc_now(),
                 "updated_at": utc_now(),
-                "folders": {folder_identity(folder): self.data},
+                "folders": {trace_identity(profile, folder): self.data},
             }
 
     def save(self) -> None:
-        self.data["updated_at"] = utc_now()
-        self.root["updated_at"] = utc_now()
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        temporary = self.path.with_name(f"{self.path.name}.tmp")
-        with temporary.open("w", encoding="utf-8", newline="\n") as output:
-            json.dump(self.root, output, indent=2, sort_keys=True)
-            output.write("\n")
-            output.flush()
-            os.fsync(output.fileno())
-        if self.path.exists():
-            shutil.copy2(self.path, self.backup_path)
-        os.replace(temporary, self.path)
+        # Several files can finish parts at once. Serialize snapshots so the
+        # durable resume manifest is never written concurrently.
+        with self.save_lock:
+            self.data["updated_at"] = utc_now()
+            self.root["updated_at"] = utc_now()
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            temporary = self.path.with_name(f"{self.path.name}.tmp")
+            with temporary.open("w", encoding="utf-8", newline="\n") as output:
+                json.dump(self.root, output, indent=2, sort_keys=True)
+                output.write("\n")
+                output.flush()
+                os.fsync(output.fileno())
+            if self.path.exists():
+                shutil.copy2(self.path, self.backup_path)
+            os.replace(temporary, self.path)
 
 
 class StateLock:
@@ -283,7 +350,8 @@ class DriveClient:
         except urllib.error.HTTPError as error:
             body = error.read().decode("utf-8", errors="replace")
             raise UploadError(
-                f"Drive API returned HTTP {error.code}: {body or error.reason}"
+                f"Drive API multipart {payload.get('action', 'request')} "
+                f"returned HTTP {error.code}: {body or error.reason}"
             ) from error
         except (urllib.error.URLError, TimeoutError, OSError) as error:
             raise UploadError(f"Unable to reach Drive API: {error}") from error
@@ -356,11 +424,20 @@ def discover_files(
         state_path.with_name(f"{state_path.name}.bak").resolve(),
         state_path.with_name(f"{state_path.name}.lock").resolve(),
     }
-    return sorted(
+    files = [
         path for path in candidates
         if path.is_file()
         and not path.is_symlink()
         and path.resolve() not in excluded
+    ]
+    # Queue completed source files in chronological order. The relative path
+    # makes equal timestamps deterministic across runs and computers.
+    return sorted(
+        files,
+        key=lambda path: (
+            path.stat().st_mtime_ns,
+            path.relative_to(folder).as_posix().casefold(),
+        ),
     )
 
 
@@ -376,6 +453,8 @@ def source_matches_record(path: Path, record: dict[str, Any]) -> bool:
 def sync_manifest(store: StateStore, folder: Path, files: list[Path]) -> None:
     records: dict[str, dict[str, Any]] = store.data["files"]
     discovered: set[str] = set()
+    # `discover_files()` has already created the chronological upload order.
+    # Preserve that order here so collision suffixes trace the queued upload.
     for path in files:
         relative = path.relative_to(folder).as_posix()
         discovered.add(relative)
@@ -390,34 +469,79 @@ def sync_manifest(store: StateStore, folder: Path, files: list[Path]) -> None:
             history.append({
                 key: record.get(key)
                 for key in (
+                    "original_file_name",
                     "fingerprint",
                     "key",
+                    "key_trace",
                     "status",
                     "uploaded_bytes",
+                    "part_count",
+                    "completed_part_count",
                     "attempts",
                     "completed_at",
                     "last_error",
                 )
             })
-        upload_token = uuid.uuid4().hex
+            history[-1]["trace"] = list(record.get("trace", []))
+        occupied_keys = {
+            str(existing.get("key")) for source, existing in records.items()
+            # Retain every allocated key, including a source that was removed
+            # locally. Its object may still exist in the bucket.
+            # If this same source path now has different bytes, its prior key
+            # is occupied too: the old object may already be in the bucket.
+            if existing.get("key")
+        }
+        normalized_key = storage_key_for_source(relative)
+        storage_key, collision_index = unique_storage_key(
+            normalized_key, occupied_keys,
+        )
         records[relative] = {
             "source": relative,
+            "original_file_name": path.name,
             "fingerprint": fingerprint,
             "content_type": mimetypes.guess_type(path.name)[0]
                 or "application/octet-stream",
-            "key": f"uploads/{upload_token}/{sanitize_file_name(path.name)}",
+            # Directly commit to the configured bucket root. The independent
+            # Worker discovers and registers this completed object separately.
+            "key": storage_key,
+            "key_trace": {
+                "original_file_name": path.name,
+                "normalized_key": normalized_key,
+                "allocated_key": storage_key,
+                "collision_index": collision_index,
+                "collision_resolved": collision_index > 0,
+                "collision_strategy": "numeric_suffix",
+                "created_at": utc_now(),
+            },
             "status": "pending",
             "present": True,
             "attempts": 0,
             "uploaded_bytes": 0,
             "parts": {},
             "history": history,
+            "trace": [{
+                "event": "discovered",
+                "at": utc_now(),
+                "original_file_name": path.name,
+                "source": relative,
+                "normalized_key": normalized_key,
+                "key": storage_key,
+                "collision_index": collision_index,
+            }],
             "created_at": utc_now(),
         }
     for relative, record in records.items():
         if relative not in discovered:
             record["present"] = False
     store.save()
+
+
+def append_trace(record: dict[str, Any], event: str, **details: Any) -> None:
+    record.setdefault("trace", []).append({
+        "event": event,
+        "at": utc_now(),
+        **details,
+    })
 
 
 def upload_file(
@@ -435,6 +559,7 @@ def upload_file(
     size = int(record["fingerprint"]["size"])
     record["attempts"] = int(record.get("attempts", 0)) + 1
     record.update(status="uploading", last_error=None, updated_at=utc_now())
+    append_trace(record, "upload_started", attempt=record["attempts"])
     store.save()
 
     if not record.get("upload_id"):
@@ -447,11 +572,19 @@ def upload_file(
         if not upload_id:
             raise UploadError("Multipart start did not return an uploadId")
         record["upload_id"] = upload_id
+        append_trace(record, "multipart_started", upload_id=upload_id)
         store.save()
 
     upload_id = str(record["upload_id"])
     part_count = max(1, (size + part_size - 1) // part_size)
     completed: dict[str, dict[str, Any]] = record.setdefault("parts", {})
+    record.update(
+        part_size=part_size,
+        part_count=part_count,
+        completed_part_count=len(completed),
+        last_progress_at=utc_now(),
+    )
+    store.save()
     plans: list[tuple[int, int, int]] = []
     for index in range(part_count):
         part_number = index + 1
@@ -461,9 +594,12 @@ def upload_file(
         plans.append((part_number, start, max(0, min(part_size, size - start))))
 
     completed_bytes = sum(int(part.get("size", 0)) for part in completed.values())
-    log(
-        f"UPLOAD {record['source']} "
-        f"({format_bytes(completed_bytes)}/{format_bytes(size)})"
+    last_persist = time.monotonic()
+    parts_since_persist = 0
+    log_progress(
+        record["source"],
+        f"Uploading  {0 if size == 0 else completed_bytes * 100 / size:6.2f}%  "
+        f"{format_bytes(completed_bytes)} / {format_bytes(size)}",
     )
     with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, part_workers)) as pool:
         futures = {
@@ -486,17 +622,30 @@ def upload_file(
                 part_number, etag, length = future.result()
                 completed[str(part_number)] = {"etag": etag, "size": length}
                 completed_bytes += length
-                record["uploaded_bytes"] = min(size, completed_bytes)
-                record["updated_at"] = utc_now()
-                store.save()
+                record.update(
+                    uploaded_bytes=min(size, completed_bytes),
+                    completed_part_count=len(completed),
+                    last_progress_at=utc_now(),
+                    updated_at=utc_now(),
+                )
+                parts_since_persist += 1
+                if (
+                    parts_since_persist >= max(1, part_workers * 2)
+                    or time.monotonic() - last_persist >= 2
+                ):
+                    store.save()
+                    last_persist = time.monotonic()
+                    parts_since_persist = 0
                 percent = 100 if size == 0 else completed_bytes * 100 / size
-                log(
-                    f"  {record['source']}: {percent:6.2f}% "
-                    f"({format_bytes(completed_bytes)}/{format_bytes(size)})"
+                log_progress(
+                    record["source"],
+                    f"Uploading  {percent:6.2f}%  "
+                    f"{format_bytes(completed_bytes)} / {format_bytes(size)}",
                 )
             except Exception as error:
                 failures.append(error)
-        if failures:
+    store.save()
+    if failures:
             raise UploadError(
                 f"{len(failures)} part(s) failed; completed parts were saved. "
                 f"First error: {failures[0]}"
@@ -512,23 +661,44 @@ def upload_file(
         raise UploadError("Source file changed before completion")
     # Only the storage completion response is authoritative. Registration is
     # intentionally left to the independent worker scan.
-    completion = client.multipart({
+    completion_payload = {
         "action": "complete",
         "key": record["key"],
         "uploadId": upload_id,
         "parts": parts,
-    })
+    }
+    completion: dict[str, Any] | None = None
+    for attempt in range(3):
+        try:
+            completion = client.multipart(completion_payload)
+            break
+        except UploadError as error:
+            if "HTTP 5" not in str(error) or attempt == 2:
+                raise
+            time.sleep(2 ** attempt)
+    if completion is None:
+        raise UploadError("Multipart completion returned no response")
     record.update(
         status="uploaded",
         uploaded_bytes=size,
+        completed_part_count=part_count,
         completed_at=utc_now(),
         updated_at=utc_now(),
         status_message="Uploaded; awaiting worker scan",
         storage_confirmation=completion,
         last_error=None,
     )
+    append_trace(
+        record,
+        "storage_completed",
+        upload_id=upload_id,
+        size=size,
+        parts=part_count,
+        key=record["key"],
+        worker_status="awaiting_worker_scan",
+    )
     store.save()
-    log(f"DONE   {record['source']} ({format_bytes(size)})")
+    log_progress(record["source"], f"Complete   100.00%  {format_bytes(size)}")
 
 
 def load_gui_settings() -> dict[str, Any]:
@@ -648,9 +818,39 @@ def launch_gui() -> int:
     self_test = os.getenv("MEDIA_PANEL_UPLOADER_GUI_SELF_TEST") == "1"
     if self_test:
         root.withdraw()
-    root.title("Media Panel Direct Drive Uploader")
-    root.geometry("860x680")
-    root.minsize(720, 560)
+    root.title("Media Panel Upload")
+    root.geometry("760x590")
+    root.minsize(680, 500)
+    palette = {
+        "bg": "#09090b", "panel": "#18181b", "input": "#111113",
+        "border": "#3f3f46", "text": "#fafafa", "muted": "#a1a1aa",
+        "primary": "#fafafa", "primary_text": "#18181b",
+    }
+    root.configure(background=palette["bg"])
+    style = ttk.Style(root)
+    # Windows 11's native renderer supplies the rounded focus rings, buttons,
+    # spinboxes and menu surfaces that Tk's cross-platform themes cannot.
+    if "winnative" in style.theme_names():
+        style.theme_use("winnative")
+    elif "vista" in style.theme_names():
+        style.theme_use("vista")
+    style.configure("App.TFrame", background=palette["bg"])
+    style.configure("Card.TFrame", background=palette["panel"])
+    style.configure("TLabel", background=palette["bg"], foreground=palette["text"], font=("Segoe UI", 10))
+    style.configure("Muted.TLabel", background=palette["bg"], foreground=palette["muted"], font=("Segoe UI", 9))
+    style.configure("Title.TLabel", background=palette["bg"], foreground=palette["text"], font=("Segoe UI Semibold", 15))
+    style.configure("Card.TLabelframe", background=palette["panel"], bordercolor=palette["border"], relief="solid")
+    style.configure("Card.TLabelframe.Label", background=palette["panel"], foreground=palette["text"], font=("Segoe UI Semibold", 10))
+    style.configure("TEntry", fieldbackground=palette["input"], foreground=palette["text"], insertcolor=palette["text"], bordercolor=palette["border"], padding=8)
+    style.configure("TCombobox", fieldbackground=palette["input"], background=palette["input"], foreground=palette["text"], arrowcolor=palette["muted"], padding=7)
+    style.map("TCombobox", fieldbackground=[("readonly", palette["input"])], foreground=[("readonly", palette["text"])])
+    style.configure("TButton", background="#27272a", foreground=palette["text"], bordercolor=palette["border"], padding=(9, 5), font=("Segoe UI Semibold", 9))
+    style.map("TButton", background=[("active", "#3f3f46")])
+    style.configure("Primary.TButton", background=palette["primary"], foreground=palette["primary_text"], bordercolor=palette["primary"])
+    style.configure("Danger.TButton", background="#3f161a", foreground="#fecaca", bordercolor="#7f1d1d")
+    style.configure("TCheckbutton", background=palette["panel"], foreground=palette["text"], font=("Segoe UI", 9))
+    style.configure("TSpinbox", fieldbackground=palette["input"], foreground=palette["text"], arrowcolor=palette["muted"], padding=5)
+    style.configure("Upload.Horizontal.TProgressbar", troughcolor="#27272a", background=palette["text"], bordercolor="#27272a")
 
     profile_name = tk.StringVar(value=str(credential_store.get("selected", "")))
     drive_url = tk.StringVar(value=os.getenv("DRIVE_STORAGE_BASE_URL", ""))
@@ -663,15 +863,24 @@ def launch_gui() -> int:
     recursive = tk.BooleanVar(value=bool(settings.get("recursive", True)))
     retry_forever = tk.BooleanVar(value=bool(settings.get("retry_forever", True)))
     workers = tk.IntVar(value=int(settings.get("workers", 4)))
+    file_workers = tk.IntVar(value=int(settings.get("file_workers", 2)))
+    part_size_mb = tk.IntVar(value=int(settings.get("part_size_mb", 8)))
     show_key = tk.BooleanVar()
     status = tk.StringVar(value="Ready")
     events: queue.Queue[tuple[str, object]] = queue.Queue()
+    latest_progress: dict[str, str] = {}
+    progress_lock = threading.Lock()
     child: subprocess.Popen[str] | None = None
 
     root.columnconfigure(0, weight=1)
-    root.rowconfigure(1, weight=1)
-    form = ttk.LabelFrame(root, text="Direct Drive connection", padding=14)
-    form.grid(row=0, column=0, sticky="ew", padx=14, pady=(14, 8))
+    root.rowconfigure(2, weight=1)
+    header = ttk.Frame(root, style="App.TFrame", padding=(18, 14, 18, 8))
+    header.grid(row=0, column=0, sticky="ew")
+    header.columnconfigure(0, weight=1)
+    ttk.Label(header, text="Direct upload", style="Title.TLabel").grid(row=0, column=0, sticky="w")
+    ttk.Label(header, text="Worker registration is automatic", style="Muted.TLabel").grid(row=0, column=1, sticky="e")
+    form = ttk.LabelFrame(root, text="Upload settings", padding=12, style="Card.TLabelframe")
+    form.grid(row=1, column=0, sticky="ew", padx=18, pady=(0, 8))
     form.columnconfigure(1, weight=1)
 
     def entry(row: int, label: str, variable: tk.StringVar, secret=False):
@@ -707,7 +916,7 @@ def launch_gui() -> int:
         if selected:
             source_folder.set(selected)
 
-    ttk.Button(form, text="Browse…", command=choose_folder).grid(
+    ttk.Button(form, text="Choose folder", command=choose_folder).grid(
         row=5, column=2, padx=(8, 0), pady=5
     )
     ttk.Checkbutton(
@@ -727,6 +936,14 @@ def launch_gui() -> int:
     ttk.Label(options, text="Parallel parts").pack(side="left")
     ttk.Spinbox(
         options, from_=1, to=16, width=4, textvariable=workers,
+    ).pack(side="left", padx=(6, 0))
+    ttk.Label(options, text="Part size (MB)").pack(side="left", padx=(18, 0))
+    ttk.Spinbox(
+        options, from_=5, to=512, width=5, textvariable=part_size_mb,
+    ).pack(side="left", padx=(6, 0))
+    ttk.Label(options, text="Concurrent files").pack(side="left", padx=(18, 0))
+    ttk.Spinbox(
+        options, from_=1, to=8, width=4, textvariable=file_workers,
     ).pack(side="left", padx=(6, 0))
 
     def load_profile(_event: object = None) -> None:
@@ -823,26 +1040,37 @@ def launch_gui() -> int:
             profile_name.set(sorted(profiles)[0])
         load_profile()
 
-    activity = ttk.LabelFrame(root, text="Upload activity", padding=8)
-    activity.grid(row=1, column=0, sticky="nsew", padx=14, pady=8)
+    activity = ttk.LabelFrame(root, text="Transfer activity", padding=8, style="Card.TLabelframe")
+    activity.grid(row=2, column=0, sticky="nsew", padx=18, pady=(0, 8))
     activity.columnconfigure(0, weight=1)
     activity.rowconfigure(0, weight=1)
-    output = tk.Text(activity, wrap="word", state="disabled", font=("Consolas", 10))
+    output = tk.Text(activity, wrap="word", state="disabled", font=("Cascadia Mono", 10), background=palette["input"], foreground="#d4d4d8", insertbackground=palette["text"], relief="flat", padx=12, pady=10, highlightthickness=0)
     scroll = ttk.Scrollbar(activity, command=output.yview)
     output.configure(yscrollcommand=scroll.set)
     output.grid(row=0, column=0, sticky="nsew")
     scroll.grid(row=0, column=1, sticky="ns")
 
-    controls = ttk.Frame(root, padding=(14, 4, 14, 14))
-    controls.grid(row=2, column=0, sticky="ew")
+    controls = ttk.Frame(root, style="App.TFrame", padding=(18, 2, 18, 14))
+    controls.grid(row=3, column=0, sticky="ew")
     controls.columnconfigure(1, weight=1)
-    progress = ttk.Progressbar(controls, mode="indeterminate", length=150)
+    progress = ttk.Progressbar(controls, mode="indeterminate", length=180, style="Upload.Horizontal.TProgressbar")
     progress.grid(row=0, column=0, padx=(0, 12))
     ttk.Label(controls, textvariable=status).grid(row=0, column=1, sticky="w")
+
+    progress_lines: dict[str, str] = {}
 
     def append(text: str) -> None:
         output.configure(state="normal")
         output.insert("end", text)
+        output.see("end")
+        output.configure(state="disabled")
+
+    def update_progress_line(source: str, message: str) -> None:
+        progress_lines[source] = message
+        output.configure(state="normal")
+        output.delete("1.0", "end")
+        for file_name, progress_message in progress_lines.items():
+            output.insert("end", f"{file_name:<48} {progress_message}\n")
         output.see("end")
         output.configure(state="disabled")
 
@@ -888,18 +1116,25 @@ def launch_gui() -> int:
         if not save_profile(notify=False):
             return
         worker_count = max(1, min(16, workers.get()))
+        file_worker_count = max(1, min(8, file_workers.get()))
+        part_size = max(5, min(512, part_size_mb.get()))
         save_gui_settings({
             "source_folder": folder,
             "recursive": recursive.get(),
             "retry_forever": retry_forever.get(),
             "workers": worker_count,
+            "file_workers": file_worker_count,
+            "part_size_mb": part_size,
         })
         command = [
             sys.executable, "-u", str(Path(__file__).resolve()), folder,
             "--drive-url", url,
             "--project-id", project,
             "--bucket", bucket_name,
+            "--profile", profile_name.get().strip() or project,
             "--part-workers", str(worker_count),
+            "--part-size-mb", str(part_size),
+            "--file-workers", str(file_worker_count),
             "--max-rounds", "0" if retry_forever.get() else "5",
         ]
         if recursive.get():
@@ -934,9 +1169,9 @@ def launch_gui() -> int:
             status.set("Stopping…")
             child.terminate()
 
-    start_button = ttk.Button(controls, text="Start upload", command=start)
+    start_button = ttk.Button(controls, text="Start upload", command=start, style="Primary.TButton")
     start_button.grid(row=0, column=2, padx=(8, 6))
-    stop_button = ttk.Button(controls, text="Stop", command=stop, state="disabled")
+    stop_button = ttk.Button(controls, text="Stop", command=stop, state="disabled", style="Danger.TButton")
     stop_button.grid(row=0, column=3)
 
     def poll() -> None:
@@ -945,7 +1180,14 @@ def launch_gui() -> int:
             while True:
                 event, value = events.get_nowait()
                 if event == "log":
-                    append(str(value))
+                    line = str(value)
+                    if line.startswith("\x1ePROGRESS\t"):
+                        _, source, progress_message = line.rstrip("\r\n").split(
+                            "\t", 2,
+                        )
+                        update_progress_line(source, progress_message)
+                    else:
+                        append(line)
                 else:
                     code = int(value)
                     progress.stop()
@@ -980,6 +1222,463 @@ def launch_gui() -> int:
     return 0
 
 
+def launch_compact_gui() -> int:
+    """Compact native utility UI; upload mechanics remain in this script."""
+    try:
+        import tkinter as tk
+        from tkinter import filedialog, messagebox, ttk
+    except ImportError as error:
+        log(f"Tkinter is required for the uploader GUI: {error}")
+        return 2
+
+    settings = load_gui_settings()
+    credential_store = load_credential_store()
+    profiles: dict[str, dict[str, str]] = credential_store["profiles"]
+    root = tk.Tk()
+    self_test = os.getenv("MEDIA_PANEL_UPLOADER_GUI_SELF_TEST") == "1"
+    if self_test:
+        root.withdraw()
+    root.title("Media Panel Upload")
+    root.geometry("720x560")
+    root.minsize(640, 480)
+
+    style = ttk.Style(root)
+    style.theme_use("clam")
+    win11 = {"bg": "#f3f3f3", "surface": "#fbfbfb", "border": "#dedede", "text": "#1b1b1b", "muted": "#616161", "blue": "#0067c0"}
+    root.configure(background=win11["bg"])
+    style.configure("TFrame", background=win11["bg"])
+    style.configure("TLabel", background=win11["bg"], foreground=win11["text"], font=("Segoe UI", 9))
+    style.configure("TLabelframe", background=win11["surface"], bordercolor=win11["border"], relief="flat", borderwidth=0)
+    style.configure("TLabelframe.Label", background=win11["surface"], foreground=win11["text"], font=("Segoe UI Semibold", 9))
+    style.configure("TButton", padding=(10, 5), font=("Segoe UI", 9))
+    style.configure("Accent.TButton", font=("Segoe UI Semibold", 9))
+    style.configure("TEntry", padding=5)
+    style.configure("TCombobox", padding=4)
+    style.configure("TCheckbutton", background=win11["surface"], foreground=win11["text"], font=("Segoe UI", 9))
+    style.configure("Treeview", rowheight=28, font=("Segoe UI", 9))
+    style.configure("Treeview.Heading", font=("Segoe UI Semibold", 9), relief="flat")
+    style.configure("Horizontal.TProgressbar", troughcolor="#e6e6e6", background=win11["blue"], bordercolor="#e6e6e6")
+
+    profile_name = tk.StringVar(value=str(credential_store.get("selected", "")))
+    drive_url = tk.StringVar(value=os.getenv("DRIVE_STORAGE_BASE_URL", ""))
+    api_key = tk.StringVar(value=os.getenv("DRIVE_STORAGE_API_KEY", ""))
+    project_id = tk.StringVar(value=os.getenv("NEXT_PUBLIC_DRIVE_STORAGE_PROJECT_ID", ""))
+    bucket = tk.StringVar(value=os.getenv("NEXT_PUBLIC_DRIVE_STORAGE_BUCKET", ""))
+    source_folder = tk.StringVar(value=str(settings.get("source_folder", "")))
+    recursive = tk.BooleanVar(value=bool(settings.get("recursive", True)))
+    retry_forever = tk.BooleanVar(value=bool(settings.get("retry_forever", True)))
+    part_workers = tk.IntVar(value=int(settings.get("workers", 4)))
+    file_workers = tk.IntVar(value=int(settings.get("file_workers", 2)))
+    part_size = tk.IntVar(value=int(settings.get("part_size_mb", 8)))
+    status = tk.StringVar(value="Ready")
+    events: queue.Queue[tuple[str, object]] = queue.Queue()
+    child: subprocess.Popen[str] | None = None
+    rows: dict[str, str] = {}
+
+    root.columnconfigure(0, weight=1)
+    root.rowconfigure(2, weight=1)
+    title = ttk.Frame(root, padding=(18, 15, 18, 9))
+    title.grid(row=0, column=0, sticky="ew")
+    title.columnconfigure(0, weight=1)
+    ttk.Label(title, text="Media Panel Upload", font=("Segoe UI Semibold", 15)).grid(row=0, column=0, sticky="w")
+    ttk.Label(title, textvariable=status).grid(row=0, column=1, sticky="e")
+
+    setup = ttk.LabelFrame(root, text="Upload", padding=11)
+    setup.grid(row=1, column=0, sticky="ew", padx=18, pady=(0, 9))
+    setup.columnconfigure(1, weight=1)
+    setup.columnconfigure(2, minsize=132)
+
+    def field(row: int, label: str, variable: tk.StringVar, secret=False):
+        ttk.Label(setup, text=label).grid(row=row, column=0, sticky="w", pady=4)
+        widget = ttk.Entry(setup, textvariable=variable, show="•" if secret else "")
+        widget.grid(row=row, column=1, columnspan=2, sticky="ew", padx=(10, 0), pady=4)
+        return widget
+
+    ttk.Label(setup, text="Profile").grid(row=0, column=0, sticky="w", pady=3)
+    picker = ttk.Combobox(setup, textvariable=profile_name, values=sorted(profiles), state="normal")
+    picker.grid(row=0, column=1, sticky="ew", padx=(8, 0), pady=3)
+    profile_buttons = ttk.Frame(setup)
+    profile_buttons.grid(row=0, column=2, sticky="e", padx=(8, 0))
+    field(1, "Storage URL", drive_url)
+    field(2, "API key", api_key, True)
+    field(3, "Project ID", project_id)
+    field(4, "Bucket", bucket)
+    field(5, "Source folder", source_folder)
+
+    def choose_folder():
+        selected = filedialog.askdirectory(initialdir=source_folder.get() or None)
+        if selected: source_folder.set(selected)
+    ttk.Button(setup, text="Browse", command=choose_folder).grid(
+        row=5, column=2, sticky="e", padx=(8, 0), pady=4,
+    )
+    divider = ttk.Separator(setup, orient="horizontal")
+    divider.grid(row=6, column=0, columnspan=3, sticky="ew", pady=(8, 8))
+    options = ttk.Frame(setup)
+    options.grid(row=7, column=0, columnspan=3, sticky="ew")
+    options.columnconfigure(1, weight=1)
+    ttk.Checkbutton(options, text="Include subfolders", variable=recursive).grid(
+        row=0, column=0, sticky="w",
+    )
+    ttk.Checkbutton(options, text="Retry until complete", variable=retry_forever).grid(
+        row=0, column=1, sticky="w", padx=(14, 0),
+    )
+    tuning = ttk.Frame(options)
+    tuning.grid(row=0, column=2, sticky="e")
+    for index, (label, variable, minimum, maximum) in enumerate((
+        ("Files", file_workers, 1, 8),
+        ("Parts", part_workers, 1, 16),
+        ("Part size", part_size, 5, 512),
+    )):
+        column = index * 2
+        ttk.Label(tuning, text=label).grid(row=0, column=column, sticky="e", padx=(12 if index else 0, 4))
+        ttk.Spinbox(tuning, from_=minimum, to=maximum, width=5, textvariable=variable).grid(
+            row=0, column=column + 1, sticky="e",
+        )
+    ttk.Label(tuning, text="MB").grid(row=0, column=6, sticky="w", padx=(4, 0))
+
+    def load_profile(_event=None):
+        profile = profiles.get(profile_name.get().strip())
+        if not profile: return
+        try: api_key.set(unprotect_api_key(str(profile["api_key"])))
+        except (UploadError, ValueError): return
+        drive_url.set(str(profile.get("drive_url", ""))); project_id.set(str(profile.get("project_id", ""))); bucket.set(str(profile.get("bucket", "")))
+
+    def save_profile():
+        name = profile_name.get().strip()
+        if not name or not all((drive_url.get().strip(), api_key.get().strip(), project_id.get().strip(), bucket.get().strip())):
+            messagebox.showerror("Profile", "Enter a name and all connection fields."); return False
+        profiles[name] = {"drive_url": drive_url.get().strip().rstrip("/"), "api_key": protect_api_key(api_key.get().strip()), "project_id": project_id.get().strip(), "bucket": bucket.get().strip(), "updated_at": utc_now()}
+        credential_store["selected"] = name; save_credential_store(credential_store); picker.configure(values=sorted(profiles)); status.set(f"Saved profile: {name}"); return True
+
+    def new_profile():
+        profile_name.set(""); drive_url.set(""); api_key.set(""); project_id.set(""); bucket.set(""); picker.focus_set()
+    ttk.Button(profile_buttons, text="New", command=new_profile).pack(side="left")
+    ttk.Button(profile_buttons, text="Save", command=save_profile).pack(side="left", padx=(4, 0))
+    picker.bind("<<ComboboxSelected>>", load_profile)
+    if profiles and profile_name.get() in profiles: load_profile()
+
+    activity = ttk.LabelFrame(root, text="Transfers", padding=7)
+    activity.grid(row=2, column=0, sticky="nsew", padx=18, pady=(0, 9))
+    activity.columnconfigure(0, weight=1); activity.rowconfigure(0, weight=1)
+    table = ttk.Treeview(activity, columns=("file", "status"), show="headings", selectmode="none")
+    table.heading("file", text="File"); table.heading("status", text="Status")
+    table.column("file", width=390, anchor="w"); table.column("status", width=250, anchor="e")
+    scrollbar = ttk.Scrollbar(activity, orient="vertical", command=table.yview); table.configure(yscrollcommand=scrollbar.set)
+    table.grid(row=0, column=0, sticky="nsew"); scrollbar.grid(row=0, column=1, sticky="ns")
+
+    footer = ttk.Frame(root, padding=(18, 4, 18, 14)); footer.grid(row=3, column=0, sticky="ew")
+    footer.columnconfigure(0, weight=1)
+    footer.columnconfigure(1, weight=1)
+    overall_progress = tk.DoubleVar(value=0)
+    overall_detail = tk.StringVar(value="Ready to upload")
+    overall_counts = tk.StringVar(value="0 files")
+    ttk.Progressbar(
+        footer, maximum=100, variable=overall_progress,
+    ).grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 5))
+    ttk.Label(footer, textvariable=overall_detail).grid(row=1, column=0, sticky="w")
+    ttk.Label(footer, textvariable=overall_counts).grid(row=1, column=1, sticky="e")
+
+    def update_row(source: str, text: str):
+        item = rows.get(source)
+        if item: table.item(item, values=(source, text))
+        else: rows[source] = table.insert("", "end", values=(source, text))
+
+    def update_overall_progress():
+        percentages = []
+        complete = 0
+        for item in rows.values():
+            values = table.item(item, "values")
+            message = values[1] if len(values) > 1 else ""
+            match = re.search(r"(\d+(?:\.\d+)?)%", message)
+            if match:
+                percentage = float(match.group(1))
+                percentages.append(percentage)
+                if percentage >= 100: complete += 1
+        total = len(rows)
+        overall_progress.set(sum(percentages) / total if total else 0)
+        overall_counts.set(f"{complete} / {total} complete" if total else "0 files")
+        if total:
+            overall_detail.set("Uploading files to bucket")
+
+    def read_output(process):
+        assert process.stdout is not None
+        for raw_line in iter(process.stdout.readline, ""):
+            line = raw_line.rstrip()
+            if line.startswith("\x1ePROGRESS\t"):
+                try:
+                    _, source, text = line.split("\t", 2)
+                except ValueError:
+                    continue
+                with progress_lock:
+                    latest_progress[source] = text
+            else:
+                events.put(("log", line))
+        events.put(("finished", process.wait()))
+
+    def start():
+        nonlocal child
+        if child and child.poll() is None: return
+        folder = Path(source_folder.get()).expanduser()
+        if not folder.is_dir(): messagebox.showerror("Source folder", "Select an existing folder."); return
+        if not save_profile(): return
+        workers = max(1, min(16, part_workers.get())); files = max(1, min(8, file_workers.get())); size = max(5, min(512, part_size.get()))
+        save_gui_settings({"source_folder": str(folder), "recursive": recursive.get(), "retry_forever": retry_forever.get(), "workers": workers, "file_workers": files, "part_size_mb": size})
+        command = [sys.executable, "-u", str(Path(__file__).resolve()), str(folder), "--drive-url", drive_url.get().strip(), "--project-id", project_id.get().strip(), "--bucket", bucket.get().strip(), "--profile", profile_name.get().strip(), "--part-workers", str(workers), "--file-workers", str(files), "--part-size-mb", str(size), "--max-rounds", "0" if retry_forever.get() else "5"]
+        if recursive.get(): command.append("--recursive")
+        environment = os.environ.copy(); environment["DRIVE_STORAGE_API_KEY"] = api_key.get().strip()
+        child = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace", env=environment, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        rows.clear(); table.delete(*table.get_children()); overall_progress.set(0); overall_counts.set("Preparing files"); overall_detail.set("Starting upload")
+        status.set("Uploading"); start_button.configure(state="disabled"); stop_button.configure(state="normal"); threading.Thread(target=read_output, args=(child,), daemon=True).start()
+
+    def stop():
+        if child and child.poll() is None: child.terminate(); status.set("Stopping")
+    button_box = ttk.Frame(footer); button_box.grid(row=0, column=2, rowspan=2, padx=(12, 0))
+    start_button = ttk.Button(button_box, text="Start upload", command=start, style="Accent.TButton"); start_button.pack(side="left", padx=(0, 4))
+    stop_button = ttk.Button(button_box, text="Stop", command=stop, state="disabled"); stop_button.pack(side="left")
+
+    def poll():
+        nonlocal child
+        try:
+            while True:
+                event, value = events.get_nowait()
+                if event == "log":
+                    line = str(value).rstrip()
+                    if line.startswith("\x1ePROGRESS\t"):
+                        _, source, text = line.split("\t", 2); update_row(source, text); update_overall_progress()
+                    elif line.startswith("ERROR  "):
+                        update_row(line[7:].split(":", 1)[0], "Error")
+                else:
+                    success = int(value) == 0
+                    status.set("All uploaded; awaiting worker scan" if success else f"Stopped ({value})")
+                    overall_progress.set(100 if success else overall_progress.get())
+                    overall_detail.set("Completed; awaiting worker scan" if success else "Upload stopped")
+                    start_button.configure(state="normal"); stop_button.configure(state="disabled"); child = None
+        except queue.Empty: pass
+        root.after(100, poll)
+    root.after(100, poll)
+    if self_test: root.update_idletasks(); root.destroy(); return 0
+    root.mainloop(); return 0
+
+
+def launch_modern_gui() -> int:
+    """Small, rounded Windows desktop utility powered by CustomTkinter."""
+    try:
+        import customtkinter as ctk
+        from tkinter import filedialog, messagebox
+    except ImportError as error:
+        log(f"CustomTkinter is required for the uploader GUI: {error}")
+        return 2
+
+    ctk.set_appearance_mode("dark")
+    ctk.set_default_color_theme("blue")
+    settings = load_gui_settings()
+    credential_store = load_credential_store()
+    profiles: dict[str, dict[str, str]] = credential_store["profiles"]
+    root = ctk.CTk()
+    self_test = os.getenv("MEDIA_PANEL_UPLOADER_GUI_SELF_TEST") == "1"
+    if self_test: root.withdraw()
+    root.title("Media Panel Upload")
+    root.geometry("760x630")
+    root.minsize(680, 540)
+    root.configure(fg_color="#171717")
+    root.grid_columnconfigure(0, weight=1)
+    root.grid_rowconfigure(2, weight=1)
+
+    font_title = ctk.CTkFont(family="Segoe UI", size=17, weight="bold")
+    font_body = ctk.CTkFont(family="Segoe UI", size=12)
+    font_small = ctk.CTkFont(family="Segoe UI", size=11)
+    profile_name = ctk.StringVar(value=str(credential_store.get("selected", "")))
+    drive_url = ctk.StringVar(value=os.getenv("DRIVE_STORAGE_BASE_URL", ""))
+    api_key = ctk.StringVar(value=os.getenv("DRIVE_STORAGE_API_KEY", ""))
+    project_id = ctk.StringVar(value=os.getenv("NEXT_PUBLIC_DRIVE_STORAGE_PROJECT_ID", ""))
+    bucket = ctk.StringVar(value=os.getenv("NEXT_PUBLIC_DRIVE_STORAGE_BUCKET", ""))
+    source_folder = ctk.StringVar(value=str(settings.get("source_folder", "")))
+    recursive = ctk.BooleanVar(value=bool(settings.get("recursive", True)))
+    retry_forever = ctk.BooleanVar(value=bool(settings.get("retry_forever", True)))
+    part_workers = ctk.IntVar(value=int(settings.get("workers", 4)))
+    file_workers = ctk.IntVar(value=int(settings.get("file_workers", 2)))
+    part_size = ctk.IntVar(value=int(settings.get("part_size_mb", 8)))
+    status = ctk.StringVar(value="Ready")
+    overall = ctk.DoubleVar(value=0)
+    events: queue.Queue[tuple[str, object]] = queue.Queue()
+    latest_progress: dict[str, str] = {}
+    progress_lock = threading.Lock()
+    child: subprocess.Popen[str] | None = None
+    rows: dict[str, tuple[ctk.CTkLabel, ctk.CTkLabel]] = {}
+    progress_values: dict[str, float] = {}
+    visible_row_limit = 120
+    total_files = 0
+
+    header = ctk.CTkFrame(root, fg_color="transparent")
+    header.grid(row=0, column=0, sticky="ew", padx=22, pady=(18, 10)); header.grid_columnconfigure(0, weight=1)
+    ctk.CTkLabel(header, text="Media Panel Upload", font=font_title, text_color="#f5f5f5").grid(row=0, column=0, sticky="w")
+    ctk.CTkLabel(header, textvariable=status, font=font_small, text_color="#a3a3a3").grid(row=0, column=1, sticky="e")
+
+    setup = ctk.CTkFrame(root, corner_radius=8, fg_color="#212121", border_width=1, border_color="#303030")
+    setup.grid(row=1, column=0, sticky="ew", padx=22, pady=(0, 10)); setup.grid_columnconfigure(1, weight=1)
+    ctk.CTkLabel(setup, text="UPLOAD SETTINGS", font=ctk.CTkFont(family="Segoe UI", size=10, weight="bold"), text_color="#a3a3a3").grid(row=0, column=0, columnspan=3, sticky="w", padx=16, pady=(13, 8))
+
+    def field(row: int, label: str, variable, secret=False):
+        ctk.CTkLabel(setup, text=label, font=font_small, text_color="#b0b0b0").grid(row=row, column=0, sticky="w", padx=(16, 10), pady=4)
+        entry = ctk.CTkEntry(setup, textvariable=variable, show="•" if secret else "", height=30, corner_radius=5, font=font_small, text_color="#f5f5f5", border_color="#3a3a3a", fg_color="#191919")
+        entry.grid(row=row, column=1, columnspan=2, sticky="ew", padx=(0, 16), pady=4)
+        return entry
+
+    ctk.CTkLabel(setup, text="Profile", font=font_small, text_color="#b0b0b0").grid(row=1, column=0, sticky="w", padx=(16, 10), pady=4)
+    picker = ctk.CTkComboBox(setup, variable=profile_name, values=sorted(profiles) or [""], height=30, corner_radius=5, font=font_small, command=lambda _value: load_profile(), text_color="#f5f5f5", dropdown_text_color="#f5f5f5", dropdown_fg_color="#242424", fg_color="#191919", border_color="#3a3a3a", button_color="#303030")
+    picker.grid(row=1, column=1, sticky="ew", pady=4)
+    profile_actions = ctk.CTkFrame(setup, fg_color="transparent"); profile_actions.grid(row=1, column=2, sticky="e", padx=(8, 16), pady=4)
+    field(2, "Storage URL", drive_url); field(3, "API key", api_key, True); field(4, "Project ID", project_id); field(5, "Bucket", bucket)
+    ctk.CTkLabel(setup, text="Source folder", font=font_small, text_color="#b0b0b0").grid(row=6, column=0, sticky="w", padx=(16, 10), pady=4)
+    folder_entry = ctk.CTkEntry(setup, textvariable=source_folder, height=30, corner_radius=5, font=font_small, text_color="#f5f5f5", border_color="#3a3a3a", fg_color="#191919")
+    folder_entry.grid(row=6, column=1, sticky="ew", pady=4)
+    def choose_folder():
+        selected = filedialog.askdirectory(initialdir=source_folder.get() or None)
+        if selected: source_folder.set(selected)
+    ctk.CTkButton(setup, text="Browse", width=76, height=30, corner_radius=5, font=font_small, fg_color="#303030", text_color="#ededed", hover_color="#3a3a3a", command=choose_folder).grid(row=6, column=2, padx=(8, 16), pady=4)
+
+    divider = ctk.CTkFrame(setup, height=1, fg_color="#303030"); divider.grid(row=7, column=0, columnspan=3, sticky="ew", padx=16, pady=(9, 8))
+    advanced = ctk.CTkFrame(setup, fg_color="transparent"); advanced.grid(row=8, column=0, columnspan=3, sticky="ew", padx=16, pady=(0, 13)); advanced.grid_columnconfigure(1, weight=1)
+    ctk.CTkCheckBox(advanced, text="Include subfolders", variable=recursive, font=font_small, text_color="#dedede", fg_color="#2563eb", hover_color="#1d4ed8", border_color="#555555", checkbox_width=16, checkbox_height=16, corner_radius=4).grid(row=0, column=0, sticky="w")
+    ctk.CTkCheckBox(advanced, text="Retry until complete", variable=retry_forever, font=font_small, text_color="#dedede", fg_color="#2563eb", hover_color="#1d4ed8", border_color="#555555", checkbox_width=16, checkbox_height=16, corner_radius=4).grid(row=0, column=1, sticky="w", padx=(16, 0))
+    def small_number(parent, text, variable, minimum, maximum, col):
+        ctk.CTkLabel(parent, text=text, font=font_small, text_color="#a3a3a3").grid(row=0, column=col, padx=(13, 5))
+        ctk.CTkEntry(parent, textvariable=variable, width=46, height=28, corner_radius=5, justify="center", font=font_small, text_color="#f5f5f5", border_color="#3a3a3a", fg_color="#191919").grid(row=0, column=col + 1)
+    small_number(advanced, "Files", file_workers, 1, 8, 2); small_number(advanced, "Parts", part_workers, 1, 16, 4); small_number(advanced, "MB", part_size, 5, 512, 6)
+
+    transfers = ctk.CTkFrame(root, corner_radius=8, fg_color="#212121", border_width=1, border_color="#303030")
+    transfers.grid(row=2, column=0, sticky="nsew", padx=22, pady=(0, 10)); transfers.grid_columnconfigure(0, weight=1); transfers.grid_rowconfigure(1, weight=1)
+    ctk.CTkLabel(transfers, text="TRANSFERS", font=ctk.CTkFont(family="Segoe UI", size=10, weight="bold"), text_color="#a3a3a3").grid(row=0, column=0, sticky="w", padx=16, pady=(12, 7))
+    transfer_list = ctk.CTkScrollableFrame(transfers, corner_radius=5, fg_color="#191919", height=150)
+    transfer_list.grid(row=1, column=0, sticky="nsew", padx=12, pady=(0, 12)); transfer_list.grid_columnconfigure(0, weight=1)
+
+    def scroll_transfers_to(source: str):
+        """Keep the file that just changed visible as the queue advances."""
+        canvas = getattr(transfer_list, "_parent_canvas", None)
+        if not canvas or source not in rows:
+            return
+        row_index = list(rows).index(source)
+        fraction = row_index / max(len(rows) - 1, 1)
+        root.after_idle(lambda: canvas.yview_moveto(fraction))
+
+    footer = ctk.CTkFrame(root, corner_radius=0, fg_color="#212121", border_width=1, border_color="#303030")
+    footer.grid(row=3, column=0, sticky="ew"); footer.grid_columnconfigure(0, weight=1)
+    ctk.CTkProgressBar(footer, variable=overall, height=4, corner_radius=2, progress_color="#3b82f6", fg_color="#383838").grid(row=0, column=0, columnspan=3, sticky="ew", padx=22, pady=(11, 7))
+    detail = ctk.CTkLabel(footer, text="Ready to upload", font=font_small, text_color="#a3a3a3"); detail.grid(row=1, column=0, sticky="w", padx=22, pady=(0, 12))
+    start_button = ctk.CTkButton(footer, text="Start upload", width=108, height=32, corner_radius=5, font=font_small, fg_color="#2563eb", hover_color="#1d4ed8", command=lambda: start())
+    start_button.grid(row=1, column=1, padx=(8, 6), pady=(0, 12))
+    stop_button = ctk.CTkButton(footer, text="Stop", width=68, height=32, corner_radius=5, font=font_small, fg_color="#303030", text_color="#ededed", hover_color="#3a3a3a", state="disabled", command=lambda: stop())
+    stop_button.grid(row=1, column=2, padx=(0, 22), pady=(0, 12))
+
+    def load_profile():
+        profile = profiles.get(profile_name.get().strip())
+        if not profile: return
+        try: api_key.set(unprotect_api_key(str(profile["api_key"])))
+        except (UploadError, ValueError): return
+        drive_url.set(str(profile.get("drive_url", ""))); project_id.set(str(profile.get("project_id", ""))); bucket.set(str(profile.get("bucket", "")))
+    def save_profile():
+        name = profile_name.get().strip()
+        if not name or not all((drive_url.get().strip(), api_key.get().strip(), project_id.get().strip(), bucket.get().strip())):
+            messagebox.showerror("Profile", "Enter a profile name and all connection fields."); return False
+        profiles[name] = {"drive_url": drive_url.get().strip().rstrip("/"), "api_key": protect_api_key(api_key.get().strip()), "project_id": project_id.get().strip(), "bucket": bucket.get().strip(), "updated_at": utc_now()}
+        credential_store["selected"] = name; save_credential_store(credential_store); picker.configure(values=sorted(profiles)); status.set(f"Saved profile: {name}"); return True
+    def new_profile():
+        profile_name.set(""); drive_url.set(""); api_key.set(""); project_id.set(""); bucket.set(""); picker.focus()
+    ctk.CTkButton(profile_actions, text="New", width=48, height=30, corner_radius=5, font=font_small, fg_color="#303030", text_color="#ededed", hover_color="#3a3a3a", command=new_profile).pack(side="left", padx=(0, 4))
+    ctk.CTkButton(profile_actions, text="Save", width=48, height=30, corner_radius=5, font=font_small, fg_color="#303030", text_color="#ededed", hover_color="#3a3a3a", command=save_profile).pack(side="left")
+    if profiles and profile_name.get() in profiles: load_profile()
+
+    def update_row(source: str, text: str):
+        match = re.search(r"(\d+(?:\.\d+)?)%", text)
+        if match:
+            progress_values[source] = float(match.group(1))
+        row = rows.get(source)
+        if row:
+            row[1].configure(text=text)
+        else:
+            if len(rows) >= visible_row_limit:
+                oldest_source, oldest_row = next(iter(rows.items()))
+                oldest_row[0].destroy()
+                oldest_row[1].destroy()
+                del rows[oldest_source]
+            line = ctk.CTkFrame(transfer_list, corner_radius=5, fg_color="#242424")
+            line.grid(column=0, sticky="ew", pady=2); line.grid_columnconfigure(0, weight=1)
+            filename = ctk.CTkLabel(line, text=source, anchor="w", font=font_small, text_color="#ededed")
+            filename.grid(row=0, column=0, sticky="ew", padx=10, pady=6)
+            message = ctk.CTkLabel(line, text=text, anchor="e", font=font_small, text_color="#a3a3a3")
+            message.grid(row=0, column=1, padx=10, pady=6)
+            rows[source] = (filename, message)
+        scroll_transfers_to(source)
+    def update_overall():
+        percentages = list(progress_values.values())
+        completed = sum(value >= 100 for value in percentages)
+        # Rows appear only when a file starts. Untouched queued files count as
+        # zero, so the footer always represents the entire selected folder.
+        total = max(total_files, len(rows))
+        overall.set(sum(percentages) / total / 100 if total else 0)
+        detail.configure(
+            text=f"{completed} / {total} complete" if total else "Preparing files",
+        )
+    def read_output(process):
+        assert process.stdout is not None
+        for line in iter(process.stdout.readline, ""): events.put(("log", line))
+        events.put(("finished", process.wait()))
+    def start():
+        nonlocal child, total_files
+        if child and child.poll() is None: return
+        folder = Path(source_folder.get()).expanduser()
+        if not folder.is_dir(): messagebox.showerror("Source folder", "Select an existing folder."); return
+        if not save_profile(): return
+        workers = max(1, min(16, part_workers.get())); files = max(1, min(8, file_workers.get())); size = max(5, min(512, part_size.get()))
+        save_gui_settings({"source_folder": str(folder), "recursive": recursive.get(), "retry_forever": retry_forever.get(), "workers": workers, "file_workers": files, "part_size_mb": size})
+        command = [sys.executable, "-u", str(Path(__file__).resolve()), str(folder), "--drive-url", drive_url.get().strip(), "--project-id", project_id.get().strip(), "--bucket", bucket.get().strip(), "--profile", profile_name.get().strip(), "--part-workers", str(workers), "--file-workers", str(files), "--part-size-mb", str(size), "--max-rounds", "0" if retry_forever.get() else "5"]
+        if recursive.get(): command.append("--recursive")
+        environment = os.environ.copy(); environment["DRIVE_STORAGE_API_KEY"] = api_key.get().strip()
+        # The child performs the authoritative scan. Keeping it out of the UI
+        # callback prevents Windows from marking the window as unresponsive.
+        total_files = 0
+        child = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace", env=environment, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        for child_widget in transfer_list.winfo_children(): child_widget.destroy()
+        rows.clear(); overall.set(0); detail.configure(text=f"0 / {total_files} complete" if total_files else "Preparing files"); status.set("Uploading"); start_button.configure(state="disabled"); stop_button.configure(state="normal"); threading.Thread(target=read_output, args=(child,), daemon=True).start()
+    def stop():
+        if child and child.poll() is None: child.terminate(); status.set("Stopping")
+    def poll():
+        nonlocal child, total_files
+        with progress_lock:
+            progress = dict(latest_progress)
+            latest_progress.clear()
+        for source, text in progress.items():
+            update_row(source, text)
+            update_overall()
+        try:
+            for _ in range(50):
+                event, value = events.get_nowait()
+                if event == "log":
+                    line = str(value).rstrip()
+                    if line.startswith("ERROR  "):
+                        error_text = line[7:]
+                        source, _, message = error_text.partition(": ")
+                        update_row(source, message or error_text)
+                        status.set("Upload error; retrying")
+                        detail.configure(text=message or error_text)
+                    elif line.startswith("Ready queue:"):
+                        match = re.search(r"(\d+) file", line)
+                        if match:
+                            total_files = int(match.group(1))
+                            detail.configure(text=f"0 / {total_files} ready")
+                    elif line.startswith("Fatal:"):
+                        detail.configure(text=line)
+                        status.set("Upload failed")
+                else:
+                    success = int(value) == 0; status.set("All uploaded; awaiting worker scan" if success else f"Stopped ({value})"); detail.configure(text="Completed; awaiting worker scan" if success else "Upload stopped"); overall.set(1 if success else overall.get()); start_button.configure(state="normal"); stop_button.configure(state="disabled"); child = None
+        except queue.Empty:
+            pass
+        root.after(100, poll)
+    root.after(100, poll)
+    if self_test: root.update_idletasks(); root.destroy(); return 0
+    root.mainloop(); return 0
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Upload every file in a folder with persistent resume state."
@@ -1009,10 +1708,21 @@ def parse_args() -> argparse.Namespace:
         default=os.getenv("NEXT_PUBLIC_DRIVE_STORAGE_BUCKET", ""),
         help="Drive bucket (or NEXT_PUBLIC_DRIVE_STORAGE_BUCKET)",
     )
+    parser.add_argument(
+        "--profile",
+        default="default",
+        help="Credential profile name used to isolate resumable upload traces",
+    )
     parser.add_argument("--state", type=Path, help="JSON state file path")
     parser.add_argument("--recursive", action="store_true")
     parser.add_argument("--part-size-mb", type=int, default=8)
     parser.add_argument("--part-workers", type=int, default=4)
+    parser.add_argument(
+        "--file-workers",
+        type=int,
+        default=2,
+        help="Number of files to upload concurrently (default: 2)",
+    )
     parser.add_argument("--part-retries", type=int, default=3)
     parser.add_argument("--request-timeout", type=int, default=120)
     parser.add_argument(
@@ -1029,7 +1739,7 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
     args = parse_args()
     if args.gui or args.folder is None:
-        return launch_gui()
+        return launch_modern_gui()
     folder = args.folder.expanduser().resolve()
     if not folder.is_dir():
         raise UploadError(f"Folder does not exist: {folder}")
@@ -1073,8 +1783,40 @@ def run_uploads(
         args.drive_url,
         args.project_id,
         args.bucket,
+        args.profile,
     )
     sync_manifest(store, folder, files)
+    # Finish all local work before opening upload slots. Every item now has a
+    # persistent fingerprint, collision-safe bucket key, and a visible queue
+    # state; concurrent workers only perform the network transfer.
+    ready_count = 0
+    for record in store.data["files"].values():
+        if not record.get("present") or record.get("status") == "uploaded":
+            continue
+        path = folder / str(record["source"])
+        try:
+            if not source_matches_record(path, record):
+                raise UploadError("Source file changed during queue preparation")
+            record.update(
+                status="ready",
+                status_message="Ready to upload",
+                last_error=None,
+                updated_at=utc_now(),
+            )
+            append_trace(record, "upload_queued", queue_position=ready_count + 1)
+            ready_count += 1
+            log_progress(str(record["source"]), "Ready to upload")
+        except (OSError, UploadError) as error:
+            record.update(
+                status="error",
+                status_message="Queue preparation failed",
+                last_error=str(error),
+                updated_at=utc_now(),
+            )
+            append_trace(record, "queue_preparation_failed", error=str(error))
+            log(f"ERROR  {record['source']}: {error}")
+    store.save()
+    log(f"Ready queue: {ready_count} file(s), oldest source file first")
     client = DriveClient(
         args.drive_url,
         args.drive_api_key,
@@ -1083,6 +1825,34 @@ def run_uploads(
         args.request_timeout,
     )
     round_number = 0
+
+    def upload_record(record: dict[str, Any]) -> None:
+        try:
+            upload_file(
+                client, store, folder, record,
+                args.part_size_mb * 1024 * 1024,
+                args.part_workers, args.part_retries,
+            )
+        except KeyboardInterrupt:
+            record.update(status="interrupted", updated_at=utc_now())
+            append_trace(record, "upload_interrupted")
+            store.save()
+            raise
+        except Exception as error:
+            error_message = str(error)
+            normalized_error = error_message.lower().replace(" ", "")
+            if any(marker in normalized_error for marker in (
+                "nosuchupload", "invaliduploadid", "uploaddoesnotexist",
+                "multipartuploadnotfound",
+            )):
+                record.pop("upload_id", None)
+                record["parts"] = {}
+                record["uploaded_bytes"] = 0
+            record.update(status="error", last_error=error_message,
+                          updated_at=utc_now())
+            append_trace(record, "upload_failed", error=error_message)
+            store.save()
+            log(f"ERROR  {record['source']}: {error}")
     while True:
         round_number += 1
         # Include files added during a long run and restart any file whose
@@ -1092,10 +1862,13 @@ def run_uploads(
             folder,
             discover_files(folder, state_path, args.recursive),
         )
-        pending = [
+        pending = sorted([
             record for record in store.data["files"].values()
             if record.get("present") and record.get("status") != "uploaded"
-        ]
+        ], key=lambda record: (
+            int(record.get("fingerprint", {}).get("mtime_ns", 0)),
+            str(record.get("source", "")).casefold(),
+        ))
         if not pending:
             total = sum(
                 1 for record in store.data["files"].values()
@@ -1104,43 +1877,12 @@ def run_uploads(
             log(f"All {total} file(s) uploaded; awaiting worker scan.")
             return 0
         log(f"Round {round_number}: {len(pending)} file(s) remaining")
-        for record in pending:
-            try:
-                upload_file(
-                    client,
-                    store,
-                    folder,
-                    record,
-                    args.part_size_mb * 1024 * 1024,
-                    args.part_workers,
-                    args.part_retries,
-                )
-            except KeyboardInterrupt:
-                record.update(status="interrupted", updated_at=utc_now())
-                store.save()
-                raise
-            except Exception as error:
-                error_message = str(error)
-                normalized_error = error_message.lower().replace(" ", "")
-                if any(marker in normalized_error for marker in (
-                    "nosuchupload",
-                    "invaliduploadid",
-                    "uploaddoesnotexist",
-                    "multipartuploadnotfound",
-                )):
-                    # Storage discarded the old multipart session. Retain the
-                    # stable destination key but start its parts again.
-                    record.pop("upload_id", None)
-                    record["parts"] = {}
-                    record["uploaded_bytes"] = 0
-                record.update(
-                    status="error",
-                    last_error=error_message,
-                    updated_at=utc_now(),
-                )
-                store.save()
-                log(f"ERROR  {record['source']}: {error}")
-                continue
+        with concurrent.futures.ThreadPoolExecutor(
+            max_workers=max(1, args.file_workers),
+        ) as pool:
+            futures = [pool.submit(upload_record, record) for record in pending]
+            for future in concurrent.futures.as_completed(futures):
+                future.result()
         remaining = [
             record for record in store.data["files"].values()
             if record.get("present") and record.get("status") != "uploaded"
