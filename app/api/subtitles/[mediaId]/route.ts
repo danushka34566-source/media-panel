@@ -1,6 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { isSessionAuthorized } from '@/auth/api';
 import {
   DRIVE_STORAGE_OBJECT_BASE_URL,
+  driveCreatePresignedDownload,
+  driveKeyFromUrl,
+  isUrlFromDrive,
 } from '@/platforms/storage/drive-gateway';
 import {
   getSubtitleProxyManifestUrl,
@@ -21,7 +25,8 @@ const fetchManifest = async (mediaId: string) => {
     DRIVE_STORAGE_OBJECT_BASE_URL,
     `${mediaId}-subtitles.json`,
   ].join('/');
-  const response = await fetch(url, { cache: 'no-store' });
+  const signed = await driveCreatePresignedDownload(driveKeyFromUrl(url));
+  const response = await fetch(signed.url, { cache: 'no-store' });
   if (!response.ok) { return undefined; }
   return parseSubtitleManifest(await response.json().catch(() => null));
 };
@@ -30,6 +35,12 @@ export async function GET(
   request: NextRequest,
   context: { params: Promise<{ mediaId: string }> },
 ) {
+  if (!await isSessionAuthorized('view')) {
+    return NextResponse.json(
+      { error: 'Unauthorized subtitle request' },
+      { status: 401, headers: CACHE_HEADERS },
+    );
+  }
   const { mediaId: rawMediaId } = await context.params;
   const mediaId = decodeURIComponent(rawMediaId || '');
   if (!isMediaIdValid(mediaId)) {
@@ -70,7 +81,14 @@ export async function GET(
       );
     }
 
-    const response = await fetch(track.src, { cache: 'no-store' });
+    if (!isUrlFromDrive(track.src)) {
+      return NextResponse.json(
+        { error: 'Invalid subtitle track URL' },
+        { status: 400, headers: CACHE_HEADERS },
+      );
+    }
+    const signed = await driveCreatePresignedDownload(driveKeyFromUrl(track.src));
+    const response = await fetch(signed.url, { cache: 'no-store' });
     if (!response.ok || !response.body) {
       return NextResponse.json(
         { error: 'Subtitle track unavailable' },

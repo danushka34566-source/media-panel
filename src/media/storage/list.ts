@@ -27,7 +27,7 @@ const MEDIA_EXTENSIONS = new Set([
   'ogv',
 ]);
 const GENERATED_MEDIA_SUFFIX_REGEX =
-  /-(sm|md|lg|poster|preview|stream|subtitles(?:\.[a-z0-9_-]+)?)$/i;
+  /-(sm|md|lg|poster|preview|stream|hls(?:-init|-(?:high|720p)-init)|subtitles(?:\.[a-z0-9_-]+)?)$/i;
 const UPLOAD_DETECTION_LIMIT = 1000;
 
 const isStorageItemPendingMediaUpload = (

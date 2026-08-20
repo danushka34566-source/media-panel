@@ -304,6 +304,18 @@ export const MIGRATIONS: Migration[] = [{
         NULL;
     END $$;
   `),
+}, {
+  label: '15: Full Video HLS Delivery',
+  fields: ['hls_manifest_url', 'hls_verified_at'],
+  run: () => query(`
+    ALTER TABLE media
+    ADD COLUMN IF NOT EXISTS hls_manifest_url TEXT,
+    ADD COLUMN IF NOT EXISTS hls_verified_at TIMESTAMP WITH TIME ZONE;
+
+    CREATE INDEX IF NOT EXISTS media_hls_reconciliation_idx
+    ON media (hls_verified_at ASC NULLS FIRST, id ASC)
+    WHERE media_type='video' AND transcode_status='ready';
+  `),
 }];
 
 export const migrationForError = (e: any) =>

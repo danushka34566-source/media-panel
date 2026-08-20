@@ -157,6 +157,8 @@ export interface MediaDb extends
   updatedAt: Date
   createdAt: Date
   takenAt: Date
+  hlsManifestUrl?: string
+  hlsVerifiedAt?: Date
   categories: string[] | null
   tags: string[] | null
   performers: string[] | null
@@ -177,6 +179,8 @@ export interface Media extends Omit<MediaDb, 'recipeData' | 'colorData'> {
   mediaHeight?: number
   posterUrl?: string
   previewUrl?: string
+  hlsManifestUrl?: string
+  hlsVerifiedAt?: Date
   transcodeStatus?: TranscodeStatus
   transcodeError?: string
   focalLengthFormatted?: string

@@ -14,6 +14,7 @@ import {
   getValidSubtitleUploadMetadata,
   isDeferredSourceCleanupSafe,
   isAllowedStreamDerivativeKey,
+  isAllowedHlsDerivativeKey,
   isAllowedProcessorUploadKey,
   isProtectedRegistrationDestination,
   isRecoverableDriveCopyError,
@@ -185,6 +186,30 @@ test('processor stream uploads are restricted to safe derivative keys', () => {
   assert.equal(isAllowedStreamDerivativeKey('show-name-stream.webm'), true);
   assert.equal(isAllowedStreamDerivativeKey('../source.mkv'), false);
   assert.equal(isAllowedStreamDerivativeKey('124399888136-preview.mp4'), false);
+});
+
+test('HLS VOD artifacts use stable, flat derivative keys', () => {
+  assert.equal(isAllowedHlsDerivativeKey('movie-hls.m3u8'), true);
+  assert.equal(isAllowedHlsDerivativeKey('movie-hls-init.mp4'), true);
+  assert.equal(isAllowedHlsDerivativeKey('movie-hls-00001.m4s'), true);
+  assert.equal(isAllowedHlsDerivativeKey('movie-hls-high.m3u8'), true);
+  assert.equal(isAllowedHlsDerivativeKey('movie-hls-high-init.mp4'), true);
+  assert.equal(isAllowedHlsDerivativeKey('movie-hls-high-00001.m4s'), true);
+  assert.equal(isAllowedHlsDerivativeKey('movie-hls-720p.m3u8'), true);
+  assert.equal(isAllowedHlsDerivativeKey('movie-hls-720p-init.mp4'), true);
+  assert.equal(isAllowedHlsDerivativeKey('movie-hls-720p-00001.m4s'), true);
+  assert.equal(isAllowedHlsDerivativeKey('movie-hls/segment-00001.m4s'), false);
+  assert.equal(isAllowedHlsDerivativeKey('movie-hls-random-init.mp4'), false);
+});
+
+test('HLS reconciliation is bounded and requires canonical delivery URLs', () => {
+  const reconcileStart = workerSource.indexOf('const reconcileMissingHlsArtifacts');
+  const reconcileEnd = workerSource.indexOf('const commitCanonicalVideo', reconcileStart);
+  const source = workerSource.slice(reconcileStart, reconcileEnd);
+  assert.match(source, /LIMIT 12/);
+  assert.match(source, /FOR UPDATE SKIP LOCKED/);
+  assert.match(source, /urlForKey\(env, key\) !== uri/);
+  assert.match(source, /hls_verified_at/);
 });
 
 test('canonical processor uploads keep the media ID and plain mp4 name', () => {

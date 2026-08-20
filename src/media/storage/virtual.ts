@@ -12,7 +12,7 @@ const VIDEO_EXTENSIONS = new Set([
   'mpg', 'mpeg', 'wmv', 'flv', '3gp', 'ogv',
 ]);
 const GENERATED_VIDEO_SUFFIX_REGEX =
-  /-(poster|preview|stream|subtitles(?:\.[a-z0-9_-]+)?)$/i;
+  /-(poster|preview|stream|hls(?:-init|-(?:high|720p)-init)|subtitles(?:\.[a-z0-9_-]+)?)$/i;
 const VIRTUAL_VIDEO_ID_PREFIX = 'v';
 
 const isMainStorageVideo = ({ url }: StorageListItem) => {

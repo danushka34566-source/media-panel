@@ -150,6 +150,30 @@ export const driveCreatePresignedUpload = async (key: string, contentType?: stri
   return response.json() as Promise<{ url: string }>;
 };
 
+/** Create a short-lived Drive download URL without exposing the project key. */
+export const driveCreatePresignedDownload = async (key: string): Promise<{ url: string }> => {
+  const search = new URLSearchParams({
+    projectId: DRIVE_PROJECT_ID,
+    bucket: DRIVE_BUCKET,
+    key,
+    expiresInSeconds: '900',
+  });
+  const response = await fetchWithTimeout(
+    `${DRIVE_API_BASE_URL}/api/v1/files/download?${search.toString()}`,
+    { headers: headers(), cache: 'no-store' },
+    DRIVE_UPLOAD_REQUEST_TIMEOUT_MS,
+  );
+  if (!response.ok) {
+    throw new Error(await readDriveError(
+      response,
+      `Unable to create Drive download URL (${response.status}).`,
+    ));
+  }
+  const data = await response.json() as { url?: string };
+  if (!data.url) { throw new Error('Drive download response did not include a URL.'); }
+  return { url: data.url };
+};
+
 export const driveFinalizeUpload = async (key: string) => {
   const response = await fetchWithTimeout(`${DRIVE_API_BASE_URL}/api/v1/storage/finalize`, {
     method: 'POST',

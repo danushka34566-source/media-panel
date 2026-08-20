@@ -92,6 +92,12 @@ import {
   type DetailMainVideoPlayback,
 } from './detail-video-playback';
 import PersonalFavoriteButton from './PersonalFavoriteButton';
+import {
+  getFullVideoManifestUrl,
+  useAdaptiveFullVideoPlayback,
+  type FullVideoTelemetry,
+} from './full-video-playback';
+import { getFullVideoBridgeUrl } from './full-video-bridge';
 
 const SWIPE_NAVIGATION_DISTANCE = 50;
 const SWIPE_NAVIGATION_VERTICAL_TOLERANCE = 70;
@@ -428,21 +434,41 @@ export default function MediaLarge({
         : photo.url
     )
     : (automaticPreviewSrc || '');
-  useEffect(() => {
-    if (
-      !isFullVideoPlaying ||
-      !shouldUseCompatibilityPlayback ||
-      !compatibilityPlaybackUrl
-    ) { return; }
-    const video = videoRef.current;
-    if (!video || video.src === compatibilityPlaybackUrl) { return; }
-    video.src = compatibilityPlaybackUrl;
-    video.load();
-  }, [
-    compatibilityPlaybackUrl,
-    isFullVideoPlaying,
-    shouldUseCompatibilityPlayback,
-  ]);
+  // Derive HLS from the original object key. If progressive fallback switches
+  // to -stream.mp4, do not start looking for a second -stream-hls manifest.
+  const fullVideoManifestUrl = isFullVideoPlaying && photo.url
+    ? getFullVideoBridgeUrl(
+      photo.hlsManifestUrl ?? getFullVideoManifestUrl(photo.url),
+    )
+    : undefined;
+  const fullVideoSourceUrl = isFullVideoPlaying
+    ? getFullVideoBridgeUrl(currentVideoUrl)
+    : currentVideoUrl;
+  const fullVideoCompatibilityUrl = compatibilityPlaybackUrl
+    ? getFullVideoBridgeUrl(compatibilityPlaybackUrl)
+    : undefined;
+  useAdaptiveFullVideoPlayback({
+    // Zoom owns the active full-video session while open; keeping the inline
+    // controller detached prevents two HLS pipelines from downloading at once.
+    active: isVideo && isFullVideoPlaying && !isVideoZoomOpen,
+    videoRef,
+    sourceUrl: fullVideoSourceUrl,
+    compatibilityUrl: fullVideoCompatibilityUrl,
+    manifestUrl: fullVideoManifestUrl,
+    onTelemetry: (telemetry: FullVideoTelemetry) => {
+      // Keep diagnostics observable without coupling playback to UI state.
+      try {
+        window.dispatchEvent(new CustomEvent('media-full-video-telemetry', {
+          detail: { mediaId: photo.id, ...telemetry },
+        }));
+      } catch { /* browser may be tearing down the page */ }
+    },
+    onProgressiveFallback: (url) => {
+      if (fullVideoCompatibilityUrl && url === fullVideoCompatibilityUrl) {
+        setShouldUseCompatibilityPlayback(true);
+      }
+    },
+  });
   const {
     shouldMount: shouldMountPreview,
     isActive: isPreviewActive,
@@ -1098,7 +1124,9 @@ export default function MediaLarge({
                       const actualUrl = isPiPLocked
                         ? (pipLockedSrc ?? currentVideoUrl)
                         : currentVideoUrl;
-                      return actualUrl;
+                      return isFullVideoPlaying
+                        ? getFullVideoBridgeUrl(actualUrl)
+                        : actualUrl;
                     })()}
                     style={{ aspectRatio: mediaAspectRatio }}
                     poster={isFullVideoPlaying && shouldLoadVideoPoster
@@ -1159,11 +1187,15 @@ export default function MediaLarge({
                     }}
                     onError={event => {
                       if (isFullVideoPlaying) {
+                        if (event.currentTarget.dataset.fullVideoHlsInitializing === 'true') {
+                          return;
+                        }
                         setShouldUseCompatibilityPlayback(true);
-                        if (compatibilityPlaybackUrl) {
+                        const fallbackUrl = fullVideoCompatibilityUrl;
+                        if (fallbackUrl) {
                           const video = event.currentTarget;
-                          if (video.src !== compatibilityPlaybackUrl) {
-                            video.src = compatibilityPlaybackUrl;
+                          if (video.src !== fallbackUrl) {
+                            video.src = fallbackUrl;
                             video.load();
                             void video.play().catch(() => undefined);
                           }
@@ -1848,6 +1880,10 @@ export default function MediaLarge({
         open={isVideoZoomOpen}
         onClose={() => setIsVideoZoomOpen(false)}
         videoUrl={photo.url}
+        playbackUrl={getFullVideoBridgeUrl(photo.url)}
+        manifestUrl={fullVideoManifestUrl}
+        mediaId={photo.id}
+        compatibilityUrl={fullVideoCompatibilityUrl}
         posterUrl={posterSrc ?? undefined}
         onPlayManaged={async (videoEl) => {
           await VideoPlaybackManager.requestPlay(videoEl, { preferPiP: VideoPlaybackManager.isPiPActive() });
@@ -1873,6 +1909,10 @@ function VideoZoomOverlay({
   open,
   onClose,
   videoUrl,
+  playbackUrl,
+  manifestUrl,
+  mediaId,
+  compatibilityUrl,
   posterUrl,
   onPlayManaged,
   startTime,
@@ -1884,6 +1924,10 @@ function VideoZoomOverlay({
   open: boolean
   onClose: () => void
   videoUrl: string
+  playbackUrl?: string
+  manifestUrl?: string
+  mediaId?: string
+  compatibilityUrl?: string
   posterUrl?: string
   onPlayManaged?: (video: HTMLVideoElement) => void
   startTime?: number
@@ -1894,6 +1938,31 @@ function VideoZoomOverlay({
 }) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const [wasPlaying, setWasPlaying] = useState(true);
+  const progressiveUrlRef = useRef<{ source: string, url: string } | undefined>(undefined);
+  const activePlaybackUrl = playbackUrl ?? videoUrl;
+  const activeManifestUrl = open
+    ? getFullVideoBridgeUrl(manifestUrl ?? getFullVideoManifestUrl(videoUrl))
+    : undefined;
+  const progressiveUrl = progressiveUrlRef.current?.source === activePlaybackUrl
+    ? progressiveUrlRef.current.url
+    : undefined;
+  useAdaptiveFullVideoPlayback({
+    active: open,
+    videoRef,
+    sourceUrl: activePlaybackUrl,
+    compatibilityUrl,
+    manifestUrl: activeManifestUrl,
+    onTelemetry: (telemetry) => {
+      try {
+        window.dispatchEvent(new CustomEvent('media-full-video-telemetry', {
+          detail: { mediaId, ...telemetry },
+        }));
+      } catch { /* page may be tearing down */ }
+    },
+    onProgressiveFallback: (url) => {
+      progressiveUrlRef.current = { source: activePlaybackUrl, url };
+    },
+  });
   useEffect(() => {
     if (!open) { return; }
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -1968,7 +2037,7 @@ function VideoZoomOverlay({
         <video
           ref={videoRef}
           className="w-full h-full max-h-[80vh] object-contain rounded-md bg-black"
-          src={videoUrl}
+          src={progressiveUrl ?? activePlaybackUrl}
           poster={posterUrl}
           controls
           controlsList="nodownload noplaybackrate"

@@ -132,6 +132,11 @@ import {
   clearWorkerRegistrationStatusForUrl,
 } from '@/admin/processing/server';
 import { enqueueMediaDeletion } from './deletion';
+import {
+  driveCreatePresignedDownload,
+  driveKeyFromUrl,
+  isUrlFromDrive,
+} from '@/platforms/storage/drive-gateway';
 
 const VIDEO_FILE_EXTENSIONS = [
   'mp4', 'mkv', 'mov', 'm4v', 'webm', 'avi', 'ts', 'm2ts', 'mts',
@@ -2103,7 +2108,10 @@ const readSubtitleManifestTracks = async (
   const manifestUrl = files.find(({ fileName }) =>
     fileName.toLowerCase() === `${fileNameBase}-subtitles.json`.toLowerCase())?.url;
   if (!manifestUrl) { return []; }
-  return fetch(manifestUrl, { cache: 'no-store' })
+  const readableUrl = isUrlFromDrive(manifestUrl)
+    ? (await driveCreatePresignedDownload(driveKeyFromUrl(manifestUrl))).url
+    : manifestUrl;
+  return fetch(readableUrl, { cache: 'no-store' })
     .then(async response => response.ok
       ? (await response.json() as { tracks?: SubtitleManifestTrack[] }).tracks || []
       : [])

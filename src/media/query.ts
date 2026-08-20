@@ -277,6 +277,8 @@ export const createMediaTable = () =>
       media_height INTEGER,
       poster_url VARCHAR(255),
       preview_url VARCHAR(255),
+      hls_manifest_url TEXT,
+      hls_verified_at TIMESTAMP WITH TIME ZONE,
       transcode_status VARCHAR(50),
       transcode_error TEXT,
       aspect_ratio REAL DEFAULT 1.5,

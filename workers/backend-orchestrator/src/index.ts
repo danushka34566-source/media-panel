@@ -108,6 +108,23 @@ let runtimeSettingsCache: {
   expiresAt: number
   settings: RuntimeProcessingSettings
 } | undefined;
+let hlsSchemaInitialization: Promise<void> | undefined;
+
+const ensureHlsSchema = async (env: Env) => {
+  if (hlsSchemaInitialization) return hlsSchemaInitialization;
+  hlsSchemaInitialization = (async () => {
+    const sql = sqlForEnv(env);
+    await sql`ALTER TABLE media ADD COLUMN IF NOT EXISTS hls_manifest_url TEXT`;
+    await sql`ALTER TABLE media ADD COLUMN IF NOT EXISTS hls_verified_at TIMESTAMP WITH TIME ZONE`;
+    await sql`CREATE INDEX IF NOT EXISTS media_hls_reconciliation_idx
+      ON media (hls_verified_at ASC NULLS FIRST, id ASC)
+      WHERE media_type='video' AND transcode_status='ready'`;
+  })().catch(error => {
+    hlsSchemaInitialization = undefined;
+    throw error;
+  });
+  return hlsSchemaInitialization;
+};
 
 const getRuntimeProcessingSettings = async (env: Env) => {
   if (runtimeSettingsCache && runtimeSettingsCache.expiresAt > Date.now()) {
@@ -205,7 +222,7 @@ const VIDEO_EXTENSIONS = new Set([
 ]);
 const PRESERVED_VIDEO_EXTENSIONS = new Set(['mp4', 'mkv']);
 const GENERATED_MEDIA_SUFFIX_REGEX =
-  /-(sm|md|lg|poster|preview|stream|subtitles(?:\.[a-z0-9_-]+)?)$/i;
+  /-(sm|md|lg|poster|preview|stream|hls(?:-init|-(?:high|720p)-init)|subtitles(?:\.[a-z0-9_-]+)?)$/i;
 const STALE_REGISTRATION_ERROR_MESSAGE =
   'Worker registration stalled before completion';
 const MISSING_UPLOAD_ERROR_PREFIX = 'Upload not found in storage';
@@ -223,10 +240,14 @@ const encoder = new TextEncoder();
 export const isAllowedStreamDerivativeKey = (key: string) =>
   /^[a-zA-Z0-9._@-]+-stream\.(mp4|webm)$/i.test(key);
 
+export const isAllowedHlsDerivativeKey = (key: string) =>
+  /^[a-zA-Z0-9._@-]+-hls(?:-(?:high|720p))?(?:\.m3u8|-init\.mp4|-[0-9]{5}\.m4s)$/i.test(key);
+
 export const isAllowedProcessorUploadKey = (
   key: string,
   photoId: string,
 ) => isAllowedStreamDerivativeKey(key) ||
+  isAllowedHlsDerivativeKey(key) ||
   key.split('/').pop()?.toLowerCase() === `${photoId.toLowerCase()}.mp4`;
 
 type SubtitleManifestTrack = {
@@ -326,6 +347,9 @@ const driveHeaders = (env: Env, extras?: Record<string, string>) => ({
   'X-Drive-Bucket': env.DRIVE_STORAGE_BUCKET || '',
   ...(extras ?? {}),
 });
+
+const stableStorageReadHeaders = (env: Env) =>
+  isDriveStorageEnabled(env) ? driveHeaders(env) : undefined;
 
 const getNumber = (
   value: string | undefined,
@@ -2173,6 +2197,12 @@ type RegistrationStatusWrite = {
   errorMessage?: string
 };
 
+type HlsArtifactMetadata = {
+  key?: string
+  size?: number
+  contentType?: string
+};
+
 const upsertRegistrationStatuses = async (
   env: Env,
   rows: RegistrationStatusWrite[],
@@ -3061,7 +3091,7 @@ const scanAndRegisterWithLease = async (
             `Copied destination is not readable in storage: ${registrationKey}`,
           );
         }
-        let shouldUpsertMediaRow = existingMediaForId?.url !== targetRegistrationUrl;
+        const shouldUpsertMediaRow = existingMediaForId?.url !== targetRegistrationUrl;
         if (targetAlreadyRegistered) {
           registrationUrl = targetRegistrationUrl;
         }
@@ -3281,6 +3311,9 @@ const scanAndRegister = async (env: Env) => {
 const claimVideoJobs = async (env: Env, limit: number) => {
   // Reclaim abandoned leases even when the scheduled scan has not run yet.
   // Active processors keep updated_at fresh through their heartbeat requests.
+  await reconcileMissingHlsArtifacts(env).catch(error => {
+    console.warn('Skipping HLS artifact reconciliation', error);
+  });
   await retryStaleProcessing(env);
 
   const sql = sqlForEnv(env);
@@ -3333,17 +3366,28 @@ const claimVideoJobs = async (env: Env, limit: number) => {
     const sourceUrl = isDriveStorageEnabled(env) && sourceKey
       ? await createDriveSignedDownloadUrl(env, sourceKey)
       : row.url;
+    const fileNameBase = getFileParts(row.url).fileNameBase;
+    const hlsManifestKey = `${fileNameBase}-hls.m3u8`;
     return {
       photoId: row.id,
       sourceUrl,
       sourceKey,
-      fileNameBase: getFileParts(row.url).fileNameBase,
+      fileNameBase,
       extension: row.extension,
       processingReason: row.transcode_error || undefined,
       canonicalOutputKey: sourceKey &&
         !PRESERVED_VIDEO_EXTENSIONS.has(row.extension.toLowerCase())
         ? sourceKey.replace(/\.[^/.]+$/, '.mp4')
         : undefined,
+      hlsManifestUrl: urlForKey(env, hlsManifestKey),
+      hlsInitUrl: urlForKey(env, `${fileNameBase}-hls-init.mp4`),
+      hlsSegmentUrlPrefix: urlForKey(env, `${fileNameBase}-hls-`),
+      hlsHighManifestUrl: urlForKey(env, `${fileNameBase}-hls-high.m3u8`),
+      hlsHighInitUrl: urlForKey(env, `${fileNameBase}-hls-high-init.mp4`),
+      hlsHighSegmentUrlPrefix: urlForKey(env, `${fileNameBase}-hls-high-`),
+      hls720ManifestUrl: urlForKey(env, `${fileNameBase}-hls-720p.m3u8`),
+      hls720InitUrl: urlForKey(env, `${fileNameBase}-hls-720p-init.mp4`),
+      hls720SegmentUrlPrefix: urlForKey(env, `${fileNameBase}-hls-720p-`),
     };
   }));
   const readyJobs = jobs
@@ -3412,6 +3456,164 @@ const proxyVideoStreamMultipartUpload = async (
   );
   const data = await response.json().catch(() => ({}));
   return json(response.status, data);
+};
+
+const uploadProcessorObject = async (env: Env, formData: FormData) => {
+  const photoId = formData.get('photoId')?.toString().trim();
+  const key = formData.get('key')?.toString().trim() || '';
+  const contentType = formData.get('contentType')?.toString().trim() || 'application/octet-stream';
+  const file = formData.get('file');
+  if (!photoId || !(file instanceof File) || !isAllowedHlsDerivativeKey(key)) {
+    return json(400, { error: 'photoId, HLS key, and file are required' });
+  }
+  const sql = sqlForEnv(env);
+  const rows = await sql`SELECT url FROM media WHERE id=${photoId} LIMIT 1` as unknown as Array<{ url: string }>;
+  const base = rows[0]?.url ? getFileParts(rows[0].url).fileNameBase : '';
+  if (!base || !key.startsWith(`${base}-hls`)) {
+    return json(400, { error: 'HLS key does not match the media source' });
+  }
+  await putObject(env, key, await file.arrayBuffer(), contentType);
+  const size = await storageObjectSize(env, key);
+  if (size === undefined || size !== file.size) {
+    return json(409, { error: 'HLS artifact is not fully readable in storage' });
+  }
+  return json(200, { success: true, key, size, url: urlForKey(env, key) });
+};
+
+const verifyHlsArtifacts = async (
+  env: Env,
+  fileNameBase: string,
+  manifestKey: string,
+  rawArtifacts: unknown,
+) => {
+  if (!isAllowedHlsDerivativeKey(manifestKey) || manifestKey !== `${fileNameBase}-hls.m3u8`) {
+    throw new Error('Invalid HLS manifest key');
+  }
+  if (!Array.isArray(rawArtifacts) || rawArtifacts.length < 2) {
+    throw new Error('HLS artifact list is incomplete');
+  }
+  const artifacts = rawArtifacts.map(item => {
+    const value = item as HlsArtifactMetadata;
+    const key = value.key?.trim() || '';
+    const size = Number(value.size);
+    if (!isAllowedHlsDerivativeKey(key) || !key.startsWith(`${fileNameBase}-hls`) ||
+        !Number.isFinite(size) || size <= 0) {
+      throw new Error(`Invalid HLS artifact metadata: ${key}`);
+    }
+    return { key, size };
+  });
+  const byKey = new Map(artifacts.map(artifact => [artifact.key, artifact]));
+  const manifest = byKey.get(manifestKey);
+  if (!manifest) throw new Error('HLS manifest is missing from artifact list');
+  for (const artifact of artifacts) {
+    const stored = await storageObjectSize(env, artifact.key);
+    if (!isVerifiedStorageCopy(artifact.size, stored)) {
+      throw new Error(`HLS artifact is not fully readable in storage: ${artifact.key}`);
+    }
+  }
+  const response = await fetch(urlForKey(env, manifestKey), {
+    cache: 'no-store',
+    headers: stableStorageReadHeaders(env),
+  });
+  if (!response.ok) throw new Error('HLS manifest is not readable in storage');
+  const manifestText = await response.text();
+  if (!/#EXTM3U/.test(manifestText) || !/#EXT-X-STREAM-INF:/i.test(manifestText)) throw new Error('HLS master manifest is incomplete');
+  const masterUris = manifestText.split(/\r?\n/).filter(line => line.trim() && !line.trim().startsWith('#'));
+  const variantArtifacts = masterUris.map(uri => artifacts.find(candidate => urlForKey(env, candidate.key) === uri));
+  if (variantArtifacts.some(artifact => !artifact || !/-(?:high|720p)\.m3u8$/i.test(artifact!.key))) throw new Error('HLS master references an unverified rendition');
+  for (const variant of variantArtifacts) {
+    const response = await fetch(urlForKey(env, variant!.key), {
+      cache: 'no-store',
+      headers: stableStorageReadHeaders(env),
+    });
+    if (!response.ok) throw new Error(`HLS rendition is not readable: ${variant!.key}`);
+    const text = await response.text();
+    if (!/#EXTM3U/.test(text) || !/#EXT-X-PLAYLIST-TYPE:VOD/i.test(text) || !/#EXT-X-MAP:/i.test(text) || !/#EXT-X-ENDLIST/i.test(text)) throw new Error(`HLS rendition is incomplete: ${variant!.key}`);
+    const uris = Array.from(text.matchAll(/#EXT-X-MAP:.*?URI="([^"]+)"/gi), match => match[1]).concat(text.split(/\r?\n/).filter(line => line.trim() && !line.trim().startsWith('#')));
+    for (const uri of Array.from(new Set(uris))) {
+      const artifact = artifacts.find(candidate => urlForKey(env, candidate.key) === uri);
+      if (!uri || !artifact || !/-(?:high|720p)-(?:init\.mp4|[0-9]{5}\.m4s)$/i.test(artifact.key)) throw new Error(`HLS rendition references an unverified artifact: ${uri}`);
+    }
+  }
+  return urlForKey(env, manifestKey);
+};
+
+// Reconciliation is intentionally idempotent rather than cursor-based: a
+// worker crash can leave any artifact missing, and the next claim pass safely
+// returns that media to the normal pending FIFO queue.
+const reconcileMissingHlsArtifacts = async (env: Env) => {
+  await ensureHlsSchema(env);
+  const sql = sqlForEnv(env);
+  const rows = await sql`
+    WITH candidates AS (
+      SELECT id
+      FROM media
+      WHERE media_type='video' AND transcode_status='ready'
+        AND (hls_manifest_url IS NULL OR hls_verified_at IS NULL OR
+          hls_verified_at < now() - interval '15 minutes')
+      ORDER BY hls_verified_at ASC NULLS FIRST, id ASC
+      LIMIT 12
+      FOR UPDATE SKIP LOCKED
+    )
+    UPDATE media AS m
+    SET hls_verified_at=now()
+    FROM candidates
+    WHERE m.id=candidates.id
+    RETURNING m.id, m.url, m.hls_manifest_url, m.hls_verified_at
+  ` as unknown as Array<{ id: string, url: string, hls_manifest_url?: string | null }>;
+  for (const row of rows) {
+    let missing = !row.hls_manifest_url;
+    if (!missing) {
+      const manifestKey = keyFromStorageUrl(env, row.hls_manifest_url!);
+      const hlsBase = manifestKey.replace(/\.m3u8$/i, '');
+      if (!manifestKey || urlForKey(env, manifestKey) !== row.hls_manifest_url ||
+          !isAllowedHlsDerivativeKey(manifestKey)) {
+        missing = true;
+      }
+      const manifestResponse = await fetch(row.hls_manifest_url!, {
+        cache: 'no-store',
+        headers: stableStorageReadHeaders(env),
+      }).catch(() => undefined);
+      if (!missing && !manifestResponse?.ok) {
+        missing = manifestResponse?.status === 404 || !manifestResponse;
+      } else if (!missing) {
+        const text = await manifestResponse.text();
+        const renditionUrls = text.split(/\r?\n/).filter(line => line.trim() && !line.trim().startsWith('#'));
+        if (!/#EXTM3U/.test(text) || !/#EXT-X-STREAM-INF:/i.test(text) || renditionUrls.length < 1) missing = true;
+        for (const renditionUrl of renditionUrls) {
+          const renditionKey = keyFromStorageUrl(env, renditionUrl);
+          if (!renditionKey || urlForKey(env, renditionKey) !== renditionUrl || !/-(?:high|720p)\.m3u8$/i.test(renditionKey) || !renditionKey.startsWith(hlsBase) || await storageObjectSize(env, renditionKey) === undefined) { missing = true; break; }
+          const renditionResponse = await fetch(renditionUrl, {
+            cache: 'no-store',
+            headers: stableStorageReadHeaders(env),
+          }).catch(() => undefined);
+          if (!renditionResponse?.ok) { missing = true; break; }
+          const renditionText = await renditionResponse.text();
+          const artifactUrls = Array.from(renditionText.matchAll(/#EXT-X-MAP:.*?URI="([^"]+)"/gi), match => match[1]).concat(renditionText.split(/\r?\n/).filter(line => line.trim() && !line.trim().startsWith('#')));
+          for (const uri of Array.from(new Set(artifactUrls))) {
+            const key = keyFromStorageUrl(env, uri);
+            if (!key || urlForKey(env, key) !== uri || !isAllowedHlsDerivativeKey(key) || !key.startsWith(hlsBase) || await storageObjectSize(env, key) === undefined) { missing = true; break; }
+          }
+          if (missing) break;
+        }
+      }
+    }
+    if (missing) {
+      await sql`
+        UPDATE media
+        SET transcode_status='pending',
+            hls_verified_at=NULL,
+            transcode_error='HLS VOD artifact backfill required',
+            updated_at=now()
+        WHERE id=${row.id} AND transcode_status='ready'
+      `;
+    } else {
+      await sql`
+        UPDATE media SET hls_verified_at=now()
+        WHERE id=${row.id} AND transcode_status='ready'
+      `;
+    }
+  }
 };
 
 const commitCanonicalVideo = async (
@@ -3521,6 +3723,19 @@ const completeVideoJob = async (
     subtitleMetadataRaw ? JSON.parse(subtitleMetadataRaw) : [],
     subtitleFiles.map(file => file.name),
   );
+  const hlsManifestKey = formData.get('hlsManifestKey')?.toString().trim() || '';
+  let hlsArtifacts: unknown;
+  try {
+    hlsArtifacts = JSON.parse(formData.get('hlsArtifacts')?.toString() || 'null');
+  } catch {
+    return json(400, { error: 'Invalid HLS artifact metadata' });
+  }
+  const hlsManifestUrl = await verifyHlsArtifacts(
+    env,
+    fileNameBase,
+    hlsManifestKey,
+    hlsArtifacts,
+  );
 
   let posterUrl: string | undefined;
   let previewUrl: string | undefined;
@@ -3569,6 +3784,7 @@ const completeVideoJob = async (
     const manifestKey = `${fileNameBase}-subtitles.json`;
     const existingManifest = await fetch(urlForKey(env, manifestKey), {
       cache: 'no-store',
+      headers: stableStorageReadHeaders(env),
     })
       .then(async response => response.ok
         ? await response.json() as { tracks?: SubtitleManifestTrack[] }
@@ -3591,11 +3807,14 @@ const completeVideoJob = async (
   }
 
   const sql = sqlForEnv(env);
+  await ensureHlsSchema(env);
   await sql`
     UPDATE media
     SET
       poster_url=${posterUrl ?? null},
       preview_url=${previewUrl ?? null},
+      hls_manifest_url=${hlsManifestUrl},
+      hls_verified_at=now(),
       duration_seconds=${metadata.durationSeconds ?? null},
       frame_rate=${metadata.frameRate ?? null},
       media_width=${metadata.mediaWidth ?? null},
@@ -4083,7 +4302,7 @@ export default {
         return json(401, { error: 'Unauthorized' });
       }
       const key = url.searchParams.get('key')?.trim() || '';
-      if (!isAllowedStreamDerivativeKey(key)) {
+      if (!isAllowedStreamDerivativeKey(key) && !isAllowedHlsDerivativeKey(key)) {
         return json(400, { error: 'Invalid stream derivative key' });
       }
       const size = await storageObjectSize(env, key);
@@ -4092,6 +4311,16 @@ export default {
         size,
         url: size !== undefined ? urlForKey(env, key) : undefined,
       });
+    }
+    if (url.pathname === '/jobs/storage/upload' && request.method === 'POST') {
+      if (!isAuthorized(request, env.BACKEND_PROCESSOR_SHARED_SECRET)) {
+        return json(401, { error: 'Unauthorized' });
+      }
+      try {
+        return await uploadProcessorObject(env, await request.formData());
+      } catch (error: any) {
+        return json(500, { error: error?.message || 'HLS upload failed' });
+      }
     }
     if (url.pathname === '/jobs/canonical/commit' && request.method === 'POST') {
       if (!isAuthorized(request, env.BACKEND_PROCESSOR_SHARED_SECRET)) {

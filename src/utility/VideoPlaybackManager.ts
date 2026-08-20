@@ -219,6 +219,10 @@ class VideoPlaybackManagerImpl {
       this.pauseVideo(this.currentVideo);
     }
     this.currentVideo = video;
+    // The adaptive full-video controller may temporarily detach the
+    // progressive source while hls.js is loading. Preserve an explicit play
+    // request so it can resume once the manifest is ready.
+    try { video.dataset.fullVideoPlayRequested = 'true'; } catch { /* ignore */ }
     try { await video.play(); } catch { /* ignore */ }
 
     if (opts.preferPiP || wasPiPActive) {
