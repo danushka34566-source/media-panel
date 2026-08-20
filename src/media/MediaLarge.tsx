@@ -433,12 +433,9 @@ export default function MediaLarge({
         : photo.url
     )
     : (automaticPreviewSrc || '');
-  // The worker writes this only after it has verified every HLS artifact.
-  // Do not guess a `-hls.m3u8` filename: pending and legacy videos have no
-  // manifest, and waiting for that 404 made the first Play click buffer.
-  const fullVideoManifestUrl = isFullVideoPlaying && photo.hlsManifestUrl
-    ? getFullVideoBridgeUrl(photo.hlsManifestUrl)
-    : undefined;
+  // Full playback is deliberately progressive from the single original file.
+  // The browser uses byte ranges to keep buffering ahead while it plays.
+  const fullVideoManifestUrl = undefined;
   const fullVideoSourceUrl = isFullVideoPlaying
     ? getFullVideoBridgeUrl(currentVideoUrl)
     : currentVideoUrl;

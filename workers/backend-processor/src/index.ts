@@ -22,12 +22,6 @@ import {
   getFfmpegProgressPercent,
   type FfmpegProgress,
 } from './progress.js';
-import {
-  buildHlsMasterManifest,
-  generateHlsVod,
-  rewriteHlsManifestForStableUrls,
-  type HlsBundle,
-} from './hls.js';
 
 const BACKEND_ORCHESTRATOR_BASE_URL =
   process.env.BACKEND_ORCHESTRATOR_BASE_URL ?? '';
@@ -55,15 +49,6 @@ type VideoJob = {
   processingReason?: string
   sourceKey?: string
   canonicalOutputKey?: string
-  hlsManifestUrl?: string
-  hlsInitUrl?: string
-  hlsSegmentUrlPrefix?: string
-  hlsHighManifestUrl?: string
-  hlsHighInitUrl?: string
-  hlsHighSegmentUrlPrefix?: string
-  hls720ManifestUrl?: string
-  hls720InitUrl?: string
-  hls720SegmentUrlPrefix?: string
 };
 
 type ClaimResponse = {
@@ -429,37 +414,6 @@ const streamDerivativeExists = async (key: string) =>
     .then(response => response.json() as Promise<{ exists?: boolean }>)
     .then(data => Boolean(data.exists));
 
-const uploadHlsArtifact = async ({
-  job,
-  artifact,
-  completed,
-  total,
-  onProgress,
-}: {
-  job: VideoJob
-  artifact: { key: string, filePath: string, contentType: string, size: number }
-  completed: number
-  total: number
-  onProgress: (completed: number, total: number) => void
-}) => {
-  const formData = new FormData();
-  formData.set('photoId', job.photoId);
-  formData.set('key', artifact.key);
-  formData.set('contentType', artifact.contentType);
-  const bytes = await fs.readFile(artifact.filePath);
-  formData.set('file', new File([toArrayBuffer(bytes)], artifact.key, {
-    type: artifact.contentType,
-  }));
-  await orchestratorRequest('/jobs/storage/upload', { method: 'POST', body: formData });
-  const status = await orchestratorRequest(
-    `/jobs/storage/status?key=${encodeURIComponent(artifact.key)}`,
-  ).then(response => response.json() as Promise<{ exists?: boolean, size?: number }>);
-  if (!status.exists || status.size !== artifact.size) {
-    throw new Error(`HLS artifact failed storage verification: ${artifact.key}`);
-  }
-  onProgress(completed + artifact.size, total);
-};
-
 const extractEmbeddedSubtitles = async (
   inputPath: string,
   fileNameBase: string,
@@ -511,7 +465,6 @@ const completeJob = async (
   posterBuffer: Buffer,
   previewBuffer: Buffer,
   subtitleFiles: SubtitleFile[],
-  hls: HlsBundle,
 ) => {
   const formData = new FormData();
   formData.set('photoId', job.photoId);
@@ -523,15 +476,6 @@ const completeJob = async (
       type: 'image/jpeg',
     }),
   );
-  formData.set('hlsManifestKey', hls.manifest.key);
-  formData.set('hlsArtifacts', JSON.stringify([
-    hls.manifest,
-    ...hls.artifacts,
-  ].map(artifact => ({
-    key: artifact.key,
-    size: artifact.size,
-    contentType: artifact.contentType,
-  }))));
   formData.set('subtitleTracks', JSON.stringify(subtitleFiles.map(track => ({
     fileName: track.fileName,
     lang: track.language,
@@ -854,65 +798,6 @@ const processJob = async (job: VideoJob) => {
         streamBytes,
       });
     }
-    await updateHeartbeat('Generating HLS VOD: 0%');
-    const hls = await generateHlsVod(
-      inputPath,
-      job.fileNameBase,
-      path.join(tempDir, 'hls'),
-      metadata,
-      createFfmpegProgressReporter({
-        job,
-        stage: 'Generating HLS VOD',
-        durationSeconds: metadata.durationSeconds,
-        updateHeartbeat,
-      }),
-    );
-    if (!job.hlsManifestUrl || !job.hlsHighManifestUrl || !job.hlsHighInitUrl || !job.hlsHighSegmentUrlPrefix) {
-      throw new Error('Claimed job is missing stable HLS delivery URLs');
-    }
-    const renditionUrls = [];
-    for (const rendition of hls.renditions) {
-      const prefix = rendition.name === 'high' ? job.hlsHighSegmentUrlPrefix : job.hls720SegmentUrlPrefix;
-      const initUrl = rendition.name === 'high' ? job.hlsHighInitUrl : job.hls720InitUrl;
-      const manifestUrl = rendition.name === 'high' ? job.hlsHighManifestUrl : job.hls720ManifestUrl;
-      if (!prefix || !initUrl || !manifestUrl) throw new Error(`Claimed job is missing ${rendition.name} HLS delivery URLs`);
-      const generated = await fs.readFile(rendition.manifest.filePath, 'utf8');
-      await fs.writeFile(rendition.manifest.filePath, rewriteHlsManifestForStableUrls(generated, { initUrl, segmentUrlPrefix: prefix }));
-      rendition.manifest.size = (await fs.stat(rendition.manifest.filePath)).size;
-      renditionUrls.push({ manifestUrl, width: rendition.width, height: rendition.height, bandwidth: rendition.bandwidth });
-    }
-    const master = buildHlsMasterManifest(renditionUrls);
-    await fs.writeFile(hls.manifest.filePath, master);
-    hls.manifest.size = (await fs.stat(hls.manifest.filePath)).size;
-    const hlsUploadArtifacts = [...hls.artifacts];
-    const totalHlsBytes = [hls.manifest, ...hlsUploadArtifacts]
-      .reduce((sum, artifact) => sum + artifact.size, 0);
-    let uploadedHlsBytes = 0;
-    await updateHeartbeat('Uploading HLS VOD artifacts: 0%');
-    // Publish init/media files before the playlist, so a stable playlist URL
-    // never points at an incomplete VOD.
-    for (const artifact of hlsUploadArtifacts) {
-      await uploadHlsArtifact({
-        job,
-        artifact,
-        completed: uploadedHlsBytes,
-        total: totalHlsBytes,
-        onProgress: (completed, total) => {
-          uploadedHlsBytes = completed;
-          void updateHeartbeat(`Uploading HLS VOD artifacts: ${Math.floor(completed / total * 100)}%`);
-        },
-      });
-    }
-    await uploadHlsArtifact({
-      job,
-      artifact: hls.manifest,
-      completed: uploadedHlsBytes,
-      total: totalHlsBytes,
-      onProgress: (completed, total) => {
-        uploadedHlsBytes = completed;
-        void updateHeartbeat(`Uploading HLS VOD artifacts: ${Math.floor(completed / total * 100)}%`);
-      },
-    });
     await updateHeartbeat('Generating poster and preview: 0%');
     const { posterBuffer, previewBuffer } = await generateDerivatives(
       inputPath,
@@ -952,7 +837,6 @@ const processJob = async (job: VideoJob) => {
       posterBuffer,
       previewBuffer,
       subtitleFiles,
-      hls,
     );
     log('job:complete', {
       photoId: job.photoId,

@@ -11,7 +11,6 @@ import { getEmbeddedSubtitleTracks, } from './subtitles.js';
 import { MOBILE_COMPATIBILITY_ENCODING, getCanonicalMp4Strategy, getCompatibilityStreamStrategy, needsCompatibilityStream, } from './compatibility-stream.js';
 import { uploadStreamDerivative } from './multipart-upload.js';
 import { getFfmpegProgressPercent, } from './progress.js';
-import { buildHlsMasterManifest, generateHlsVod, rewriteHlsManifestForStableUrls, } from './hls.js';
 const BACKEND_ORCHESTRATOR_BASE_URL = process.env.BACKEND_ORCHESTRATOR_BASE_URL ?? '';
 const BACKEND_PROCESSOR_SHARED_SECRET = process.env.BACKEND_PROCESSOR_SHARED_SECRET ?? '';
 let POLL_INTERVAL_MS = 15_000;
@@ -287,22 +286,6 @@ const generateCanonicalMp4 = async (inputPath, outputPath, metadata, onProgress)
 const streamDerivativeExists = async (key) => orchestratorRequest(`/jobs/storage/status?key=${encodeURIComponent(key)}`)
     .then(response => response.json())
     .then(data => Boolean(data.exists));
-const uploadHlsArtifact = async ({ job, artifact, completed, total, onProgress, }) => {
-    const formData = new FormData();
-    formData.set('photoId', job.photoId);
-    formData.set('key', artifact.key);
-    formData.set('contentType', artifact.contentType);
-    const bytes = await fs.readFile(artifact.filePath);
-    formData.set('file', new File([toArrayBuffer(bytes)], artifact.key, {
-        type: artifact.contentType,
-    }));
-    await orchestratorRequest('/jobs/storage/upload', { method: 'POST', body: formData });
-    const status = await orchestratorRequest(`/jobs/storage/status?key=${encodeURIComponent(artifact.key)}`).then(response => response.json());
-    if (!status.exists || status.size !== artifact.size) {
-        throw new Error(`HLS artifact failed storage verification: ${artifact.key}`);
-    }
-    onProgress(completed + artifact.size, total);
-};
 const extractEmbeddedSubtitles = async (inputPath, fileNameBase, tracks) => {
     if (tracks.length === 0) {
         return [];
@@ -346,7 +329,7 @@ const extractEmbeddedSubtitles = async (inputPath, fileNameBase, tracks) => {
         await fs.rm(tempDir, { recursive: true, force: true });
     }
 };
-const completeJob = async (job, metadata, posterBuffer, previewBuffer, subtitleFiles, hls) => {
+const completeJob = async (job, metadata, posterBuffer, previewBuffer, subtitleFiles) => {
     const formData = new FormData();
     formData.set('photoId', job.photoId);
     formData.set('fileNameBase', job.fileNameBase);
@@ -354,15 +337,6 @@ const completeJob = async (job, metadata, posterBuffer, previewBuffer, subtitleF
     formData.set('poster', new File([toArrayBuffer(posterBuffer)], `${job.fileNameBase}-poster.jpg`, {
         type: 'image/jpeg',
     }));
-    formData.set('hlsManifestKey', hls.manifest.key);
-    formData.set('hlsArtifacts', JSON.stringify([
-        hls.manifest,
-        ...hls.artifacts,
-    ].map(artifact => ({
-        key: artifact.key,
-        size: artifact.size,
-        contentType: artifact.contentType,
-    }))));
     formData.set('subtitleTracks', JSON.stringify(subtitleFiles.map(track => ({
         fileName: track.fileName,
         lang: track.language,
@@ -640,60 +614,6 @@ const processJob = async (job) => {
                 streamBytes,
             });
         }
-        await updateHeartbeat('Generating HLS VOD: 0%');
-        const hls = await generateHlsVod(inputPath, job.fileNameBase, path.join(tempDir, 'hls'), metadata, createFfmpegProgressReporter({
-            job,
-            stage: 'Generating HLS VOD',
-            durationSeconds: metadata.durationSeconds,
-            updateHeartbeat,
-        }));
-        if (!job.hlsManifestUrl || !job.hlsHighManifestUrl || !job.hlsHighInitUrl || !job.hlsHighSegmentUrlPrefix) {
-            throw new Error('Claimed job is missing stable HLS delivery URLs');
-        }
-        const renditionUrls = [];
-        for (const rendition of hls.renditions) {
-            const prefix = rendition.name === 'high' ? job.hlsHighSegmentUrlPrefix : job.hls720SegmentUrlPrefix;
-            const initUrl = rendition.name === 'high' ? job.hlsHighInitUrl : job.hls720InitUrl;
-            const manifestUrl = rendition.name === 'high' ? job.hlsHighManifestUrl : job.hls720ManifestUrl;
-            if (!prefix || !initUrl || !manifestUrl)
-                throw new Error(`Claimed job is missing ${rendition.name} HLS delivery URLs`);
-            const generated = await fs.readFile(rendition.manifest.filePath, 'utf8');
-            await fs.writeFile(rendition.manifest.filePath, rewriteHlsManifestForStableUrls(generated, { initUrl, segmentUrlPrefix: prefix }));
-            rendition.manifest.size = (await fs.stat(rendition.manifest.filePath)).size;
-            renditionUrls.push({ manifestUrl, width: rendition.width, height: rendition.height, bandwidth: rendition.bandwidth });
-        }
-        const master = buildHlsMasterManifest(renditionUrls);
-        await fs.writeFile(hls.manifest.filePath, master);
-        hls.manifest.size = (await fs.stat(hls.manifest.filePath)).size;
-        const hlsUploadArtifacts = [...hls.artifacts];
-        const totalHlsBytes = [hls.manifest, ...hlsUploadArtifacts]
-            .reduce((sum, artifact) => sum + artifact.size, 0);
-        let uploadedHlsBytes = 0;
-        await updateHeartbeat('Uploading HLS VOD artifacts: 0%');
-        // Publish init/media files before the playlist, so a stable playlist URL
-        // never points at an incomplete VOD.
-        for (const artifact of hlsUploadArtifacts) {
-            await uploadHlsArtifact({
-                job,
-                artifact,
-                completed: uploadedHlsBytes,
-                total: totalHlsBytes,
-                onProgress: (completed, total) => {
-                    uploadedHlsBytes = completed;
-                    void updateHeartbeat(`Uploading HLS VOD artifacts: ${Math.floor(completed / total * 100)}%`);
-                },
-            });
-        }
-        await uploadHlsArtifact({
-            job,
-            artifact: hls.manifest,
-            completed: uploadedHlsBytes,
-            total: totalHlsBytes,
-            onProgress: (completed, total) => {
-                uploadedHlsBytes = completed;
-                void updateHeartbeat(`Uploading HLS VOD artifacts: ${Math.floor(completed / total * 100)}%`);
-            },
-        });
         await updateHeartbeat('Generating poster and preview: 0%');
         const { posterBuffer, previewBuffer } = await generateDerivatives(inputPath, job.fileNameBase, metadata.durationSeconds, createFfmpegProgressReporter({
             job,
@@ -715,7 +635,7 @@ const processJob = async (job) => {
             })),
         });
         await updateHeartbeat('Uploading processed files');
-        await completeJob(job, metadata, posterBuffer, previewBuffer, subtitleFiles, hls);
+        await completeJob(job, metadata, posterBuffer, previewBuffer, subtitleFiles);
         log('job:complete', {
             photoId: job.photoId,
         });

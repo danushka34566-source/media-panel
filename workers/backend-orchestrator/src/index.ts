@@ -3311,9 +3311,6 @@ const scanAndRegister = async (env: Env) => {
 const claimVideoJobs = async (env: Env, limit: number) => {
   // Reclaim abandoned leases even when the scheduled scan has not run yet.
   // Active processors keep updated_at fresh through their heartbeat requests.
-  await reconcileMissingHlsArtifacts(env).catch(error => {
-    console.warn('Skipping HLS artifact reconciliation', error);
-  });
   await retryStaleProcessing(env);
 
   const sql = sqlForEnv(env);
@@ -3367,7 +3364,6 @@ const claimVideoJobs = async (env: Env, limit: number) => {
       ? await createDriveSignedDownloadUrl(env, sourceKey)
       : row.url;
     const fileNameBase = getFileParts(row.url).fileNameBase;
-    const hlsManifestKey = `${fileNameBase}-hls.m3u8`;
     return {
       photoId: row.id,
       sourceUrl,
@@ -3379,15 +3375,6 @@ const claimVideoJobs = async (env: Env, limit: number) => {
         !PRESERVED_VIDEO_EXTENSIONS.has(row.extension.toLowerCase())
         ? sourceKey.replace(/\.[^/.]+$/, '.mp4')
         : undefined,
-      hlsManifestUrl: urlForKey(env, hlsManifestKey),
-      hlsInitUrl: urlForKey(env, `${fileNameBase}-hls-init.mp4`),
-      hlsSegmentUrlPrefix: urlForKey(env, `${fileNameBase}-hls-`),
-      hlsHighManifestUrl: urlForKey(env, `${fileNameBase}-hls-high.m3u8`),
-      hlsHighInitUrl: urlForKey(env, `${fileNameBase}-hls-high-init.mp4`),
-      hlsHighSegmentUrlPrefix: urlForKey(env, `${fileNameBase}-hls-high-`),
-      hls720ManifestUrl: urlForKey(env, `${fileNameBase}-hls-720p.m3u8`),
-      hls720InitUrl: urlForKey(env, `${fileNameBase}-hls-720p-init.mp4`),
-      hls720SegmentUrlPrefix: urlForKey(env, `${fileNameBase}-hls-720p-`),
     };
   }));
   const readyJobs = jobs
@@ -3736,20 +3723,6 @@ const completeVideoJob = async (
     subtitleMetadataRaw ? JSON.parse(subtitleMetadataRaw) : [],
     subtitleFiles.map(file => file.name),
   );
-  const hlsManifestKey = formData.get('hlsManifestKey')?.toString().trim() || '';
-  let hlsArtifacts: unknown;
-  try {
-    hlsArtifacts = JSON.parse(formData.get('hlsArtifacts')?.toString() || 'null');
-  } catch {
-    return json(400, { error: 'Invalid HLS artifact metadata' });
-  }
-  const hlsManifestUrl = await verifyHlsArtifacts(
-    env,
-    fileNameBase,
-    hlsManifestKey,
-    hlsArtifacts,
-  );
-
   let posterUrl: string | undefined;
   let previewUrl: string | undefined;
 
@@ -3826,8 +3799,8 @@ const completeVideoJob = async (
     SET
       poster_url=${posterUrl ?? null},
       preview_url=${previewUrl ?? null},
-      hls_manifest_url=${hlsManifestUrl},
-      hls_verified_at=now(),
+      hls_manifest_url=NULL,
+      hls_verified_at=NULL,
       duration_seconds=${metadata.durationSeconds ?? null},
       frame_rate=${metadata.frameRate ?? null},
       media_width=${metadata.mediaWidth ?? null},
