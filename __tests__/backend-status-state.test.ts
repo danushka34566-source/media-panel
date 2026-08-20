@@ -27,6 +27,36 @@ describe('backend status polling state', () => {
     expect(getBackendStatusSnapshot(timedOut)?.pending).toBe(4);
   });
 
+  it('preserves registration queue details through a transient probe failure', () => {
+    const connected = recordBackendStatusProbe(
+      INITIAL_BACKEND_STATUS_STATE,
+      {
+        connected: true,
+        configured: true,
+        registrationQueue: {
+          detected: 38,
+          registering: 1,
+          error: 0,
+          total: 39,
+        },
+        registrationJobs: [{
+          title: 'oldest-file.mp4',
+          status: 'registering',
+        }],
+      },
+      1_000,
+    );
+    const timedOut = recordBackendStatusProbe(
+      connected,
+      { connected: false, configured: true, errorCode: 'timeout' },
+      6_000,
+    );
+
+    const snapshot = getBackendStatusSnapshot(timedOut);
+    expect(snapshot?.registrationQueue?.registering).toBe(1);
+    expect(snapshot?.registrationJobs?.[0]?.title).toBe('oldest-file.mp4');
+  });
+
   it('marks repeated failures as disconnected', () => {
     let state = recordBackendStatusProbe(
       INITIAL_BACKEND_STATUS_STATE,

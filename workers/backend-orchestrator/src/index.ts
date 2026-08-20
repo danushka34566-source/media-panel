@@ -209,7 +209,7 @@ const GENERATED_MEDIA_SUFFIX_REGEX =
 const STALE_REGISTRATION_ERROR_MESSAGE =
   'Worker registration stalled before completion';
 const MISSING_UPLOAD_ERROR_PREFIX = 'Upload not found in storage';
-const WORKER_BUILD_ID = 'batch-safe-registration-v24';
+const WORKER_BUILD_ID = 'registration-observability-v25';
 export const DRIVE_COPY_VISIBILITY_ATTEMPTS = 41;
 export const DRIVE_COPY_VISIBILITY_DELAY_MS = 3000;
 export const DRIVE_RETRY_TARGET_VISIBILITY_ATTEMPTS = 12;
@@ -3000,19 +3000,19 @@ const scanAndRegisterWithLease = async (
         originalFileName,
         fallbackFileName: sourceFileName,
       });
+      let mediaId = trimToUndefined(existingRegistration?.media_id);
       let registrationPhase: 'allocating' | 'preparing' | 'committing' =
         'allocating';
       try {
-        const mediaId = trimToUndefined(existingRegistration?.media_id) ||
-          await findAvailableMediaId(
-            attempt => mediaIdForObject(
-              env,
-              object.key,
-              object.uploaded,
-              attempt,
-            ),
-            new Set(rows.map(row => row.id)),
-          );
+        mediaId = mediaId || await findAvailableMediaId(
+          attempt => mediaIdForObject(
+            env,
+            object.key,
+            object.uploaded,
+            attempt,
+          ),
+          new Set(rows.map(row => row.id)),
+        );
         const registrationKey = buildRegistrationKey(
           env,
           object.key,
@@ -3075,11 +3075,28 @@ const scanAndRegisterWithLease = async (
           sourceUrl: persistedSourceUrl,
           mediaId,
         });
+        await logBackendActivity(env, {
+          category: 'registration',
+          event: 'registration_started',
+          status: 'info',
+          message: `Registering ${originalFileName}`,
+          mediaId,
+          details: {
+            phase: 'preparing',
+            fileName: originalFileName,
+            extension,
+            uploadedAt: sourceUploadedAt,
+            sourceUrl,
+            targetUrl: registrationUrl,
+            sourceSize: object.size,
+            storageProvider: detectStorageProvider(env),
+          },
+        });
+        registrationPhase = 'preparing';
         await runSafeRegistrationCommit({
           // Keep the original object until the generated-name destination is
           // verified and the media row plus filename map are both committed.
           prepareDestination: async () => {
-            registrationPhase = 'preparing';
             if (registrationKey !== object.key && !targetAlreadyRegistered) {
               await copyAndVerifyObject(
                 env,
@@ -3150,7 +3167,12 @@ const scanAndRegisterWithLease = async (
           message: `Registered ${originalFileName}`,
           mediaId,
           details: {
+            phase: 'completed',
+            fileName: originalFileName,
             extension,
+            uploadedAt: sourceUploadedAt,
+            sourceUrl,
+            storedUrl: registrationUrl,
             storageProvider: detectStorageProvider(env),
           },
         });
@@ -3195,18 +3217,28 @@ const scanAndRegisterWithLease = async (
               ? error.message
               : String(error ?? 'Registration failed'),
         }).catch(() => undefined);
-        if (!isRecoverableCopyDelay) {
-          await logBackendActivity(env, {
-            category: 'registration',
-            event: 'registration_failed',
-            status: 'error',
-            message: error instanceof Error
+        await logBackendActivity(env, {
+          category: 'registration',
+          event: isRecoverableCopyDelay
+            ? 'registration_waiting_for_storage'
+            : 'registration_failed',
+          status: isRecoverableCopyDelay ? 'warning' : 'error',
+          message: isRecoverableCopyDelay
+            ? `Waiting for Drive copy of ${originalFileName}`
+            : error instanceof Error
               ? error.message
               : String(error ?? 'Registration failed'),
-            mediaId,
-            details: { fileName: originalFileName, extension },
-          });
-        }
+          mediaId,
+          details: {
+            phase: registrationPhase,
+            fileName: originalFileName,
+            extension,
+            uploadedAt: sourceUploadedAt,
+            sourceUrl,
+            targetUrl: registrationUrl,
+            error: error instanceof Error ? error.message : String(error),
+          },
+        });
         continue;
       }
     }
@@ -3707,7 +3739,13 @@ const heartbeatProcessor = async (
 
 const status = async (env: Env) => {
   const sql = sqlForEnv(env);
-  const [rows, processors, activeJobs, deletionQueue] = await Promise.all([
+  const [
+    rows,
+    processors,
+    activeJobs,
+    deletionQueue,
+    registrationSnapshotRows,
+  ] = await Promise.all([
     sql`
       SELECT transcode_status, COUNT(*)::int AS count
       FROM media
@@ -3731,16 +3769,68 @@ const status = async (env: Env) => {
       LIMIT 20
     ` as unknown as Promise<Record<string, unknown>[]>,
     getDeletionQueueCounts(env),
+    sql`
+      SELECT
+        (COUNT(*) FILTER (WHERE status='detected'))::int AS detected,
+        (COUNT(*) FILTER (WHERE status='registering'))::int AS registering,
+        (COUNT(*) FILTER (WHERE status='error'))::int AS error,
+        COUNT(*)::int AS total,
+        COALESCE((
+          SELECT jsonb_agg(
+            to_jsonb(job)
+            ORDER BY job.uploaded_at ASC NULLS LAST, job.updated_at ASC, job.url ASC
+          )
+          FROM (
+            SELECT
+              url,
+              file_name,
+              original_file_name,
+              title,
+              status,
+              media_id,
+              extension,
+              error_message,
+              uploaded_at,
+              updated_at
+            FROM worker_registration_status
+            WHERE status IN ('detected', 'registering', 'error')
+            ORDER BY uploaded_at ASC NULLS LAST, updated_at ASC, url ASC
+            LIMIT 50
+          ) job
+        ), '[]'::jsonb) AS jobs
+      FROM worker_registration_status
+      WHERE status IN ('detected', 'registering', 'error')
+    ` as unknown as Promise<Array<{
+      detected: number
+      registering: number
+      error: number
+      total: number
+      jobs: Record<string, unknown>[]
+    }>>,
   ]);
   const counts = rows.reduce<Record<string, number>>((acc, row) => {
     acc[row.transcode_status || 'unknown'] = row.count;
     return acc;
   }, {});
+  const registrationSnapshot = registrationSnapshotRows[0] || {
+    detected: 0,
+    registering: 0,
+    error: 0,
+    total: 0,
+    jobs: [],
+  };
   return {
     ...counts,
     processors,
     activeJobs,
     deletionQueue,
+    registrationQueue: {
+      detected: registrationSnapshot.detected,
+      registering: registrationSnapshot.registering,
+      error: registrationSnapshot.error,
+      total: registrationSnapshot.total,
+    },
+    registrationJobs: registrationSnapshot.jobs,
     build: WORKER_BUILD_ID,
     storageProvider: detectStorageProvider(env),
     checkedAt: new Date().toISOString(),

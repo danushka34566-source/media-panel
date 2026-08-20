@@ -92,6 +92,14 @@ test('detected and registering status transitions use batch database writes', ()
   );
 });
 
+test('registration status and logs expose file-level queue progress', () => {
+  assert.match(workerSource, /registrationQueue:/);
+  assert.match(workerSource, /registrationJobs:/);
+  assert.match(workerSource, /event: 'registration_started'/);
+  assert.match(workerSource, /event: isRecoverableCopyDelay[\s\S]*?'registration_waiting_for_storage'/);
+  assert.match(workerSource, /phase: registrationPhase/);
+});
+
 test('active processing rows are failed only after storage confirms missing', () => {
   assert.equal(shouldMarkProcessingSourceMissing({
     status: 'pending',

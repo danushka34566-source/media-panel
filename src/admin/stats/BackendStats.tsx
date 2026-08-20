@@ -117,6 +117,8 @@ export default function BackendStats() {
   const processors = snapshot?.processors || [];
   const jobs = snapshot?.activeJobs || [];
   const deletionQueue = snapshot?.deletionQueue || {};
+  const registrationQueue = snapshot?.registrationQueue || {};
+  const registrationJobs = snapshot?.registrationJobs || [];
 
   const connectionText = useMemo(() => {
     if (!latest) { return 'Connecting…'; }
@@ -191,6 +193,22 @@ export default function BackendStats() {
         </div>}
       />
       <ScoreCardRow
+        icon={<FiHardDrive size={17} />}
+        content={<div className="flex flex-wrap gap-6 py-1">
+          {metric('Detected', registrationQueue.detected || 0)}
+          {metric(
+            'Registering',
+            registrationQueue.registering || 0,
+            'text-amber-600',
+          )}
+          {metric(
+            'Registration failed',
+            registrationQueue.error || 0,
+            'text-red-600',
+          )}
+        </div>}
+      />
+      <ScoreCardRow
         icon={<FiTrash2 size={17} />}
         content={<div className="flex flex-wrap gap-6 py-1">
           {metric('Delete pending', deletionQueue.pending || 0)}
@@ -198,6 +216,53 @@ export default function BackendStats() {
           {metric('Delete failed', deletionQueue.failed || 0, 'text-red-600')}
         </div>}
       />
+    </ScoreCard>
+
+    <ScoreCard title="Registration Queue">
+      {registrationJobs.length === 0
+        ? <ScoreCardRow
+          icon={<FiCheckCircle size={17} />}
+          content="No detected, registering, or failed files"
+        />
+        : registrationJobs.map((job, index) => {
+          const name = job.title || job.original_file_name || job.file_name ||
+            'Unnamed upload';
+          const status = job.status || 'detected';
+          return <ScoreCardRow
+            key={job.url || `${name}-${index}`}
+            icon={<FiHardDrive size={17} className={clsx(
+              status === 'registering' && 'text-amber-500',
+              status === 'error' && 'text-red-500',
+            )} />}
+            content={<div className="min-w-0 space-y-1">
+              <div className="flex min-w-0 items-center gap-2">
+                <span className="min-w-0 flex-1 truncate" title={name}>
+                  {name}
+                </span>
+                <span className={clsx(
+                  'shrink-0 rounded-md px-1.5 py-0.5 text-xs uppercase',
+                  status === 'registering'
+                    ? 'bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300'
+                    : status === 'error'
+                      ? 'bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-300'
+                      : 'bg-dim text-dim',
+                )}>
+                  {status}
+                </span>
+              </div>
+              <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-dim">
+                {job.extension && <span>{job.extension.toUpperCase()}</span>}
+                {job.media_id && <span>Media: {job.media_id}</span>}
+                <span>Uploaded: {formatDate(job.uploaded_at)}</span>
+                <span>Updated: {formatDate(job.updated_at)}</span>
+              </div>
+              {job.error_message &&
+                <div className="break-words text-xs text-red-600 dark:text-red-400">
+                  {job.error_message}
+                </div>}
+            </div>}
+          />;
+        })}
     </ScoreCard>
 
     <ScoreCard title="Backend Processors">

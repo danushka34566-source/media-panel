@@ -14,6 +14,26 @@ export type BackendJobStatus = {
   updated_at?: string
 };
 
+export type BackendRegistrationStatus = {
+  url?: string
+  file_name?: string
+  original_file_name?: string
+  title?: string
+  status?: 'detected' | 'registering' | 'error'
+  media_id?: string
+  extension?: string
+  error_message?: string
+  uploaded_at?: string
+  updated_at?: string
+};
+
+export type BackendRegistrationQueue = {
+  detected?: number
+  registering?: number
+  error?: number
+  total?: number
+};
+
 export type BackendStatus = {
   configured?: boolean
   connected?: boolean
@@ -28,6 +48,8 @@ export type BackendStatus = {
   processors?: BackendProcessorStatus[]
   activeJobs?: BackendJobStatus[]
   deletionQueue?: Record<string, number>
+  registrationQueue?: BackendRegistrationQueue
+  registrationJobs?: BackendRegistrationStatus[]
   settings?: Record<string, string | number | boolean>
 };
 
