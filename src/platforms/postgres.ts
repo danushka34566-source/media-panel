@@ -18,7 +18,14 @@ const pool = new Pool({
       ['sslmode'],
     ),
   },
-  ...POSTGRES_SSL_ENABLED && { ssl: true },
+  // Supabase transaction poolers can present a certificate chain that Node's
+  // bundled CA store cannot validate. Keep the connection encrypted while
+  // accepting that provider-specific chain. Neon continues to use strict TLS.
+  ...POSTGRES_SSL_ENABLED && {
+    ssl: POSTGRES_PROVIDER === 'supabase'
+      ? { rejectUnauthorized: false }
+      : true,
+  },
 });
 
 export type Primitive =

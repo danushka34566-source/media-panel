@@ -93,7 +93,6 @@ import {
 } from './detail-video-playback';
 import PersonalFavoriteButton from './PersonalFavoriteButton';
 import {
-  getFullVideoManifestUrl,
   useAdaptiveFullVideoPlayback,
   type FullVideoTelemetry,
 } from './full-video-playback';
@@ -434,12 +433,11 @@ export default function MediaLarge({
         : photo.url
     )
     : (automaticPreviewSrc || '');
-  // Derive HLS from the original object key. If progressive fallback switches
-  // to -stream.mp4, do not start looking for a second -stream-hls manifest.
-  const fullVideoManifestUrl = isFullVideoPlaying && photo.url
-    ? getFullVideoBridgeUrl(
-      photo.hlsManifestUrl ?? getFullVideoManifestUrl(photo.url),
-    )
+  // The worker writes this only after it has verified every HLS artifact.
+  // Do not guess a `-hls.m3u8` filename: pending and legacy videos have no
+  // manifest, and waiting for that 404 made the first Play click buffer.
+  const fullVideoManifestUrl = isFullVideoPlaying && photo.hlsManifestUrl
+    ? getFullVideoBridgeUrl(photo.hlsManifestUrl)
     : undefined;
   const fullVideoSourceUrl = isFullVideoPlaying
     ? getFullVideoBridgeUrl(currentVideoUrl)
@@ -1940,8 +1938,8 @@ function VideoZoomOverlay({
   const [wasPlaying, setWasPlaying] = useState(true);
   const progressiveUrlRef = useRef<{ source: string, url: string } | undefined>(undefined);
   const activePlaybackUrl = playbackUrl ?? videoUrl;
-  const activeManifestUrl = open
-    ? getFullVideoBridgeUrl(manifestUrl ?? getFullVideoManifestUrl(videoUrl))
+  const activeManifestUrl = open && manifestUrl
+    ? getFullVideoBridgeUrl(manifestUrl)
     : undefined;
   const progressiveUrl = progressiveUrlRef.current?.source === activePlaybackUrl
     ? progressiveUrlRef.current.url

@@ -261,6 +261,32 @@ export const useAdaptiveFullVideoPlayback = ({
       video.load();
     } catch { /* media element may already be detached */ }
 
+    // A manifest URL is authoritative only when the processor has created and
+    // verified it. For pending or legacy videos, begin progressive playback
+    // immediately instead of probing a fabricated HLS URL and waiting for its
+    // failure before falling back to the original.
+    if (!manifestUrl) {
+      hlsInitializing = false;
+      delete video.dataset.fullVideoHlsInitializing;
+      currentSource = sourceUrl;
+      video.src = sourceUrl;
+      video.load();
+      const restoreProgressiveState = () => {
+        video.removeEventListener('loadedmetadata', restoreProgressiveState);
+        try { video.currentTime = resumeTime; } catch { /* metadata may follow */ }
+        if (shouldResume) { void video.play().catch(() => undefined); }
+      };
+      video.addEventListener('loadedmetadata', restoreProgressiveState);
+      if (video.readyState >= 1) { restoreProgressiveState(); }
+      return () => {
+        disposed = true;
+        window.clearInterval(timer);
+        events.forEach(([name, handler]) => video.removeEventListener(name, handler));
+        video.removeEventListener('loadedmetadata', restoreProgressiveState);
+        video.preload = 'metadata';
+      };
+    }
+
     // hls.js is loaded only for an activated full video, keeping preview cards
     // out of the bundle's runtime work and out of the network prefetch path.
     void import('hls.js').then(({ default: Hls }) => {

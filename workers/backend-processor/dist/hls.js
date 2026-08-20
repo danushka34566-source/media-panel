@@ -2,6 +2,14 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import ffmpeg from 'fluent-ffmpeg';
 const SEGMENT_SECONDS = 6;
+const ffmpegErrorWithDiagnostics = (error, stderr, command) => {
+    const diagnosticLines = stderr?.trim().split(/\r?\n/).slice(-16).join('\n');
+    const details = [
+        command ? `command: ${command}` : undefined,
+        diagnosticLines,
+    ].filter(Boolean).join('\n');
+    return details ? new Error(`${error.message}\n${details}`) : error;
+};
 export const getHlsArtifactKeys = (base, rendition = '') => {
     const suffix = rendition ? `-${rendition}` : '';
     return { prefix: `${base}-hls${suffix}`, manifest: `${base}-hls${suffix}.m3u8`, init: `${base}-hls${suffix}-init.mp4` };
@@ -62,7 +70,8 @@ const generateRendition = async (inputPath, base, name, width, height, outputDir
         ? 'scale=w=min(iw\\,1280):h=min(ih\\,720):force_original_aspect_ratio=decrease:force_divisible_by=2'
         : 'scale=trunc(iw/2)*2:trunc(ih/2)*2';
     await new Promise((resolve, reject) => {
-        ffmpeg(inputPath).outputOptions(['-map', '0:v:0', '-map', '0:a:0?', '-sn', '-c:v', 'libx264', '-preset', 'veryfast', '-crf', name === '720p' ? '24' : '22', '-pix_fmt', 'yuv420p', '-vf', scale, '-c:a', 'aac', '-b:a', '128k', '-f', 'hls', '-hls_time', String(SEGMENT_SECONDS), '-hls_playlist_type', 'vod', '-hls_segment_type', 'fmp4', '-hls_fmp4_init_filename', initPath, '-hls_segment_filename', segmentPattern, '-hls_flags', 'independent_segments', '-force_key_frames', `expr:gte(t,n_forced*${SEGMENT_SECONDS})`]).output(manifestPath).on('progress', p => onProgress?.(p)).on('end', () => resolve()).on('error', reject).run();
+        let commandLine;
+        ffmpeg(inputPath).outputOptions(['-map', '0:v:0', '-map', '0:a:0?', '-sn', '-c:v', 'libx264', '-preset', 'veryfast', '-crf', name === '720p' ? '24' : '22', '-pix_fmt', 'yuv420p', '-vf', scale, '-c:a', 'aac', '-b:a', '128k', '-f', 'hls', '-hls_time', String(SEGMENT_SECONDS), '-hls_playlist_type', 'vod', '-hls_segment_type', 'fmp4', '-hls_fmp4_init_filename', initPath, '-hls_segment_filename', segmentPattern, '-hls_flags', 'independent_segments', '-force_key_frames', `expr:gte(t,n_forced*${SEGMENT_SECONDS})`]).output(manifestPath).on('start', command => { commandLine = command; }).on('progress', p => onProgress?.(p)).on('end', () => resolve()).on('error', (error, _stdout, stderr) => reject(ffmpegErrorWithDiagnostics(error, stderr ?? undefined, commandLine))).run();
     });
     const manifestText = (await fs.readFile(manifestPath, 'utf8'))
         .replace(/(#EXT-X-MAP:.*?URI=")[^"]+(")/i, '$1init.mp4$2');
