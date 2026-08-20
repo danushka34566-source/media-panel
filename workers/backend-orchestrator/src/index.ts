@@ -3473,7 +3473,20 @@ const uploadProcessorObject = async (env: Env, formData: FormData) => {
     return json(400, { error: 'HLS key does not match the media source' });
   }
   await putObject(env, key, await file.arrayBuffer(), contentType);
-  const size = await storageObjectSize(env, key);
+  // Drive can acknowledge the write before its object HEAD endpoint sees the
+  // new artifact. HLS uploads are published one object at a time, so reuse
+  // the same bounded visibility wait as other Drive destinations rather than
+  // failing the entire video job on the first stale read.
+  const size = await waitForVerifiedStorageCopy({
+    sourceSize: file.size,
+    readDestinationSize: () => storageObjectSize(env, key),
+    attempts: isDriveStorageEnabled(env)
+      ? DRIVE_RETRY_TARGET_VISIBILITY_ATTEMPTS
+      : 1,
+    delayMs: isDriveStorageEnabled(env)
+      ? DRIVE_COPY_VISIBILITY_DELAY_MS
+      : 0,
+  });
   if (size === undefined || size !== file.size) {
     return json(409, { error: 'HLS artifact is not fully readable in storage' });
   }
