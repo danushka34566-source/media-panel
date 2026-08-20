@@ -71,7 +71,11 @@ const generateRendition = async (inputPath, base, name, width, height, outputDir
         : 'scale=trunc(iw/2)*2:trunc(ih/2)*2';
     await new Promise((resolve, reject) => {
         let commandLine;
-        ffmpeg(inputPath).outputOptions(['-map', '0:v:0', '-map', '0:a:0?', '-sn', '-c:v', 'libx264', '-preset', 'veryfast', '-crf', name === '720p' ? '24' : '22', '-pix_fmt', 'yuv420p', '-vf', scale, '-c:a', 'aac', '-b:a', '128k', '-f', 'hls', '-hls_time', String(SEGMENT_SECONDS), '-hls_playlist_type', 'vod', '-hls_segment_type', 'fmp4', '-hls_fmp4_init_filename', initPath, '-hls_segment_filename', segmentPattern, '-hls_flags', 'independent_segments', '-force_key_frames', `expr:gte(t,n_forced*${SEGMENT_SECONDS})`]).output(manifestPath).on('start', command => { commandLine = command; }).on('progress', p => onProgress?.(p)).on('end', () => resolve()).on('error', (error, _stdout, stderr) => reject(ffmpegErrorWithDiagnostics(error, stderr ?? undefined, commandLine))).run();
+        // The HLS muxer treats its fMP4 init filename as relative. Give ffmpeg
+        // the rendition directory as its process cwd so this remains portable:
+        // Linux otherwise prefixes an absolute filename a second time, while
+        // Windows otherwise writes a relative filename at the worker root.
+        ffmpeg(inputPath, { cwd: outputDirectory }).outputOptions(['-map', '0:v:0', '-map', '0:a:0?', '-sn', '-c:v', 'libx264', '-preset', 'veryfast', '-crf', name === '720p' ? '24' : '22', '-pix_fmt', 'yuv420p', '-vf', scale, '-c:a', 'aac', '-b:a', '128k', '-f', 'hls', '-hls_time', String(SEGMENT_SECONDS), '-hls_playlist_type', 'vod', '-hls_segment_type', 'fmp4', '-hls_fmp4_init_filename', 'init.mp4', '-hls_segment_filename', segmentPattern, '-hls_flags', 'independent_segments', '-force_key_frames', `expr:gte(t,n_forced*${SEGMENT_SECONDS})`]).output(manifestPath).on('start', command => { commandLine = command; }).on('progress', p => onProgress?.(p)).on('end', () => resolve()).on('error', (error, _stdout, stderr) => reject(ffmpegErrorWithDiagnostics(error, stderr ?? undefined, commandLine))).run();
     });
     const manifestText = (await fs.readFile(manifestPath, 'utf8'))
         .replace(/(#EXT-X-MAP:.*?URI=")[^"]+(")/i, '$1init.mp4$2');
