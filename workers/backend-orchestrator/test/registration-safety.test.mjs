@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 
 import {
@@ -19,6 +20,7 @@ import {
   isVerifiedStorageCopy,
   mergeSubtitleManifestTracks,
   runSafeRegistrationCommit,
+  selectOldestRegistrationBatch,
   shouldMarkProcessingSourceMissing,
   shouldRetryInterruptedJob,
   shouldVerifyExistingRegistrationDestination,
@@ -26,6 +28,11 @@ import {
   stableMediaIdForUrl,
   waitForVerifiedStorageCopy,
 } from '../src/index.ts';
+
+const workerSource = await readFile(
+  new URL('../src/index.ts', import.meta.url),
+  'utf8',
+);
 
 test('storage provider is detected without a preference variable', () => {
   assert.equal(detectStorageProvider({
@@ -45,6 +52,44 @@ test('storage provider is detected without a preference variable', () => {
     DRIVE_STORAGE_BASE_URL: 'https://drive.example/storage',
     R2_PUBLIC_BASE_URL: 'https://media.example',
   }), 'cloudflare-r2');
+});
+
+test('large registration backlogs are selected one FIFO batch at a time', () => {
+  const pending = Array.from({ length: 100 }, (_, index) => ({
+    key: `uploads/file-${String(index).padStart(3, '0')}.mp4`,
+    uploaded: new Date(Date.UTC(2026, 7, 21, 0, index)),
+  })).reverse();
+
+  assert.deepEqual(
+    selectOldestRegistrationBatch(pending, new Set(), 3).map(row => row.key),
+    [
+      'uploads/file-000.mp4',
+      'uploads/file-001.mp4',
+      'uploads/file-002.mp4',
+    ],
+  );
+  assert.deepEqual(
+    selectOldestRegistrationBatch(
+      pending,
+      new Set(['uploads/file-000.mp4']),
+      1,
+    ).map(row => row.key),
+    ['uploads/file-001.mp4'],
+  );
+});
+
+test('detected and registering status transitions use batch database writes', () => {
+  const syncStart = workerSource.indexOf('const syncDetectedStatuses');
+  const syncEnd = workerSource.indexOf('const retryStaleProcessing', syncStart);
+  const syncSource = workerSource.slice(syncStart, syncEnd);
+  assert.match(syncSource, /upsertRegistrationStatuses/);
+  assert.doesNotMatch(syncSource, /Promise\.all/);
+
+  assert.match(workerSource, /jsonb_to_recordset/);
+  assert.doesNotMatch(
+    workerSource,
+    /Promise\.all\(batch\.map\(object => \{[\s\S]*?status: 'registering'/,
+  );
 });
 
 test('active processing rows are failed only after storage confirms missing', () => {

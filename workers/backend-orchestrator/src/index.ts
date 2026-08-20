@@ -209,7 +209,7 @@ const GENERATED_MEDIA_SUFFIX_REGEX =
 const STALE_REGISTRATION_ERROR_MESSAGE =
   'Worker registration stalled before completion';
 const MISSING_UPLOAD_ERROR_PREFIX = 'Upload not found in storage';
-const WORKER_BUILD_ID = 'idempotent-fast-delete-v23';
+const WORKER_BUILD_ID = 'batch-safe-registration-v24';
 export const DRIVE_COPY_VISIBILITY_ATTEMPTS = 41;
 export const DRIVE_COPY_VISIBILITY_DELAY_MS = 3000;
 export const DRIVE_RETRY_TARGET_VISIBILITY_ATTEMPTS = 12;
@@ -717,14 +717,24 @@ export const isRecoverableDriveCopyError = (error: unknown) => {
   );
 };
 
-const registrationStatusPriority = (status?: string | null) => {
-  switch (status) {
-    case 'detected': return 0;
-    case 'registering': return 1;
-    case 'error': return 2;
-    default: return 0;
-  }
-};
+export const selectOldestRegistrationBatch = (
+  pending: R2ObjectLike[],
+  attemptedKeys: Set<string>,
+  limit: number,
+) => pending
+  .filter(object => !attemptedKeys.has(object.key))
+  .sort((left, right) => {
+    const leftUploaded = left.uploaded?.getTime();
+    const rightUploaded = right.uploaded?.getTime();
+    const leftTime = Number.isFinite(leftUploaded)
+      ? leftUploaded as number
+      : Number.MAX_SAFE_INTEGER;
+    const rightTime = Number.isFinite(rightUploaded)
+      ? rightUploaded as number
+      : Number.MAX_SAFE_INTEGER;
+    return leftTime - rightTime || left.key.localeCompare(right.key);
+  })
+  .slice(0, Math.max(0, limit));
 
 const isGeneratedMediaName = (fileName?: string | null) => {
   const normalized = trimToUndefined(fileName);
@@ -2147,7 +2157,28 @@ const getTrackedRegistrationStatuses = async (env: Env) => {
 
 const setRegistrationStatus = async (
   env: Env,
-  {
+  row: RegistrationStatusWrite,
+) => upsertRegistrationStatuses(env, [row]);
+
+type RegistrationStatusWrite = {
+  url: string
+  fileName?: string
+  uploadedAt?: string
+  status: 'detected' | 'registering' | 'registered' | 'error'
+  sourceUrl?: string
+  originalFileName?: string
+  title?: string
+  mediaId?: string
+  extension?: string
+  errorMessage?: string
+};
+
+const upsertRegistrationStatuses = async (
+  env: Env,
+  rows: RegistrationStatusWrite[],
+) => {
+  if (rows.length === 0) { return; }
+  const payload = JSON.stringify(rows.map(({
     url,
     fileName,
     uploadedAt,
@@ -2158,21 +2189,35 @@ const setRegistrationStatus = async (
     mediaId,
     extension,
     errorMessage,
-  }: {
-    url: string
-    fileName?: string
-    uploadedAt?: string
-    status: 'detected' | 'registering' | 'registered' | 'error'
-    sourceUrl?: string
-    originalFileName?: string
-    title?: string
-    mediaId?: string
-    extension?: string
-    errorMessage?: string
-  },
-) => {
+  }) => ({
+    url,
+    file_name: fileName ?? null,
+    uploaded_at: uploadedAt ?? null,
+    status,
+    source_url: sourceUrl ?? null,
+    original_file_name: originalFileName ?? null,
+    title: title ?? null,
+    media_id: mediaId ?? null,
+    extension: extension ?? null,
+    error_message: errorMessage ?? null,
+  })));
   const sql = sqlForEnv(env);
   await sql`
+    WITH incoming AS (
+      SELECT *
+      FROM jsonb_to_recordset(${payload}::jsonb) AS row(
+        url TEXT,
+        file_name TEXT,
+        uploaded_at TIMESTAMP WITH TIME ZONE,
+        status VARCHAR(32),
+        source_url TEXT,
+        original_file_name TEXT,
+        title TEXT,
+        media_id TEXT,
+        extension TEXT,
+        error_message TEXT
+      )
+    )
     INSERT INTO worker_registration_status (
       url,
       file_name,
@@ -2185,18 +2230,18 @@ const setRegistrationStatus = async (
       extension,
       error_message
     )
-    VALUES (
-      ${url},
-      ${fileName ?? null},
-      ${uploadedAt ?? null},
-      ${status},
-      ${sourceUrl ?? null},
-      ${originalFileName ?? null},
-      ${title ?? null},
-      ${mediaId ?? null},
-      ${extension ?? null},
-      ${errorMessage ?? null}
-    )
+    SELECT
+      url,
+      file_name,
+      uploaded_at,
+      status,
+      source_url,
+      original_file_name,
+      title,
+      media_id,
+      extension,
+      error_message
+    FROM incoming
     ON CONFLICT (url) DO UPDATE SET
       file_name=COALESCE(EXCLUDED.file_name, worker_registration_status.file_name),
       uploaded_at=COALESCE(EXCLUDED.uploaded_at, worker_registration_status.uploaded_at),
@@ -2205,8 +2250,18 @@ const setRegistrationStatus = async (
       title=COALESCE(EXCLUDED.title, worker_registration_status.title),
       media_id=COALESCE(EXCLUDED.media_id, worker_registration_status.media_id),
       extension=COALESCE(EXCLUDED.extension, worker_registration_status.extension),
-      error_message=EXCLUDED.error_message,
-      status=EXCLUDED.status,
+      error_message=CASE
+        WHEN worker_registration_status.status='registering'
+          AND EXCLUDED.status='detected'
+          THEN worker_registration_status.error_message
+        ELSE EXCLUDED.error_message
+      END,
+      status=CASE
+        WHEN worker_registration_status.status='registering'
+          AND EXCLUDED.status='detected'
+          THEN worker_registration_status.status
+        ELSE EXCLUDED.status
+      END,
       updated_at=now()
   `;
 };
@@ -2332,8 +2387,9 @@ const syncDetectedStatuses = async (
     });
   });
 
-  await Promise.all(Array.from(pendingByUrl.entries()).map(([url, pendingRow]) =>
-    setRegistrationStatus(env, {
+  await upsertRegistrationStatuses(
+    env,
+    Array.from(pendingByUrl.entries()).map(([url, pendingRow]) => ({
       url,
       fileName: pendingRow.fileName,
       uploadedAt: pendingRow.uploadedAt,
@@ -2878,32 +2934,18 @@ const scanAndRegisterWithLease = async (
     passes += 1;
     if (pendingUploads.length === 0) { break; }
 
-    const batch = pendingUploads
-      .slice()
-      .sort((left, right) => {
-        const leftUrl = urlForKey(env, left.key);
-        const rightUrl = urlForKey(env, right.key);
-        const statusDiff =
-          registrationStatusPriority(
-            registrationRowsByUrl.get(leftUrl)?.status,
-          ) -
-          registrationStatusPriority(
-            registrationRowsByUrl.get(rightUrl)?.status,
-          );
-        if (statusDiff !== 0) {
-          return statusDiff;
-        }
-        return (right.uploaded?.getTime() ?? 0) - (left.uploaded?.getTime() ?? 0);
-      })
-      .filter(object => !attemptedRegistrationKeys.has(object.key))
-      .slice(0, registerBatchSize);
+    const batch = selectOldestRegistrationBatch(
+      pendingUploads,
+      attemptedRegistrationKeys,
+      registerBatchSize,
+    );
     if (batch.length === 0) {
       registrationRemaining = pendingUploads.length;
       break;
     }
     const batchHintUrls = batch.map(object => urlForKey(env, object.key));
     const hintsByUrl = await getUploadRegistrationHints(env, batchHintUrls);
-    await Promise.all(batch.map(object => {
+    await upsertRegistrationStatuses(env, batch.map(object => {
       const currentUrl = urlForKey(env, object.key);
       const uploadHint = hintsByUrl.get(currentUrl);
       const existingRegistration = registrationRowsByUrl.get(currentUrl);
@@ -2914,7 +2956,7 @@ const scanAndRegisterWithLease = async (
           statusRow: existingRegistration,
           fallbackFileName: fileParts.fileName,
         }) || fileParts.fileName;
-      return setRegistrationStatus(env, {
+      return {
         url: currentUrl,
         fileName: originalFileName,
         uploadedAt: object.uploaded?.toISOString(),
@@ -2930,7 +2972,7 @@ const scanAndRegisterWithLease = async (
         }),
         extension: fileParts.extension,
         errorMessage: undefined,
-      });
+      } satisfies RegistrationStatusWrite;
     }));
     for (const object of batch) {
       if (!await renewScanLease(env, leaseToken)) {
