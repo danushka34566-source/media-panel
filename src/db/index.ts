@@ -2,7 +2,8 @@ import { parameterize } from '@/utility/string';
 import { MediaSetCategory } from '@/category';
 import { Camera } from '@/camera';
 import { Lens } from '@/lens';
-import { APP_DEFAULT_SORT_BY, SortBy } from '@/media/sort';
+import { SortBy } from '@/media/sort';
+import { USER_DEFAULT_SORT_BY } from '@/app/config';
 import { Album } from '@/album';
 
 export const GENERATE_STATIC_PARAMS_LIMIT = 1000;
@@ -221,7 +222,7 @@ export const getWheresFromOptions = (
 
 export const getOrderByFromOptions = (options: MediaQueryOptions) => {
   const {
-    sortBy = APP_DEFAULT_SORT_BY,
+    sortBy = USER_DEFAULT_SORT_BY,
     sortWithPriority,
   } = options;
 

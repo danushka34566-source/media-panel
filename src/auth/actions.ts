@@ -54,6 +54,7 @@ import {
   verifySmsCode,
   verifyCode,
 } from './users';
+import { SORT_BY_OPTIONS, type SortBy } from '@/media/sort';
 import { canManageRole, hasCapability, isUserRole } from './permissions';
 import {
   PATH_ADMIN,
@@ -280,6 +281,27 @@ export const setVideoPreviewPreferenceAction = async (mode: VideoPreviewMode) =>
   const userId = session?.user?.id;
   if (!userId) { return; }
   await updateUser(userId, { videoPreviewMode: mode });
+};
+
+const isSortBy = (value: unknown): value is SortBy =>
+  SORT_BY_OPTIONS.some(option => option.sortBy === value);
+
+export const getMediaSortPreferenceAction = async () => {
+  const session = await auth();
+  const userId = session?.user?.id;
+  if (!userId) { return null; }
+  const user = await findUserById(userId);
+  return user?.mediaSortBy ?? null;
+};
+
+export const setMediaSortPreferenceAction = async (sortBy: SortBy) => {
+  if (!isSortBy(sortBy)) {
+    throw new Error('Invalid media sort preference');
+  }
+  const session = await auth();
+  const userId = session?.user?.id;
+  if (!userId) { return; }
+  await updateUser(userId, { mediaSortBy: sortBy });
 };
 
 export const logClientAuthUpdate = async (data: Session | null | undefined) =>

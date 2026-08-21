@@ -79,6 +79,15 @@ test('large registration backlogs are selected one FIFO batch at a time', () => 
   );
 });
 
+test('video processing claims the oldest pending upload first', () => {
+  const claimStart = workerSource.indexOf('const claimVideoJobs');
+  const claimEnd = workerSource.indexOf('const getProcessorJobs', claimStart);
+  const source = workerSource.slice(claimStart, claimEnd);
+
+  assert.match(source, /ORDER BY created_at ASC, id ASC/);
+  assert.doesNotMatch(source, /created_at DESC/);
+});
+
 test('detected and registering status transitions use batch database writes', () => {
   const syncStart = workerSource.indexOf('const syncDetectedStatuses');
   const syncEnd = workerSource.indexOf('const retryStaleProcessing', syncStart);

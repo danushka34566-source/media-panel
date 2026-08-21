@@ -25,14 +25,18 @@ import {
   useState,
 } from 'react';
 import useKeydownHandler from '@/utility/useKeydownHandler';
-import { usePathname } from 'next/navigation';
+import { usePathname, useRouter } from 'next/navigation';
 import { KEY_COMMANDS } from '@/media/key-commands';
 import { useAppText } from '@/i18n/state/client';
 import IconSort from '@/components/icons/IconSort';
-import { getSortStateFromPath } from '@/media/sort/path';
+import { getPathForSortBy, getSortStateFromPath } from '@/media/sort/path';
 import { motion } from 'framer-motion';
 import SortMenu from '@/media/sort/SortMenu';
 import { SWR_KEYS } from '@/swr';
+import {
+  getMediaSortPreferenceAction,
+  setMediaSortPreferenceAction,
+} from '@/auth/actions';
 
 export type SwitcherSelection = 'full' | 'grid' | 'admin';
 
@@ -52,6 +56,7 @@ export default function AppViewSwitcher({
   accessoryBeforeSearch?: ReactNode
 }) {
   const pathname = usePathname();
+  const router = useRouter();
   
   const appText = useAppText();
 
@@ -62,6 +67,8 @@ export default function AppViewSwitcher({
     isWideGrid,
     setIsWideGrid,
     setShouldLoadAdminData,
+    isUserSignedIn,
+    userEmail,
   } = useAppState();
 
   const sortConfig = useMemo(
@@ -84,6 +91,8 @@ export default function AppViewSwitcher({
     doesPathOfferSort;
 
   const hasLoadedRef = useRef(false);
+  const sortPreferenceReadyRef = useRef(false);
+  const sortPreferenceUserRef = useRef<string | undefined>(undefined);
   useEffect(() => {
     if (hasLoadedRef.current) {
       // After initial load, invalidate cache every time sort changes
@@ -91,6 +100,34 @@ export default function AppViewSwitcher({
     }
     hasLoadedRef.current = true;
   }, [invalidateSwr, sortBy]);
+
+  useEffect(() => {
+    sortPreferenceReadyRef.current = false;
+    sortPreferenceUserRef.current = userEmail;
+    if (!isUserSignedIn || !userEmail || !doesPathOfferSort) { return; }
+
+    let cancelled = false;
+    void getMediaSortPreferenceAction().then(preference => {
+      if (cancelled || sortPreferenceUserRef.current !== userEmail) { return; }
+      if (preference && preference !== sortBy && isSortedByDefault) {
+        router.replace(getPathForSortBy(pathname, preference));
+        return;
+      }
+      sortPreferenceReadyRef.current = true;
+    }).catch(() => {
+      sortPreferenceReadyRef.current = true;
+    });
+    return () => { cancelled = true; };
+  }, [doesPathOfferSort, isSortedByDefault, isUserSignedIn, pathname, router, sortBy, userEmail]);
+
+  useEffect(() => {
+    if (
+      !sortPreferenceReadyRef.current ||
+      !isUserSignedIn ||
+      !doesPathOfferSort
+    ) { return; }
+    void setMediaSortPreferenceAction(sortBy).catch(() => undefined);
+  }, [doesPathOfferSort, isUserSignedIn, sortBy]);
 
   const refHrefFull = useRef<HTMLAnchorElement>(null);
   const refHrefGrid = useRef<HTMLAnchorElement>(null);

@@ -22,6 +22,7 @@ import {
   AI_TEXT_AUTO_GENERATED_FIELDS,
   AI_CONTENT_GENERATION_ENABLED,
   COLOR_SORT_ENABLED,
+  USER_DEFAULT_SORT_BY,
 } from '@/app/config';
 import {
   MediaQueryOptions,
@@ -40,7 +41,6 @@ import { Recipes } from '@/recipe';
 import { Years } from '@/year';
 import { MediaColorData } from '@/media/color/client';
 import { safelyQuery } from '@/db/query';
-import { APP_DEFAULT_SORT_BY } from '@/media/sort';
 import {
   getVirtualStorageVideoMedia,
   getVirtualStorageVideoMediaItems,
@@ -125,7 +125,7 @@ const virtualMediaMatchesOptions = (
 const sortMediaForOptions = (
   photos: Media[],
   {
-    sortBy = APP_DEFAULT_SORT_BY,
+    sortBy = USER_DEFAULT_SORT_BY,
     sortWithPriority,
   }: MediaQueryOptions = {},
 ) => [...photos].sort((a, b) => {
@@ -1234,7 +1234,8 @@ export const getPendingMediaProcessing = async (limit = 1000, offset = 0) =>
             WHEN 'pending' THEN 1
             WHEN 'failed' THEN 2
           END,
-          created_at DESC
+          created_at DESC,
+          id DESC
         LIMIT $1
         OFFSET $2
       `,

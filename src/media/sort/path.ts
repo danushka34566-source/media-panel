@@ -112,6 +112,15 @@ const getPathSortComponents = (pathname: string) => {
   };
 };
 
+export const getPathForSortBy = (pathname: string, sortBy: SortBy) => {
+  const { gridOrFull } = getPathSortComponents(pathname);
+  const { sortType, sortOrder } = getSortByComponents(sortBy);
+  if (sortBy === USER_DEFAULT_SORT_BY) {
+    return gridOrFull === 'grid' ? PATH_GRID_INFERRED : PATH_FULL_INFERRED;
+  }
+  return `/${gridOrFull}/${sortType}/${sortOrder}`;
+};
+
 export const getSortStateFromPath = (
   pathname: string,
   appText: AppTextState,

@@ -3,6 +3,7 @@ import { query, withPostgresTransaction } from '@/platforms/postgres';
 import { hashPassword, passwordMatches } from './password';
 import { AUTH_CODE_TTL_MINUTES } from '.';
 import { roleForNewGoogleUser } from './google-role';
+import type { SortBy } from '@/media/sort';
 
 export { hashPassword, passwordMatches } from './password';
 
@@ -32,6 +33,7 @@ export type AppUser = {
   loginVerificationNonce?: string
   wideGridEnabled?: boolean
   videoPreviewMode?: VideoPreviewMode
+  mediaSortBy?: SortBy
   createdAt: Date
   updatedAt: Date
 };
@@ -59,6 +61,7 @@ type UserRow = {
   login_verification_nonce: string | null
   wide_grid_enabled: boolean | null
   video_preview_mode: VideoPreviewMode | null
+  media_sort_by: SortBy | null
   created_at: Date
   updated_at: Date
 };
@@ -98,6 +101,7 @@ export const ensureAuthTables = async () => {
       login_verification_nonce TEXT,
       wide_grid_enabled BOOLEAN,
       video_preview_mode TEXT NOT NULL DEFAULT 'smart',
+      media_sort_by TEXT,
       created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
@@ -113,7 +117,8 @@ export const ensureAuthTables = async () => {
       ADD COLUMN IF NOT EXISTS totp_last_used_counter INTEGER,
       ADD COLUMN IF NOT EXISTS login_verification_nonce TEXT,
       ADD COLUMN IF NOT EXISTS wide_grid_enabled BOOLEAN,
-      ADD COLUMN IF NOT EXISTS video_preview_mode TEXT NOT NULL DEFAULT 'smart';
+      ADD COLUMN IF NOT EXISTS video_preview_mode TEXT NOT NULL DEFAULT 'smart',
+      ADD COLUMN IF NOT EXISTS media_sort_by TEXT;
 
     CREATE OR REPLACE FUNCTION protect_last_active_superadmin()
     RETURNS TRIGGER AS $$
@@ -233,6 +238,7 @@ const mapUser = (row: UserRow): AppUser => ({
   loginVerificationNonce: row.login_verification_nonce ?? undefined,
   wideGridEnabled: row.wide_grid_enabled ?? undefined,
   videoPreviewMode: row.video_preview_mode ?? 'smart',
+  mediaSortBy: row.media_sort_by ?? undefined,
   createdAt: row.created_at,
   updatedAt: row.updated_at,
 });
@@ -276,7 +282,7 @@ const publicFields = `
   google_sub, profile_image_url, mobile_number, mobile_verified,
   two_factor_enabled, totp_enabled, totp_secret, totp_last_used_counter,
   login_verification_nonce, (password_hash IS NOT NULL) AS has_password,
-  wide_grid_enabled, video_preview_mode,
+  wide_grid_enabled, video_preview_mode, media_sort_by,
   created_at, updated_at
 `;
 
@@ -286,7 +292,7 @@ const userListFields = `
   profile_image_url, mobile_number, mobile_verified, two_factor_enabled,
   totp_enabled, totp_last_used_counter,
   (password_hash IS NOT NULL) AS has_password,
-  wide_grid_enabled, video_preview_mode,
+  wide_grid_enabled, video_preview_mode, media_sort_by,
   created_at, updated_at
 `;
 
@@ -771,6 +777,7 @@ export const updateUser = async (
     loginVerificationNonce: string | null
     wideGridEnabled: boolean
     videoPreviewMode: VideoPreviewMode
+    mediaSortBy: SortBy | null
   }>,
 ) => {
   await ensureAuthTables();
@@ -814,6 +821,9 @@ export const updateUser = async (
   }
   if (updates.videoPreviewMode !== undefined) {
     add('video_preview_mode', updates.videoPreviewMode);
+  }
+  if (updates.mediaSortBy !== undefined) {
+    add('media_sort_by', updates.mediaSortBy);
   }
   if (setters.length === 0) { throw new Error('No user changes supplied'); }
   values.push(id);

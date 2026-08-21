@@ -225,7 +225,8 @@ export const getUnregisteredStorageUploads = async (limit = 1000, offset = 0) =>
           ELSE 3
         END,
         s.uploaded_at DESC NULLS LAST,
-        s.created_at DESC
+        s.created_at DESC,
+        s.url DESC
       LIMIT $1
       OFFSET $2
     `, [limit, offset]).then(({ rows }) => rows.map(row => ({

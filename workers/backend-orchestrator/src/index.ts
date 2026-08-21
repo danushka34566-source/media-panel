@@ -226,7 +226,7 @@ const GENERATED_MEDIA_SUFFIX_REGEX =
 const STALE_REGISTRATION_ERROR_MESSAGE =
   'Previous registration attempt stalled; queued for retry';
 const MISSING_UPLOAD_ERROR_PREFIX = 'Upload not found in storage';
-const WORKER_BUILD_ID = 'registration-retry-v31';
+const WORKER_BUILD_ID = 'registration-retry-v32';
 export const DRIVE_COPY_VISIBILITY_ATTEMPTS = 41;
 export const DRIVE_COPY_VISIBILITY_DELAY_MS = 3000;
 export const DRIVE_RETRY_TARGET_VISIBILITY_ATTEMPTS = 12;
@@ -3414,13 +3414,7 @@ const claimVideoJobs = async (env: Env, limit: number) => {
       FROM media
       WHERE transcode_status='pending'
         AND media_type='video'
-      ORDER BY
-        CASE
-          WHEN transcode_error LIKE 'Unable to verify processing source:%'
-            THEN 1
-          ELSE 0
-        END,
-        created_at DESC
+      ORDER BY created_at ASC, id ASC
       FOR UPDATE SKIP LOCKED
       LIMIT ${limit}
     )
