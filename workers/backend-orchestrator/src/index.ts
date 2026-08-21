@@ -226,7 +226,7 @@ const GENERATED_MEDIA_SUFFIX_REGEX =
 const STALE_REGISTRATION_ERROR_MESSAGE =
   'Previous registration attempt stalled; queued for retry';
 const MISSING_UPLOAD_ERROR_PREFIX = 'Upload not found in storage';
-const WORKER_BUILD_ID = 'registration-retry-v32';
+const WORKER_BUILD_ID = 'registration-retry-v33';
 export const DRIVE_COPY_VISIBILITY_ATTEMPTS = 41;
 export const DRIVE_COPY_VISIBILITY_DELAY_MS = 3000;
 export const DRIVE_RETRY_TARGET_VISIBILITY_ATTEMPTS = 12;
@@ -4196,10 +4196,20 @@ const scheduleScan = (env: Env, ctx: ExecutionContext) => {
 
 export default {
   async scheduled(
-    _controller: ScheduledController,
+    controller: ScheduledController,
     env: Env,
     _ctx: ExecutionContext,
   ) {
+    await logBackendActivity(env, {
+      category: 'orchestrator',
+      event: 'scheduled_triggered',
+      status: 'info',
+      message: 'Cloudflare scheduled registration run triggered',
+      details: {
+        cron: controller.cron,
+        scheduledTime: controller.scheduledTime,
+      },
+    });
     const settings = await getRuntimeProcessingSettings(env);
     await startDeletionDrain(env).promise.catch((error) => {
       console.warn(

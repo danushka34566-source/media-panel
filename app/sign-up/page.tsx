@@ -12,7 +12,7 @@ export default async function SignUpPage() {
     await getSiteAccessSettingsForAuthorization();
   if (!newRegistrationsEnabled) { redirect(PATH_SIGN_IN); }
   const session = await auth();
-  if (session?.user) { redirect(PATH_ADMIN); }
+  if (session?.user?.status === 'active') { redirect(PATH_ADMIN); }
   return (
     <AuthPageShell>
       <SignUpForm />

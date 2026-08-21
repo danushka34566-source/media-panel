@@ -15,12 +15,14 @@ export default async function SignInPage() {
   if (!(await hasActiveSuperAdmin())) { redirect(PATH_SETUP); }
   const session = await auth();
 
-  if (session?.user?.twoFactorPending) {
+  const activeUser = session?.user?.status === 'active' ? session.user : undefined;
+
+  if (activeUser?.twoFactorPending) {
     redirect(PATH_VERIFY_LOGIN);
   }
 
-  if (session?.user) {
-    redirect(session.user.role === 'admin' || session.user.role === 'superadmin'
+  if (activeUser) {
+    redirect(activeUser.role === 'admin' || activeUser.role === 'superadmin'
       ? PATH_ADMIN
       : PATH_ROOT);
   }

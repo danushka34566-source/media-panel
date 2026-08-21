@@ -27,7 +27,9 @@ import { PATH_FEED_JSON, PATH_RSS_XML } from '@/app/path';
 import SelectMediaProvider from '@/admin/select/SelectMediaProvider';
 import Script from 'next/script';
 import DeferredGlobalFeatures from '@/app/DeferredGlobalFeatures';
+import IdleSessionLogout from '@/auth/IdleSessionLogout';
 import { authCachedSafe } from '@/auth/cache';
+import { getSiteAccessSettingsSafe } from '@/auth/site-access';
 
 import '../tailwind.css';
 import { Geist } from "next/font/google";
@@ -90,7 +92,10 @@ export default async function RootLayout({
 }: {
   children: React.ReactNode
 }) {
-  const session = await authCachedSafe();
+  const [session, siteAccess] = await Promise.all([
+    authCachedSafe(),
+    getSiteAccessSettingsSafe(),
+  ]);
   return (
     <html
       lang={HTML_LANG}
@@ -117,6 +122,8 @@ export default async function RootLayout({
                         revalidatePath('/admin', 'layout');
                       }}
                     />
+                    {siteAccess.siteVisibility === 'private' &&
+                      <IdleSessionLogout />}
                     <div className={clsx(
                       'mx-3 mb-3',
                       'lg:mx-6 lg:mb-6',

@@ -55,12 +55,20 @@ const toAuthUser = (user: AppUser): User & {
   twoFactorPending: false,
 });
 
+const SESSION_MAX_AGE_SECONDS = 2 * 24 * 60 * 60;
+
 export const {
   handlers: { GET, POST },
   signIn,
   signOut,
   auth,
 } = NextAuth({
+  // Public mode keeps a normal, finite session; private mode additionally
+  // enforces the client-side 30-minute inactivity timeout.
+  session: {
+    strategy: 'jwt',
+    maxAge: SESSION_MAX_AGE_SECONDS,
+  },
   providers: [
     Credentials({
       credentials: {

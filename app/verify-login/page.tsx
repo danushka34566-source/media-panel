@@ -9,7 +9,7 @@ import type { TwoFactorMethod } from '@/auth';
 export default async function VerifyLoginPage() {
   const session = await auth();
 
-  if (!session?.user) {
+  if (!session?.user?.id || session.user.status !== 'active') {
     redirect(PATH_SIGN_IN);
   }
 
