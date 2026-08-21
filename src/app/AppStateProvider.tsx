@@ -35,7 +35,7 @@ import {
   getAuthEmailCookie,
 } from '@/auth';
 import { useRouter, usePathname } from 'next/navigation';
-import { isPathProtected, PATH_ROOT } from '@/app/path';
+import { isPathProtected, isPathSignIn, PATH_ROOT } from '@/app/path';
 import {
   INITIAL_UPLOAD_STATE,
   shouldPruneWorkerQueuedClientUpload,
@@ -208,6 +208,24 @@ export default function AppStateProvider({
     fallbackData: initialAuth,
     revalidateOnMount: initialAuth === undefined,
   });
+  const previousPathnameRef = useRef(pathname);
+  useEffect(() => {
+    const previousPathname = previousPathnameRef.current;
+    previousPathnameRef.current = pathname;
+    if (!isPathSignIn(previousPathname) || isPathSignIn(pathname)) {
+      return;
+    }
+
+    // Auth.js sets the session cookie during the sign-in server action, but
+    // App Router can preserve this root layout across the redirect. Revalidate
+    // the client auth state and refresh the layout once so admin controls do
+    // not remain hidden until the user manually reloads the page.
+    void mutate(SWR_KEYS.GET_AUTH).then(currentAuth => {
+      if (currentAuth?.user?.status === 'active') {
+        router.refresh();
+      }
+    });
+  }, [mutate, pathname, router]);
   const userRole = auth?.user?.status === 'active' &&
       isUserRole(auth.user.role)
     ? auth.user.role

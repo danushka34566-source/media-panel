@@ -59,6 +59,8 @@ export default function SignInForm({
   const [twoFactorCode, setTwoFactorCode] = useState('');
   const [twoFactorChallenge, setTwoFactorChallenge] =
     useState<ReturnType<typeof parseTwoFactorResponse>>();
+  const [selectedTwoFactorMethod, setSelectedTwoFactorMethod] =
+    useState<TwoFactorMethod>();
   const [response, action] = useActionState(signInAction, undefined);
 
   const emailRef = useRef<HTMLInputElement>(null);
@@ -80,7 +82,8 @@ export default function SignInForm({
   );
   const twoFactorState = latestTwoFactorChallenge ?? twoFactorChallenge;
   const twoFactorMethod: TwoFactorMethod =
-    twoFactorState?.preferred ?? 'email';
+    selectedTwoFactorMethod ?? twoFactorState?.preferred ?? 'email';
+  const twoFactorMethods = twoFactorState?.available ?? [];
 
   useEffect(() => {
     if (latestTwoFactorChallenge) {
@@ -174,6 +177,43 @@ export default function SignInForm({
                   name="twoFactorMethod"
                   value={twoFactorMethod}
                 />
+                <fieldset className="space-y-2">
+                  <legend className="text-sm font-medium text-main">
+                    Verification method
+                  </legend>
+                  <p className="text-sm text-dim">
+                    Email is always available. Mobile (SMS) appears once a
+                    mobile number has been verified in your profile.
+                  </p>
+                  <div className="grid gap-2 sm:grid-cols-3">
+                    {twoFactorMethods.map(method => {
+                      const label = method === 'authenticator'
+                        ? 'Authenticator app'
+                        : method === 'sms' ? 'Mobile (SMS)' : 'Email';
+                      const selected = method === twoFactorMethod;
+                      return (
+                        <button
+                          key={method}
+                          type="button"
+                          className={clsx(
+                            'control min-h-11 px-3 text-left text-sm font-medium',
+                            'transition-colors',
+                            selected
+                              ? 'border-main bg-dim text-main'
+                              : 'text-dim hover:border-gray-400 hover:text-main',
+                          )}
+                          aria-pressed={selected}
+                          onClick={() => {
+                            setSelectedTwoFactorMethod(method);
+                            setTwoFactorCode('');
+                          }}
+                        >
+                          {label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </fieldset>
                 <FieldsetWithStatus
                   id="twoFactorCode"
                   label={appText.auth.verificationCode}
