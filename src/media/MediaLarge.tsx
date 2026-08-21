@@ -442,6 +442,19 @@ export default function MediaLarge({
   const fullVideoCompatibilityUrl = compatibilityPlaybackUrl
     ? getFullVideoBridgeUrl(compatibilityPlaybackUrl)
     : undefined;
+  const warmFullVideoDownload = useCallback(() => {
+    if (!isVideo || !photo.url) { return; }
+    const url = getFullVideoBridgeUrl(photo.url);
+    if (!url.startsWith('/api/media/full-video')) { return; }
+    void fetch(url, {
+      method: 'HEAD',
+      credentials: 'same-origin',
+      cache: 'no-store',
+    }).catch(() => undefined);
+  }, [isVideo, photo.url]);
+  useEffect(() => {
+    warmFullVideoDownload();
+  }, [warmFullVideoDownload]);
   useAdaptiveFullVideoPlayback({
     // Zoom owns the active full-video session while open; keeping the inline
     // controller detached prevents two HLS pipelines from downloading at once.
@@ -1292,6 +1305,8 @@ export default function MediaLarge({
                 'bg-black/0 hover:bg-black/10 focus:bg-black/10 transition-colors',
                 'cursor-pointer',
               )}
+              onPointerEnter={warmFullVideoDownload}
+              onPointerDown={warmFullVideoDownload}
               onClick={async () => {
                 if (isPreparingFullVideo) { return; }
                 setIsPreparingFullVideo(true);
