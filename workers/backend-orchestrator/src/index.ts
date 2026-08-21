@@ -4228,7 +4228,9 @@ export default {
         return json(401, { error: 'Unauthorized' });
       }
       const drain = startDeletionDrain(env);
-      ctx.waitUntil(drain.promise);
+      ctx.waitUntil(drain.promise.catch((error) => {
+        console.warn('Deletion queue drain failed', error);
+      }));
       return json(drain.started ? 202 : 200, {
         triggered: true,
         started: drain.started,
