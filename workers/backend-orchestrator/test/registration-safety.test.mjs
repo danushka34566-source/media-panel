@@ -181,12 +181,14 @@ test('Supabase scans use a fresh bounded client and retry a dropped connection',
   assert.doesNotMatch(workerSource, /new Pool\(/);
 });
 
-test('a deletion queue failure does not prevent the scheduled registration scan', () => {
+test('a deletion queue drain cannot block the scheduled registration scan', () => {
   const scheduledStart = workerSource.indexOf('async scheduled(');
   const scheduledEnd = workerSource.indexOf('async fetch(', scheduledStart);
   const source = workerSource.slice(scheduledStart, scheduledEnd);
 
-  assert.match(source, /startDeletionDrain\(env\)\.promise\.catch/);
+  assert.match(source, /const deletionDrain = startDeletionDrain\(env\)/);
+  assert.match(source, /ctx\.waitUntil\(deletionDrain\.promise\.catch/);
+  assert.doesNotMatch(source, /await startDeletionDrain/);
   assert.match(source, /continuing scheduled registration scan/);
   assert.match(source, /startScan\(envWithRuntimeSettings\(env, settings\)\)/);
   assert.match(workerSource, /ctx\.waitUntil\(drain\.promise\.catch/);

@@ -226,7 +226,7 @@ const GENERATED_MEDIA_SUFFIX_REGEX =
 const STALE_REGISTRATION_ERROR_MESSAGE =
   'Previous registration attempt stalled; queued for retry';
 const MISSING_UPLOAD_ERROR_PREFIX = 'Upload not found in storage';
-const WORKER_BUILD_ID = 'registration-retry-v33';
+const WORKER_BUILD_ID = 'registration-retry-v34';
 export const DRIVE_COPY_VISIBILITY_ATTEMPTS = 41;
 export const DRIVE_COPY_VISIBILITY_DELAY_MS = 3000;
 export const DRIVE_RETRY_TARGET_VISIBILITY_ATTEMPTS = 12;
@@ -4198,7 +4198,7 @@ export default {
   async scheduled(
     controller: ScheduledController,
     env: Env,
-    _ctx: ExecutionContext,
+    ctx: ExecutionContext,
   ) {
     await logBackendActivity(env, {
       category: 'orchestrator',
@@ -4211,12 +4211,18 @@ export default {
       },
     });
     const settings = await getRuntimeProcessingSettings(env);
-    await startDeletionDrain(env).promise.catch((error) => {
-      console.warn(
-        'Deletion queue drain failed; continuing scheduled registration scan',
-        error,
-      );
-    });
+    // Cleanup is independent of registration. It can hit a slow database or
+    // storage operation, so it must never hold the scheduled registration
+    // path hostage. Keep it alive separately and start the FIFO scan now.
+    const deletionDrain = startDeletionDrain(env);
+    if (deletionDrain.started) {
+      ctx.waitUntil(deletionDrain.promise.catch((error) => {
+        console.warn(
+          'Deletion queue drain failed; continuing scheduled registration scan',
+          error,
+        );
+      }));
+    }
     if (!settings.orchestratorEnabled || !settings.registrationEnabled) {
       return;
     }
