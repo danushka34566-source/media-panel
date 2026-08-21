@@ -226,7 +226,7 @@ const GENERATED_MEDIA_SUFFIX_REGEX =
 const STALE_REGISTRATION_ERROR_MESSAGE =
   'Previous registration attempt stalled; queued for retry';
 const MISSING_UPLOAD_ERROR_PREFIX = 'Upload not found in storage';
-const WORKER_BUILD_ID = 'registration-retry-v29';
+const WORKER_BUILD_ID = 'registration-retry-v30';
 export const DRIVE_COPY_VISIBILITY_ATTEMPTS = 41;
 export const DRIVE_COPY_VISIBILITY_DELAY_MS = 3000;
 export const DRIVE_RETRY_TARGET_VISIBILITY_ATTEMPTS = 12;
@@ -850,6 +850,10 @@ const connectionStringWithoutSslMode = (value: string) => {
 const isRetryableSupabaseConnectionError = (error: unknown) =>
   /connection terminated unexpectedly|connection reset|econnreset|socket closed/i
     .test(error instanceof Error ? error.message : String(error));
+const describePostgresQuery = (text: string) => text
+  .replace(/\s+/g, ' ')
+  .trim()
+  .slice(0, 240);
 
 const supabaseSqlForEnv = (env: Env): SqlQuery => {
   const sql = async (strings: TemplateStringsArray, ...values: unknown[]) => {
@@ -886,7 +890,12 @@ const supabaseSqlForEnv = (env: Env): SqlQuery => {
           await sleep(250 * (attempt + 1));
           continue;
         }
-        throw error;
+        const message = error instanceof Error ? error.message : String(error);
+        throw new Error(
+          `Postgres query failed after ${attempt + 1} attempt(s): ` +
+          `${describePostgresQuery(text)}; ${message}`,
+          { cause: error },
+        );
       } finally {
         await client.end().catch(() => undefined);
       }

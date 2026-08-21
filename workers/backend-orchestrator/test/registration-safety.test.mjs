@@ -164,6 +164,8 @@ test('Supabase scans use a fresh bounded client and retry a dropped connection',
   assert.match(workerSource, /isRetryableSupabaseConnectionError/);
   assert.match(workerSource, /SUPABASE_CONNECTION_RETRY_ATTEMPTS = 3/);
   assert.match(workerSource, /await client\.end\(\)\.catch/);
+  assert.match(workerSource, /Postgres query failed after/);
+  assert.match(workerSource, /describePostgresQuery/);
   assert.doesNotMatch(workerSource, /new Pool\(/);
 });
 
