@@ -74,45 +74,17 @@ export default function CompleteSignInVerificationForm({
               ? 'Enter the verification code that was sent to you.'
               : 'Choose a verification method to continue.'}
           </Note>}
-        <fieldset className="space-y-2">
-          <legend className="text-sm font-medium text-main">
-            Verification method
-          </legend>
-          <p className="text-sm text-dim">
-            Email is always available. Mobile verification appears after a
-            mobile number has been verified in your profile.
-          </p>
-          <input
-            type="hidden"
-            name="twoFactorMethod"
-            value={twoFactorMethod}
-          />
-          <div className="grid gap-2 sm:grid-cols-3">
-            {methodOptions.map(option => {
-              const selected = option.value === twoFactorMethod;
-              return (
-                <button
-                  key={option.value}
-                  type="button"
-                  className={clsx(
-                    'control min-h-11 px-3 text-left text-sm font-medium',
-                    'transition-colors',
-                    selected
-                      ? 'border-main bg-dim text-main'
-                      : 'text-dim hover:border-gray-400 hover:text-main',
-                  )}
-                  aria-pressed={selected}
-                  onClick={() => {
-                    setSelectedTwoFactorMethod(option.value as TwoFactorMethod);
-                    setTwoFactorCode('');
-                  }}
-                >
-                  {option.label}
-                </button>
-              );
-            })}
-          </div>
-        </fieldset>
+        <FieldsetWithStatus
+          id="twoFactorMethod"
+          label="Verification method"
+          note="Email is always available; SMS requires a verified mobile number."
+          value={twoFactorMethod}
+          onChange={value => {
+            setSelectedTwoFactorMethod(value as TwoFactorMethod);
+            setTwoFactorCode('');
+          }}
+          selectOptions={methodOptions}
+        />
         <FieldsetWithStatus
           id="twoFactorCode"
           label="Verification code"

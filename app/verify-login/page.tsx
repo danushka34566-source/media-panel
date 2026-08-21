@@ -1,6 +1,6 @@
 import { auth } from '@/auth/server';
 import CompleteSignInVerificationForm from '@/auth/CompleteSignInVerificationForm';
-import { PATH_ADMIN, PATH_SIGN_IN } from '@/app/path';
+import { PATH_ADMIN, PATH_ROOT, PATH_SIGN_IN } from '@/app/path';
 import { redirect } from 'next/navigation';
 import AuthPageShell from '@/auth/AuthPageShell';
 import { findUserById } from '@/auth/users';
@@ -14,7 +14,11 @@ export default async function VerifyLoginPage() {
   }
 
   if (!session.user.twoFactorPending) {
-    redirect(PATH_ADMIN);
+    redirect(
+      session.user.role === 'admin' || session.user.role === 'superadmin'
+        ? PATH_ADMIN
+        : PATH_ROOT,
+    );
   }
 
   const user = session.user.id

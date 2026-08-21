@@ -62,7 +62,10 @@ export default function IdleSessionLogout() {
       if (!document.hidden) { schedule(); }
     };
 
-    if (!getLastActivity()) { storeLastActivity(Date.now()); }
+    // A new authenticated session must never inherit a timestamp from a
+    // previous user or a session that ended hours ago. Reusing it made a
+    // successful private-mode login immediately satisfy the idle timeout.
+    storeLastActivity(Date.now());
     schedule();
     ACTIVITY_EVENTS.forEach(event => window.addEventListener(event, recordActivity, {
       passive: true,

@@ -84,6 +84,12 @@ export default function SignInForm({
   const twoFactorMethod: TwoFactorMethod =
     selectedTwoFactorMethod ?? twoFactorState?.preferred ?? 'email';
   const twoFactorMethods = twoFactorState?.available ?? [];
+  const twoFactorMethodOptions = twoFactorMethods.map(method => ({
+    value: method,
+    label: method === 'authenticator'
+      ? 'Authenticator app'
+      : method === 'sms' ? 'Mobile (SMS)' : 'Email',
+  }));
 
   useEffect(() => {
     if (latestTwoFactorChallenge) {
@@ -172,48 +178,17 @@ export default function SignInForm({
               ? <>
                 <input type="hidden" name="email" value={email} />
                 <input type="hidden" name="password" value={password} />
-                <input
-                  type="hidden"
-                  name="twoFactorMethod"
+                <FieldsetWithStatus
+                  id="twoFactorMethod"
+                  label="Verification method"
+                  note="Email is always available; SMS requires a verified mobile number."
                   value={twoFactorMethod}
+                  onChange={value => {
+                    setSelectedTwoFactorMethod(value as TwoFactorMethod);
+                    setTwoFactorCode('');
+                  }}
+                  selectOptions={twoFactorMethodOptions}
                 />
-                <fieldset className="space-y-2">
-                  <legend className="text-sm font-medium text-main">
-                    Verification method
-                  </legend>
-                  <p className="text-sm text-dim">
-                    Email is always available. Mobile (SMS) appears once a
-                    mobile number has been verified in your profile.
-                  </p>
-                  <div className="grid gap-2 sm:grid-cols-3">
-                    {twoFactorMethods.map(method => {
-                      const label = method === 'authenticator'
-                        ? 'Authenticator app'
-                        : method === 'sms' ? 'Mobile (SMS)' : 'Email';
-                      const selected = method === twoFactorMethod;
-                      return (
-                        <button
-                          key={method}
-                          type="button"
-                          className={clsx(
-                            'control min-h-11 px-3 text-left text-sm font-medium',
-                            'transition-colors',
-                            selected
-                              ? 'border-main bg-dim text-main'
-                              : 'text-dim hover:border-gray-400 hover:text-main',
-                          )}
-                          aria-pressed={selected}
-                          onClick={() => {
-                            setSelectedTwoFactorMethod(method);
-                            setTwoFactorCode('');
-                          }}
-                        >
-                          {label}
-                        </button>
-                      );
-                    })}
-                  </div>
-                </fieldset>
                 <FieldsetWithStatus
                   id="twoFactorCode"
                   label={appText.auth.verificationCode}
