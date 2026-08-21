@@ -837,6 +837,7 @@ const resolveRegistrationTitle = ({
 type SqlQuery = (...parts: any[]) => Promise<unknown[]>;
 const SUPABASE_CONNECT_TIMEOUT_MS = 10_000;
 const SUPABASE_QUERY_TIMEOUT_MS = 20_000;
+const SUPABASE_CONNECTION_RETRY_ATTEMPTS = 3;
 let supabasePool: Pool | undefined;
 let supabasePoolConnectionString: string | undefined;
 const connectionStringWithoutSslMode = (value: string) => {
@@ -874,6 +875,15 @@ const supabasePoolForEnv = (env: Env) => {
   return supabasePool;
 };
 
+const resetSupabasePool = () => {
+  const pool = supabasePool;
+  supabasePool = undefined;
+  supabasePoolConnectionString = undefined;
+  if (pool) {
+    void pool.end().catch(() => undefined);
+  }
+};
+
 const isRetryableSupabaseConnectionError = (error: unknown) =>
   /connection terminated unexpectedly|connection reset|econnreset|socket closed/i
     .test(error instanceof Error ? error.message : String(error));
@@ -884,9 +894,9 @@ const supabaseSqlForEnv = (env: Env): SqlQuery => {
     for (let index = 1; index < strings.length; index += 1) {
       text += `$${index}${strings[index] || ''}`;
     }
-    const pool = supabasePoolForEnv(env);
-    for (let attempt = 0; attempt < 2; attempt += 1) {
+    for (let attempt = 0; attempt < SUPABASE_CONNECTION_RETRY_ATTEMPTS; attempt += 1) {
       try {
+        const pool = supabasePoolForEnv(env);
         const result = await pool.query({
           text,
           values,
@@ -895,7 +905,12 @@ const supabaseSqlForEnv = (env: Env): SqlQuery => {
         });
         return result.rows;
       } catch (error) {
-        if (attempt === 0 && isRetryableSupabaseConnectionError(error)) {
+        if (
+          attempt < SUPABASE_CONNECTION_RETRY_ATTEMPTS - 1 &&
+          isRetryableSupabaseConnectionError(error)
+        ) {
+          resetSupabasePool();
+          await sleep(250 * (attempt + 1));
           continue;
         }
         throw error;
