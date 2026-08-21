@@ -101,6 +101,51 @@ test('registration status and logs expose file-level queue progress', () => {
   assert.match(workerSource, /phase: registrationPhase/);
 });
 
+test('Drive registration I/O is deadline-bound so a scan lease cannot stick forever', () => {
+  assert.match(workerSource, /const REGISTRATION_STORAGE_TIMEOUT_MS = 30_000/);
+
+  const listStart = workerSource.indexOf('const listAllObjects');
+  const listEnd = workerSource.indexOf('const putObject', listStart);
+  assert.match(
+    workerSource.slice(listStart, listEnd),
+    /signal: AbortSignal\.timeout\(REGISTRATION_STORAGE_TIMEOUT_MS\)/,
+  );
+
+  const finalizeStart = workerSource.indexOf('const finalizeDriveUpload');
+  const finalizeEnd = workerSource.indexOf('const storageObjectExists', finalizeStart);
+  assert.match(
+    workerSource.slice(finalizeStart, finalizeEnd),
+    /signal: AbortSignal\.timeout\(REGISTRATION_STORAGE_TIMEOUT_MS\)/,
+  );
+
+  const objectSizeStart = workerSource.indexOf('const storageObjectSize');
+  const objectSizeEnd = workerSource.indexOf('const finalizeDriveUpload', objectSizeStart);
+  assert.match(
+    workerSource.slice(objectSizeStart, objectSizeEnd),
+    /signal: AbortSignal\.timeout\(REGISTRATION_STORAGE_TIMEOUT_MS\)/,
+  );
+});
+
+test('stalled registration rows are requeued instead of left as permanent errors', () => {
+  const staleStart = workerSource.indexOf('const clearStaleRegistrationStatuses');
+  const staleEnd = workerSource.indexOf('const clearOldCompletedRegistrationStatuses', staleStart);
+  const source = workerSource.slice(staleStart, staleEnd);
+
+  assert.match(source, /status='detected'/);
+  assert.match(workerSource, /Previous registration attempt stalled; queued for retry/);
+  assert.doesNotMatch(source, /status='error'/);
+});
+
+test('manual retries explicitly requeue the matching registration record', () => {
+  const retryStart = workerSource.indexOf("url.pathname === '/registration/retry'");
+  const retryEnd = workerSource.indexOf("if (url.pathname === '/run'", retryStart);
+  const source = workerSource.slice(retryStart, retryEnd);
+
+  assert.match(source, /requeueRegistrationStatuses/);
+  assert.match(source, /scheduleScan/);
+  assert.match(workerSource, /status='detected'/);
+});
+
 test('active processing rows are failed only after storage confirms missing', () => {
   assert.equal(shouldMarkProcessingSourceMissing({
     status: 'pending',

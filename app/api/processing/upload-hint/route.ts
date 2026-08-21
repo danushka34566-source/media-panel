@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { isSessionAuthorized } from '@/auth/api';
-import { runProcessingOrchestrator } from '@/processing/orchestrator';
+import { retryWorkerRegistration } from '@/processing/orchestrator';
 
 export const runtime = 'nodejs';
 
@@ -9,19 +9,24 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
-  // Retained as a manual scan trigger for older clients. It deliberately does
-  // not create hints or registration rows: storage scanning is the worker's
-  // responsibility, regardless of how the object was uploaded.
-  await req.json().catch(() => ({}));
+  const body = await req.json().catch(() => ({})) as {
+    url?: string
+    sourceUrl?: string
+  };
+  const url = body.url?.trim();
+  const sourceUrl = body.sourceUrl?.trim();
+  if (!url) {
+    return NextResponse.json({ error: 'Registration URL is required' }, { status: 400 });
+  }
 
   try {
-    const result = await runProcessingOrchestrator();
+    const result = await retryWorkerRegistration({ url, sourceUrl });
     return NextResponse.json({
       ok: true,
       triggered: result.triggered,
-      statusMessage: result.triggered
-        ? 'Worker scan requested'
-        : 'Worker cron will scan storage',
+      statusMessage: result.statusMessage || (result.triggered
+        ? 'Registration requeued for worker retry'
+        : 'Worker cron will scan storage'),
     });
   } catch (error) {
     console.error('Failed to trigger Backend Orchestrator', error);

@@ -48,6 +48,35 @@ export const runProcessingOrchestrator = async () => {
   } satisfies ProcessingOrchestratorRunResult;
 };
 
+export const retryWorkerRegistration = async ({
+  url,
+  sourceUrl,
+}: {
+  url: string
+  sourceUrl?: string
+}) => {
+  if (!hasProcessingOrchestrator()) {
+    return { triggered: false };
+  }
+  const baseUrl = BACKEND_ORCHESTRATOR_BASE_URL!.replace(/\/+$/, '');
+  const response = await fetch(`${baseUrl}/registration/retry`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${BACKEND_ORCHESTRATOR_SHARED_SECRET}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ url, sourceUrl }),
+  });
+  if (!response.ok) {
+    const text = await response.text().catch(() => '');
+    throw new Error(text || `Registration retry failed (${response.status})`);
+  }
+  return {
+    triggered: true,
+    ...await response.json().catch(() => ({})),
+  };
+};
+
 export const triggerProcessingOrchestrator = async () => {
   const result = await runProcessingOrchestrator();
   return result.triggered;

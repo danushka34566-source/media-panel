@@ -40,10 +40,18 @@ await chmod(configPath, 0o600).catch(() => undefined);
 const executable = process.platform === 'win32' ? 'npx.cmd' : 'npx';
 try {
   await new Promise((resolve, reject) => {
+    const windows = process.platform === 'win32';
     const child = spawn(
-      executable,
-      ['wrangler', 'deploy', '--secrets-file', configPath],
-      { stdio: 'inherit', env: process.env },
+      windows ? process.env.ComSpec || 'cmd.exe' : executable,
+      windows
+        ? ['/d', '/s', '/c', `npx.cmd wrangler deploy --secrets-file "${configPath}"`]
+        : ['wrangler', 'deploy', '--secrets-file', configPath],
+      {
+        stdio: 'inherit',
+        env: process.env,
+        // npx.cmd cannot be spawned directly by Node on Windows (EINVAL).
+        // Run it through cmd.exe while preserving the normal POSIX path.
+      },
     );
     child.once('error', reject);
     child.once('exit', code => code === 0

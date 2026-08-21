@@ -43,7 +43,8 @@ export default function AdminRegistrationRetryButton({
               'Content-Type': 'application/json',
             },
             body: JSON.stringify({
-              url: retryUrl,
+              url,
+              sourceUrl: retryUrl === url ? undefined : retryUrl,
               originalFileName,
               title,
             }),

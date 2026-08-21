@@ -224,13 +224,16 @@ const PRESERVED_VIDEO_EXTENSIONS = new Set(['mp4', 'mkv']);
 const GENERATED_MEDIA_SUFFIX_REGEX =
   /-(sm|md|lg|poster|preview|stream|hls(?:-init|-(?:high|720p)-init)|subtitles(?:\.[a-z0-9_-]+)?)$/i;
 const STALE_REGISTRATION_ERROR_MESSAGE =
-  'Worker registration stalled before completion';
+  'Previous registration attempt stalled; queued for retry';
 const MISSING_UPLOAD_ERROR_PREFIX = 'Upload not found in storage';
-const WORKER_BUILD_ID = 'registration-observability-v25';
+const WORKER_BUILD_ID = 'registration-retry-v26';
 export const DRIVE_COPY_VISIBILITY_ATTEMPTS = 41;
 export const DRIVE_COPY_VISIBILITY_DELAY_MS = 3000;
 export const DRIVE_RETRY_TARGET_VISIBILITY_ATTEMPTS = 12;
 export const DRIVE_COPY_REQUEST_TIMEOUT_MS = 15_000;
+// A registration scan owns a global lease. Bound every Drive operation in its
+// path so one stalled request cannot block all later scans indefinitely.
+const REGISTRATION_STORAGE_TIMEOUT_MS = 30_000;
 const DELETION_STORAGE_TIMEOUT_MS = 15_000;
 const DELETION_MUTATION_TIMEOUT_MS = 45_000;
 const DELETION_MUTATION_CONCURRENCY = 4;
@@ -338,6 +341,7 @@ const revalidateMediaPanel = async (env: Env, photoId?: string) => {
       'Content-Type': 'application/json',
     },
     body: JSON.stringify(photoId ? { photoId } : {}),
+    signal: AbortSignal.timeout(REGISTRATION_STORAGE_TIMEOUT_MS),
   }).catch(() => undefined);
 };
 
@@ -599,17 +603,18 @@ const driveObjectExists = async (
   key: string,
   timeoutMs?: number,
 ) => {
+  const effectiveTimeoutMs = timeoutMs ?? REGISTRATION_STORAGE_TIMEOUT_MS;
   const response = await fetch(
     `${driveApiBaseUrl(env)}/api/v1/storage/object/${key.split('/').map(encodeURIComponent).join('/')}`,
     {
       method: 'HEAD',
       headers: driveHeaders(env),
-      ...(timeoutMs ? { signal: AbortSignal.timeout(timeoutMs) } : {}),
+      signal: AbortSignal.timeout(effectiveTimeoutMs),
     },
   );
   if (response.status === 404) { return false; }
   if (response.status === 405 || response.status === 501) {
-    const keys = await listDriveKeysForPrefix(env, key, timeoutMs);
+    const keys = await listDriveKeysForPrefix(env, key, effectiveTimeoutMs);
     return keys.includes(key);
   }
   if (!response.ok) {
@@ -625,6 +630,7 @@ const storageObjectSize = async (env: Env, key: string) => {
       {
         method: 'HEAD',
         headers: driveHeaders(env),
+        signal: AbortSignal.timeout(REGISTRATION_STORAGE_TIMEOUT_MS),
       },
     );
     if (!response.ok) { return undefined; }
@@ -653,6 +659,7 @@ const finalizeDriveUpload = async (env: Env, key: string) => {
       headers: driveHeaders(env, {
         'Content-Type': 'application/json',
       }),
+      signal: AbortSignal.timeout(REGISTRATION_STORAGE_TIMEOUT_MS),
       body: JSON.stringify({
         projectId: env.DRIVE_STORAGE_PROJECT_ID,
         bucket: env.DRIVE_STORAGE_BUCKET,
@@ -1120,6 +1127,7 @@ const listAllObjects = async (env: Env) => {
     listUrl.searchParams.set('limit', '200000');
     const response = await fetch(listUrl.toString(), {
       headers: driveHeaders(env),
+      signal: AbortSignal.timeout(REGISTRATION_STORAGE_TIMEOUT_MS),
     });
     if (!response.ok) {
       throw new Error(`Drive list failed (${response.status})`);
@@ -2106,8 +2114,8 @@ const clearStaleRegistrationStatuses = async (env: Env) => {
   await sql`
     UPDATE worker_registration_status
     SET
-      status='error',
-      error_message=COALESCE(NULLIF(error_message, ''), ${STALE_REGISTRATION_ERROR_MESSAGE}),
+      status='detected',
+      error_message=${STALE_REGISTRATION_ERROR_MESSAGE},
       updated_at=now()
     WHERE status IN ('detected', 'registering')
       AND updated_at < now() - (${String(minutes)} || ' minutes')::interval
@@ -2430,6 +2438,26 @@ const syncDetectedStatuses = async (
       errorMessage: undefined,
     })),
   );
+};
+
+const requeueRegistrationStatuses = async (env: Env, urls: string[]) => {
+  const uniqueUrls = Array.from(new Set(urls
+    .map(url => trimToUndefined(url))
+    .filter((url): url is string => Boolean(url))));
+  if (uniqueUrls.length === 0) { return 0; }
+  await ensureRegistrationStatusTable(env);
+  const sql = sqlForEnv(env);
+  const rows = await sql`
+    UPDATE worker_registration_status
+    SET
+      status='detected',
+      error_message=NULL,
+      updated_at=now()
+    WHERE url = ANY(${uniqueUrls})
+      OR source_url = ANY(${uniqueUrls})
+    RETURNING url
+  ` as unknown as Array<{ url: string }>;
+  return rows.length;
 };
 
 const retryStaleProcessing = async (env: Env) => {
@@ -4174,6 +4202,36 @@ export default {
 
     const settings = await getRuntimeProcessingSettings(env);
     const runtimeEnv = envWithRuntimeSettings(env, settings);
+
+    if (url.pathname === '/registration/retry' && request.method === 'POST') {
+      if (!isAuthorized(request, env.BACKEND_ORCHESTRATOR_SHARED_SECRET)) {
+        return json(401, { error: 'Unauthorized' });
+      }
+      const body = await request.json().catch(() => ({})) as {
+        url?: unknown
+        sourceUrl?: unknown
+      };
+      const urls = [body.url, body.sourceUrl]
+        .filter((value): value is string => typeof value === 'string');
+      if (urls.length === 0) {
+        return json(400, { error: 'A registration URL is required' });
+      }
+      try {
+        const requeued = await requeueRegistrationStatuses(runtimeEnv, urls);
+        const scanQueued = settings.orchestratorEnabled && settings.registrationEnabled
+          ? scheduleScan(runtimeEnv, ctx)
+          : false;
+        return json(scanQueued ? 202 : 200, {
+          requeued,
+          triggered: scanQueued,
+          statusMessage: requeued > 0
+            ? 'Registration requeued for worker retry'
+            : 'Worker scan requested',
+        });
+      } catch (error: any) {
+        return json(500, { error: error?.message || 'Unable to retry registration' });
+      }
+    }
 
     if (url.pathname === '/run' || url.pathname === '/scan') {
       if (!isAuthorized(request, env.BACKEND_ORCHESTRATOR_SHARED_SECRET)) {

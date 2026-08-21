@@ -20,7 +20,7 @@ const STALE_REGISTRATION_MINUTES = (() => {
 })();
 
 const STALE_REGISTRATION_ERROR_MESSAGE =
-  'Worker registration stalled before completion';
+  'Previous registration attempt stalled; queued for retry';
 
 const REGISTRATION_HISTORY_DAYS = (() => {
   const parsed = Number.parseInt(
@@ -83,8 +83,8 @@ const ensureWorkerRegistrationStatusColumnTypes = () => query(`
 const clearStaleWorkerRegistrationStatuses = () => query(`
   UPDATE worker_registration_status
   SET
-    status = 'error',
-    error_message = COALESCE(NULLIF(error_message, ''), $2),
+    status = 'detected',
+    error_message = $2,
     updated_at = now()
   WHERE status IN ('detected', 'registering')
     AND updated_at < now() - ($1 || ' minutes')::interval
