@@ -93,6 +93,17 @@ test('detected and registering status transitions use batch database writes', ()
   );
 });
 
+test('a registration scan does not fan out direct database connections for a backlog', () => {
+  const scanStart = workerSource.indexOf('const scanAndRegisterWithLease');
+  const scanEnd = workerSource.indexOf('const scanAndRegister =', scanStart);
+  const source = workerSource.slice(scanStart, scanEnd);
+
+  assert.match(source, /const listedObjectsPromise = listAllObjects\(env\)/);
+  assert.match(source, /const rows = await getMediaRows\(env\)/);
+  assert.match(source, /const queuedDeletionPrefixes = await getQueuedDeletionPrefixes\(env\)/);
+  assert.doesNotMatch(source, /Promise\.all\(\[\s*listAllObjects\(env\)/);
+});
+
 test('registration status and logs expose file-level queue progress', () => {
   assert.match(workerSource, /registrationQueue:/);
   assert.match(workerSource, /registrationJobs:/);

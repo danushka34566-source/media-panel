@@ -226,7 +226,7 @@ const GENERATED_MEDIA_SUFFIX_REGEX =
 const STALE_REGISTRATION_ERROR_MESSAGE =
   'Previous registration attempt stalled; queued for retry';
 const MISSING_UPLOAD_ERROR_PREFIX = 'Upload not found in storage';
-const WORKER_BUILD_ID = 'registration-retry-v27';
+const WORKER_BUILD_ID = 'registration-retry-v28';
 export const DRIVE_COPY_VISIBILITY_ATTEMPTS = 41;
 export const DRIVE_COPY_VISIBILITY_DELAY_MS = 3000;
 export const DRIVE_RETRY_TARGET_VISIBILITY_ATTEMPTS = 12;
@@ -2784,21 +2784,18 @@ const scanAndRegisterWithLease = async (
   const attemptedRegistrationKeys = new Set<string>();
 
   for (let pass = 0; pass < maxRegisterPasses; pass += 1) {
-    const [
-      listedObjects,
-      rows,
-      hintRows,
-      registrationRows,
-      registeredFileMaps,
-      queuedDeletionPrefixes,
-    ] = await Promise.all([
-      listAllObjects(env),
-      getMediaRows(env),
-      getPendingUploadRegistrationHints(env),
-      getRegistrationStatusRows(env),
-      getRegisteredUploadFileMapRows(env),
-      getQueuedDeletionPrefixes(env),
-    ]);
+    // Do not fan out direct Postgres connections here.  A large backlog used
+    // to make this single scan open several pooler connections at once, which
+    // can terminate the scan before any item reaches `registering`.
+    // Storage listing can overlap the first query, but database work remains
+    // deliberately serial and bounded regardless of backlog size.
+    const listedObjectsPromise = listAllObjects(env);
+    const rows = await getMediaRows(env);
+    const hintRows = await getPendingUploadRegistrationHints(env);
+    const registrationRows = await getRegistrationStatusRows(env);
+    const registeredFileMaps = await getRegisteredUploadFileMapRows(env);
+    const queuedDeletionPrefixes = await getQueuedDeletionPrefixes(env);
+    const listedObjects = await listedObjectsPromise;
     const objects = listedObjects.filter(object =>
       !Array.from(queuedDeletionPrefixes).some(prefix =>
         deletionKeyMatchesPrefix(object.key, prefix)));
