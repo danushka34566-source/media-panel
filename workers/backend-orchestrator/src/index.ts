@@ -226,7 +226,7 @@ const GENERATED_MEDIA_SUFFIX_REGEX =
 const STALE_REGISTRATION_ERROR_MESSAGE =
   'Previous registration attempt stalled; queued for retry';
 const MISSING_UPLOAD_ERROR_PREFIX = 'Upload not found in storage';
-const WORKER_BUILD_ID = 'registration-retry-v30';
+const WORKER_BUILD_ID = 'registration-retry-v31';
 export const DRIVE_COPY_VISIBILITY_ATTEMPTS = 41;
 export const DRIVE_COPY_VISIBILITY_DELAY_MS = 3000;
 export const DRIVE_RETRY_TARGET_VISIBILITY_ATTEMPTS = 12;
@@ -2264,11 +2264,11 @@ type HlsArtifactMetadata = {
   contentType?: string
 };
 
-const upsertRegistrationStatuses = async (
+const REGISTRATION_STATUS_WRITE_BATCH_SIZE = 25;
+const upsertRegistrationStatusBatch = async (
   env: Env,
   rows: RegistrationStatusWrite[],
 ) => {
-  if (rows.length === 0) { return; }
   const payload = JSON.stringify(rows.map(({
     url,
     fileName,
@@ -2355,6 +2355,22 @@ const upsertRegistrationStatuses = async (
       END,
       updated_at=now()
   `;
+};
+
+const upsertRegistrationStatuses = async (
+  env: Env,
+  rows: RegistrationStatusWrite[],
+) => {
+  for (
+    let offset = 0;
+    offset < rows.length;
+    offset += REGISTRATION_STATUS_WRITE_BATCH_SIZE
+  ) {
+    await upsertRegistrationStatusBatch(
+      env,
+      rows.slice(offset, offset + REGISTRATION_STATUS_WRITE_BATCH_SIZE),
+    );
+  }
 };
 
 const clearRegistrationStatus = async (env: Env, url: string) => {
@@ -2478,9 +2494,9 @@ const syncDetectedStatuses = async (
     });
   });
 
-  await upsertRegistrationStatuses(
-    env,
-    Array.from(pendingByUrl.entries()).map(([url, pendingRow]) => ({
+  const newStatuses = Array.from(pendingByUrl.entries())
+    .filter(([url]) => !registrationRowsByUrl.has(url))
+    .map(([url, pendingRow]) => ({
       url,
       fileName: pendingRow.fileName,
       uploadedAt: pendingRow.uploadedAt,
@@ -2489,8 +2505,8 @@ const syncDetectedStatuses = async (
       originalFileName: pendingRow.fileName,
       title: pendingRow.title,
       errorMessage: undefined,
-    })),
-  );
+    }));
+  await upsertRegistrationStatuses(env, newStatuses);
 };
 
 const requeueRegistrationStatuses = async (env: Env, urls: string[]) => {

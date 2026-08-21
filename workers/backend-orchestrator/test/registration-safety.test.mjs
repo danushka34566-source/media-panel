@@ -84,9 +84,12 @@ test('detected and registering status transitions use batch database writes', ()
   const syncEnd = workerSource.indexOf('const retryStaleProcessing', syncStart);
   const syncSource = workerSource.slice(syncStart, syncEnd);
   assert.match(syncSource, /upsertRegistrationStatuses/);
+  assert.match(syncSource, /filter\(\(\[url\]\) => !registrationRowsByUrl\.has\(url\)\)/);
   assert.doesNotMatch(syncSource, /Promise\.all/);
 
   assert.match(workerSource, /jsonb_to_recordset/);
+  assert.match(workerSource, /REGISTRATION_STATUS_WRITE_BATCH_SIZE = 25/);
+  assert.match(workerSource, /rows\.slice\(offset, offset \+ REGISTRATION_STATUS_WRITE_BATCH_SIZE\)/);
   assert.doesNotMatch(
     workerSource,
     /Promise\.all\(batch\.map\(object => \{[\s\S]*?status: 'registering'/,
