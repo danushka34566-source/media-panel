@@ -26,7 +26,6 @@ import SharedHoverProvider from '@/components/shared-hover/SharedHoverProvider';
 import { PATH_FEED_JSON, PATH_RSS_XML } from '@/app/path';
 import SelectMediaProvider from '@/admin/select/SelectMediaProvider';
 import Script from 'next/script';
-import MobilePullGesture from '@/app/MobilePullGesture';
 import DeferredGlobalFeatures from '@/app/DeferredGlobalFeatures';
 import { authCachedSafe } from '@/auth/cache';
 
@@ -112,7 +111,6 @@ export default async function RootLayout({
               <ThemeProvider attribute="class" defaultTheme={DEFAULT_THEME}>
                 <SwrConfigClient>
                   <SharedHoverProvider>
-                    <MobilePullGesture />
                     <DeferredGlobalFeatures
                       onLastUpload={async () => {
                         'use server';

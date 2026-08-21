@@ -91,8 +91,6 @@ export default function AppViewSwitcher({
     doesPathOfferSort;
 
   const hasLoadedRef = useRef(false);
-  const sortPreferenceReadyRef = useRef(false);
-  const sortPreferenceUserRef = useRef<string | undefined>(undefined);
   useEffect(() => {
     if (hasLoadedRef.current) {
       // After initial load, invalidate cache every time sort changes
@@ -102,32 +100,34 @@ export default function AppViewSwitcher({
   }, [invalidateSwr, sortBy]);
 
   useEffect(() => {
-    sortPreferenceReadyRef.current = false;
-    sortPreferenceUserRef.current = userEmail;
     if (!isUserSignedIn || !userEmail || !doesPathOfferSort) { return; }
 
     let cancelled = false;
-    void getMediaSortPreferenceAction().then(preference => {
-      if (cancelled || sortPreferenceUserRef.current !== userEmail) { return; }
-      if (preference && preference !== sortBy && isSortedByDefault) {
-        router.replace(getPathForSortBy(pathname, preference));
-        return;
+    void (async () => {
+      try {
+        const preference = await getMediaSortPreferenceAction();
+        if (cancelled) { return; }
+        if (preference && preference !== sortBy && isSortedByDefault) {
+          router.replace(getPathForSortBy(pathname, preference));
+          return;
+        }
+        if (preference !== sortBy) {
+          await setMediaSortPreferenceAction(sortBy);
+        }
+      } catch {
+        // Sorting stays fully usable when the preference store is unavailable.
       }
-      sortPreferenceReadyRef.current = true;
-    }).catch(() => {
-      sortPreferenceReadyRef.current = true;
-    });
+    })();
     return () => { cancelled = true; };
-  }, [doesPathOfferSort, isSortedByDefault, isUserSignedIn, pathname, router, sortBy, userEmail]);
-
-  useEffect(() => {
-    if (
-      !sortPreferenceReadyRef.current ||
-      !isUserSignedIn ||
-      !doesPathOfferSort
-    ) { return; }
-    void setMediaSortPreferenceAction(sortBy).catch(() => undefined);
-  }, [doesPathOfferSort, isUserSignedIn, sortBy]);
+  }, [
+    doesPathOfferSort,
+    isSortedByDefault,
+    isUserSignedIn,
+    pathname,
+    router,
+    sortBy,
+    userEmail,
+  ]);
 
   const refHrefFull = useRef<HTMLAnchorElement>(null);
   const refHrefGrid = useRef<HTMLAnchorElement>(null);
