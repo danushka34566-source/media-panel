@@ -25,18 +25,19 @@ const signedDownloads = new Map<string, {
 
 const getSignedDownload = (key: string) => {
   const cached = signedDownloads.get(key);
-  if (cached && cached.expiresAt > Date.now()) { return cached.value; }
+  if (cached && cached.expiresAt > Date.now()) { return cached; }
   const value = driveCreatePresignedDownload(key);
-  signedDownloads.set(key, {
+  const signedDownload = {
     value,
     expiresAt: Date.now() + SIGNED_URL_TTL_MS,
-  });
+  };
+  signedDownloads.set(key, signedDownload);
   void value.catch(() => {
     if (signedDownloads.get(key)?.value === value) {
       signedDownloads.delete(key);
     }
   });
-  return value;
+  return signedDownload;
 };
 
 const requestUrl = (request: NextRequest) => {
@@ -65,7 +66,7 @@ export async function GET(request: NextRequest) {
 
   try {
     const key = driveKeyFromUrl(sourceUrl.toString());
-    const signed = await getSignedDownload(key);
+    const signed = await getSignedDownload(key).value;
     if (!isHlsManifestUrl(sourceUrl.toString())) {
       return NextResponse.redirect(signed.url, {
         status: 302,
@@ -111,8 +112,20 @@ export async function HEAD(request: NextRequest) {
     return new NextResponse(null, { status: 400, headers: NO_STORE_HEADERS });
   }
   try {
-    await getSignedDownload(driveKeyFromUrl(sourceUrl.toString()));
-    return new NextResponse(null, { status: 204, headers: NO_STORE_HEADERS });
+    const signedDownload = getSignedDownload(
+      driveKeyFromUrl(sourceUrl.toString()),
+    );
+    const signed = await signedDownload.value;
+    return new NextResponse(null, {
+      status: 204,
+      headers: {
+        ...NO_STORE_HEADERS,
+        // The browser can use this already-authorized, short-lived URL for
+        // the first media request, eliminating a second panel redirect.
+        'x-media-signed-download': signed.url,
+        'x-media-signed-download-expires-at': `${signedDownload.expiresAt}`,
+      },
+    });
   } catch (error) {
     console.error('Unable to warm Drive full-video media', error);
     return new NextResponse(null, { status: 502, headers: NO_STORE_HEADERS });

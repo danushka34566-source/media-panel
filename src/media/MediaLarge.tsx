@@ -261,6 +261,11 @@ export default function MediaLarge({
   const { videoPreviewMode = 'smart' } = useAppState();
   const [isFullVideoPlaying, setIsFullVideoPlaying] = useState(false);
   const [isPreparingFullVideo, setIsPreparingFullVideo] = useState(false);
+  const [fullVideoDeliveryUrl, setFullVideoDeliveryUrl] = useState<string>();
+  const [preparedFullVideoDownloads, setPreparedFullVideoDownloads] = useState<Record<string, {
+    url: string
+    expiresAt: number
+  }>>({});
   const [isMainVideoActuallyPlaying, setIsMainVideoActuallyPlaying] =
     useState(false);
   const [isVideoFullscreen, setIsVideoFullscreen] = useState(false);
@@ -320,6 +325,8 @@ export default function MediaLarge({
     setIsVideoZoomOpen(false);
     setIsFullVideoPlaying(false);
     setIsPreparingFullVideo(false);
+    setFullVideoDeliveryUrl(undefined);
+    setPreparedFullVideoDownloads({});
     setIsMainVideoActuallyPlaying(false);
     setFailedGeneratedPreviewSrc(undefined);
     setReadyPreviewSrc(undefined);
@@ -436,20 +443,41 @@ export default function MediaLarge({
   // Full playback is deliberately progressive from the single original file.
   // The browser uses byte ranges to keep buffering ahead while it plays.
   const fullVideoManifestUrl = undefined;
+  const preparedFullVideoDownload = preparedFullVideoDownloads[currentVideoUrl];
+  const preparedFullVideoUrl = preparedFullVideoDownload &&
+    preparedFullVideoDownload.expiresAt > Date.now() + 10_000
+    ? preparedFullVideoDownload.url
+    : undefined;
   const fullVideoSourceUrl = isFullVideoPlaying
-    ? getFullVideoBridgeUrl(currentVideoUrl)
+    ? fullVideoDeliveryUrl ?? preparedFullVideoUrl ??
+      getFullVideoBridgeUrl(currentVideoUrl)
     : currentVideoUrl;
   const fullVideoCompatibilityUrl = compatibilityPlaybackUrl
     ? getFullVideoBridgeUrl(compatibilityPlaybackUrl)
     : undefined;
-  const warmFullVideoDownload = useCallback(() => {
-    if (!isVideo || !photo.url) { return; }
-    const url = getFullVideoBridgeUrl(photo.url);
+  const warmFullVideoDownload = useCallback((sourceUrl = photo.url) => {
+    if (!isVideo || !sourceUrl) { return; }
+    const url = getFullVideoBridgeUrl(sourceUrl);
     if (!url.startsWith('/api/media/full-video')) { return; }
     void fetch(url, {
       method: 'HEAD',
       credentials: 'same-origin',
       cache: 'no-store',
+    }).then(response => {
+      const signedUrl = response.headers.get('x-media-signed-download');
+      const expiresAt = Number(response.headers.get(
+        'x-media-signed-download-expires-at',
+      ));
+      if (!signedUrl || !Number.isFinite(expiresAt) || expiresAt <= Date.now()) {
+        return;
+      }
+      setPreparedFullVideoDownloads(current => {
+        const previous = current[sourceUrl];
+        if (previous?.url === signedUrl && previous.expiresAt === expiresAt) {
+          return current;
+        }
+        return { ...current, [sourceUrl]: { url: signedUrl, expiresAt } };
+      });
     }).catch(() => undefined);
   }, [isVideo, photo.url]);
   useEffect(() => {
@@ -1133,7 +1161,7 @@ export default function MediaLarge({
                         ? (pipLockedSrc ?? currentVideoUrl)
                         : currentVideoUrl;
                       return isFullVideoPlaying
-                        ? getFullVideoBridgeUrl(actualUrl)
+                        ? fullVideoSourceUrl
                         : actualUrl;
                     })()}
                     style={{ aspectRatio: mediaAspectRatio }}
@@ -1305,8 +1333,18 @@ export default function MediaLarge({
                 'bg-black/0 hover:bg-black/10 focus:bg-black/10 transition-colors',
                 'cursor-pointer',
               )}
-              onPointerEnter={warmFullVideoDownload}
-              onPointerDown={warmFullVideoDownload}
+              onPointerEnter={() => {
+                warmFullVideoDownload();
+                if (compatibilityPlaybackUrl) {
+                  warmFullVideoDownload(compatibilityPlaybackUrl);
+                }
+              }}
+              onPointerDown={() => {
+                warmFullVideoDownload();
+                if (compatibilityPlaybackUrl) {
+                  warmFullVideoDownload(compatibilityPlaybackUrl);
+                }
+              }}
               onClick={async () => {
                 if (isPreparingFullVideo) { return; }
                 setIsPreparingFullVideo(true);
@@ -1328,16 +1366,23 @@ export default function MediaLarge({
                     compatibilityPlaybackUrl &&
                     selectedPlaybackUrl === compatibilityPlaybackUrl,
                   );
+                  const preparedDownload = preparedFullVideoDownloads[
+                    selectedPlaybackUrl
+                  ];
+                  const selectedDeliveryUrl = preparedDownload &&
+                    preparedDownload.expiresAt > Date.now() + 10_000
+                    ? preparedDownload.url
+                    : getFullVideoBridgeUrl(selectedPlaybackUrl);
                   flushSync(() => {
                     setShouldUseCompatibilityPlayback(Boolean(
                       preferCompatibility,
                     ));
+                    setFullVideoDeliveryUrl(selectedDeliveryUrl);
                     setIsFullVideoPlaying(true);
                     setIsPiPLocked(false);
                   });
                   const video = videoRef.current;
                   if (!video) { return; }
-                  try { video.load?.(); } catch {}
                   await VideoPlaybackManager.requestPlay(video, {
                     preferPiP: VideoPlaybackManager.isPiPActive(),
                   });
