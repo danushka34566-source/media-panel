@@ -261,7 +261,6 @@ export default function MediaLarge({
   const { videoPreviewMode = 'smart' } = useAppState();
   const [isFullVideoPlaying, setIsFullVideoPlaying] = useState(false);
   const [isPreparingFullVideo, setIsPreparingFullVideo] = useState(false);
-  const [bufferedSecondsAhead, setBufferedSecondsAhead] = useState(0);
   const [isMainVideoActuallyPlaying, setIsMainVideoActuallyPlaying] =
     useState(false);
   const [isVideoFullscreen, setIsVideoFullscreen] = useState(false);
@@ -322,7 +321,6 @@ export default function MediaLarge({
     setIsFullVideoPlaying(false);
     setIsPreparingFullVideo(false);
     setIsMainVideoActuallyPlaying(false);
-    setBufferedSecondsAhead(0);
     setFailedGeneratedPreviewSrc(undefined);
     setReadyPreviewSrc(undefined);
     setReadyPreviewActivationId(undefined);
@@ -453,7 +451,6 @@ export default function MediaLarge({
     compatibilityUrl: fullVideoCompatibilityUrl,
     manifestUrl: fullVideoManifestUrl,
     onTelemetry: (telemetry: FullVideoTelemetry) => {
-      setBufferedSecondsAhead(Math.max(0, Math.floor(telemetry.forwardSeconds)));
       // Keep diagnostics observable without coupling playback to UI state.
       try {
         window.dispatchEvent(new CustomEvent('media-full-video-telemetry', {
@@ -1245,16 +1242,6 @@ export default function MediaLarge({
                   })()}
                   Sorry, your browser does not support embedded videos.
                   </video>}
-                {isFullVideoPlaying && (
-                  <div
-                    className="pointer-events-none absolute right-3 top-3 z-20 rounded-md bg-black/70 px-2 py-1 text-xs text-white"
-                    aria-live="polite"
-                  >
-                    {bufferedSecondsAhead > 0
-                      ? `Buffered ${bufferedSecondsAhead}s ahead`
-                      : 'Buffering…'}
-                  </div>
-                )}
                 </>
             : shouldLoadPreviewImage
               ? <ImageLarge
