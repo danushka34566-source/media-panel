@@ -226,7 +226,7 @@ const GENERATED_MEDIA_SUFFIX_REGEX =
 const STALE_REGISTRATION_ERROR_MESSAGE =
   'Previous registration attempt stalled; queued for retry';
 const MISSING_UPLOAD_ERROR_PREFIX = 'Upload not found in storage';
-const WORKER_BUILD_ID = 'registration-retry-v28';
+const WORKER_BUILD_ID = 'registration-retry-v29';
 export const DRIVE_COPY_VISIBILITY_ATTEMPTS = 41;
 export const DRIVE_COPY_VISIBILITY_DELAY_MS = 3000;
 export const DRIVE_RETRY_TARGET_VISIBILITY_ATTEMPTS = 12;
@@ -1626,13 +1626,27 @@ const getDeletionQueueCounts = async (env: Env) => {
   }, {});
 };
 
+let lastKnownQueuedDeletionPrefixes = new Set<string>();
 const getQueuedDeletionPrefixes = async (env: Env) => {
-  await ensureMediaDeletionQueueTable(env);
-  const sql = sqlForEnv(env);
-  const rows = await sql`
-    SELECT prefixes FROM media_deletion_queue
-  ` as unknown as Array<{ prefixes?: unknown }>;
-  return new Set(rows.flatMap(row => stringArray(row.prefixes)));
+  try {
+    await ensureMediaDeletionQueueTable(env);
+    const sql = sqlForEnv(env);
+    const rows = await sql`
+      SELECT prefixes FROM media_deletion_queue
+    ` as unknown as Array<{ prefixes?: unknown }>;
+    lastKnownQueuedDeletionPrefixes = new Set(
+      rows.flatMap(row => stringArray(row.prefixes)),
+    );
+  } catch (error) {
+    // A transient deletion-queue connection failure must not keep every
+    // unrelated upload stuck in `detected`. Retain the most recently known
+    // deletion prefixes so a previously queued deletion stays protected.
+    console.warn(
+      'Unable to read deletion queue; continuing registration with cached prefixes',
+      error,
+    );
+  }
+  return new Set(lastKnownQueuedDeletionPrefixes);
 };
 
 const drainMediaDeletionQueue = async (env: Env) => {

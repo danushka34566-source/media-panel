@@ -176,6 +176,7 @@ test('a deletion queue failure does not prevent the scheduled registration scan'
   assert.match(source, /continuing scheduled registration scan/);
   assert.match(source, /startScan\(envWithRuntimeSettings\(env, settings\)\)/);
   assert.match(workerSource, /ctx\.waitUntil\(drain\.promise\.catch/);
+  assert.match(workerSource, /continuing registration with cached prefixes/);
 });
 
 test('active processing rows are failed only after storage confirms missing', () => {
