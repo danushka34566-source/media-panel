@@ -1,6 +1,6 @@
 import { neon } from '@neondatabase/serverless';
 import { AwsClient } from 'aws4fetch';
-import { Pool } from 'pg';
+import { Client } from 'pg';
 
 type ScheduledController = {
   cron: string
@@ -838,8 +838,6 @@ type SqlQuery = (...parts: any[]) => Promise<unknown[]>;
 const SUPABASE_CONNECT_TIMEOUT_MS = 10_000;
 const SUPABASE_QUERY_TIMEOUT_MS = 20_000;
 const SUPABASE_CONNECTION_RETRY_ATTEMPTS = 3;
-let supabasePool: Pool | undefined;
-let supabasePoolConnectionString: string | undefined;
 const connectionStringWithoutSslMode = (value: string) => {
   try {
     const url = new URL(value);
@@ -849,41 +847,6 @@ const connectionStringWithoutSslMode = (value: string) => {
     return value;
   }
 };
-const supabasePoolForEnv = (env: Env) => {
-  const connectionString = connectionStringWithoutSslMode(env.POSTGRES_URL);
-  if (supabasePool && supabasePoolConnectionString === connectionString) {
-    return supabasePool;
-  }
-  if (supabasePool) {
-    void supabasePool.end().catch(() => undefined);
-  }
-  supabasePoolConnectionString = connectionString;
-  supabasePool = new Pool({
-    connectionString,
-    // Supabase poolers can use a provider chain that is not in Node's CA
-    // bundle. Keep TLS on while accepting that specific chain.
-    ssl: env.DISABLE_POSTGRES_SSL === '1'
-      ? false
-      : { rejectUnauthorized: false },
-    // A scan performs several independent queries. Keep this deliberately
-    // small so a large detection batch cannot create a connection storm.
-    max: 2,
-    idleTimeoutMillis: 10_000,
-    connectionTimeoutMillis: SUPABASE_CONNECT_TIMEOUT_MS,
-    allowExitOnIdle: true,
-  });
-  return supabasePool;
-};
-
-const resetSupabasePool = () => {
-  const pool = supabasePool;
-  supabasePool = undefined;
-  supabasePoolConnectionString = undefined;
-  if (pool) {
-    void pool.end().catch(() => undefined);
-  }
-};
-
 const isRetryableSupabaseConnectionError = (error: unknown) =>
   /connection terminated unexpectedly|connection reset|econnreset|socket closed/i
     .test(error instanceof Error ? error.message : String(error));
@@ -895,9 +858,20 @@ const supabaseSqlForEnv = (env: Env): SqlQuery => {
       text += `$${index}${strings[index] || ''}`;
     }
     for (let attempt = 0; attempt < SUPABASE_CONNECTION_RETRY_ATTEMPTS; attempt += 1) {
+      // Workers are stateless. Do not retain a pg Client or Pool between
+      // events: the runtime may reclaim the socket after a prior invocation.
+      const client = new Client({
+        connectionString: connectionStringWithoutSslMode(env.POSTGRES_URL),
+        ssl: env.DISABLE_POSTGRES_SSL === '1'
+          ? false
+          : { rejectUnauthorized: false },
+        connectionTimeoutMillis: SUPABASE_CONNECT_TIMEOUT_MS,
+        query_timeout: SUPABASE_QUERY_TIMEOUT_MS,
+        statement_timeout: SUPABASE_QUERY_TIMEOUT_MS,
+      });
       try {
-        const pool = supabasePoolForEnv(env);
-        const result = await pool.query({
+        await client.connect();
+        const result = await client.query({
           text,
           values,
           query_timeout: SUPABASE_QUERY_TIMEOUT_MS,
@@ -909,11 +883,12 @@ const supabaseSqlForEnv = (env: Env): SqlQuery => {
           attempt < SUPABASE_CONNECTION_RETRY_ATTEMPTS - 1 &&
           isRetryableSupabaseConnectionError(error)
         ) {
-          resetSupabasePool();
           await sleep(250 * (attempt + 1));
           continue;
         }
         throw error;
+      } finally {
+        await client.end().catch(() => undefined);
       }
     }
     return [];
