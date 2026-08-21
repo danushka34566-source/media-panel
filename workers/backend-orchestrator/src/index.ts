@@ -1,6 +1,6 @@
 import { neon } from '@neondatabase/serverless';
 import { AwsClient } from 'aws4fetch';
-import { Client } from 'pg';
+import { Pool } from 'pg';
 
 type ScheduledController = {
   cron: string
@@ -835,6 +835,10 @@ const resolveRegistrationTitle = ({
 };
 
 type SqlQuery = (...parts: any[]) => Promise<unknown[]>;
+const SUPABASE_CONNECT_TIMEOUT_MS = 10_000;
+const SUPABASE_QUERY_TIMEOUT_MS = 20_000;
+let supabasePool: Pool | undefined;
+let supabasePoolConnectionString: string | undefined;
 const connectionStringWithoutSslMode = (value: string) => {
   try {
     const url = new URL(value);
@@ -844,24 +848,60 @@ const connectionStringWithoutSslMode = (value: string) => {
     return value;
   }
 };
+const supabasePoolForEnv = (env: Env) => {
+  const connectionString = connectionStringWithoutSslMode(env.POSTGRES_URL);
+  if (supabasePool && supabasePoolConnectionString === connectionString) {
+    return supabasePool;
+  }
+  if (supabasePool) {
+    void supabasePool.end().catch(() => undefined);
+  }
+  supabasePoolConnectionString = connectionString;
+  supabasePool = new Pool({
+    connectionString,
+    // Supabase poolers can use a provider chain that is not in Node's CA
+    // bundle. Keep TLS on while accepting that specific chain.
+    ssl: env.DISABLE_POSTGRES_SSL === '1'
+      ? false
+      : { rejectUnauthorized: false },
+    // A scan performs several independent queries. Keep this deliberately
+    // small so a large detection batch cannot create a connection storm.
+    max: 2,
+    idleTimeoutMillis: 10_000,
+    connectionTimeoutMillis: SUPABASE_CONNECT_TIMEOUT_MS,
+    allowExitOnIdle: true,
+  });
+  return supabasePool;
+};
+
+const isRetryableSupabaseConnectionError = (error: unknown) =>
+  /connection terminated unexpectedly|connection reset|econnreset|socket closed/i
+    .test(error instanceof Error ? error.message : String(error));
+
 const supabaseSqlForEnv = (env: Env): SqlQuery => {
   const sql = async (strings: TemplateStringsArray, ...values: unknown[]) => {
     let text = strings[0] || '';
     for (let index = 1; index < strings.length; index += 1) {
       text += `$${index}${strings[index] || ''}`;
     }
-    const client = new Client({
-      connectionString: connectionStringWithoutSslMode(env.POSTGRES_URL),
-      // SSL is required by Supabase by default. Disable only explicitly.
-      ssl: env.DISABLE_POSTGRES_SSL === '1' ? false : true,
-    });
-    await client.connect();
-    try {
-      const result = await client.query(text, values);
-      return result.rows;
-    } finally {
-      await client.end().catch(() => undefined);
+    const pool = supabasePoolForEnv(env);
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      try {
+        const result = await pool.query({
+          text,
+          values,
+          query_timeout: SUPABASE_QUERY_TIMEOUT_MS,
+          statement_timeout: SUPABASE_QUERY_TIMEOUT_MS,
+        });
+        return result.rows;
+      } catch (error) {
+        if (attempt === 0 && isRetryableSupabaseConnectionError(error)) {
+          continue;
+        }
+        throw error;
+      }
     }
+    return [];
   };
   return sql as SqlQuery;
 };

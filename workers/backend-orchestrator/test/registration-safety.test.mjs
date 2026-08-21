@@ -146,6 +146,14 @@ test('manual retries explicitly requeue the matching registration record', () =>
   assert.match(workerSource, /status='detected'/);
 });
 
+test('Supabase scans use a bounded shared pool and retry a reset connection once', () => {
+  assert.match(workerSource, /new Pool\(/);
+  assert.match(workerSource, /max: 2/);
+  assert.match(workerSource, /connectionTimeoutMillis: SUPABASE_CONNECT_TIMEOUT_MS/);
+  assert.match(workerSource, /query_timeout: SUPABASE_QUERY_TIMEOUT_MS/);
+  assert.match(workerSource, /isRetryableSupabaseConnectionError/);
+});
+
 test('active processing rows are failed only after storage confirms missing', () => {
   assert.equal(shouldMarkProcessingSourceMissing({
     status: 'pending',
