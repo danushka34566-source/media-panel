@@ -226,7 +226,7 @@ const GENERATED_MEDIA_SUFFIX_REGEX =
 const STALE_REGISTRATION_ERROR_MESSAGE =
   'Previous registration attempt stalled; queued for retry';
 const MISSING_UPLOAD_ERROR_PREFIX = 'Upload not found in storage';
-const WORKER_BUILD_ID = 'registration-retry-v26';
+const WORKER_BUILD_ID = 'registration-retry-v27';
 export const DRIVE_COPY_VISIBILITY_ATTEMPTS = 41;
 export const DRIVE_COPY_VISIBILITY_DELAY_MS = 3000;
 export const DRIVE_RETRY_TARGET_VISIBILITY_ATTEMPTS = 12;
@@ -4171,7 +4171,12 @@ export default {
     _ctx: ExecutionContext,
   ) {
     const settings = await getRuntimeProcessingSettings(env);
-    await startDeletionDrain(env).promise;
+    await startDeletionDrain(env).promise.catch((error) => {
+      console.warn(
+        'Deletion queue drain failed; continuing scheduled registration scan',
+        error,
+      );
+    });
     if (!settings.orchestratorEnabled || !settings.registrationEnabled) {
       return;
     }

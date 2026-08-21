@@ -156,6 +156,16 @@ test('Supabase scans use a fresh bounded client and retry a dropped connection',
   assert.doesNotMatch(workerSource, /new Pool\(/);
 });
 
+test('a deletion queue failure does not prevent the scheduled registration scan', () => {
+  const scheduledStart = workerSource.indexOf('async scheduled(');
+  const scheduledEnd = workerSource.indexOf('async fetch(', scheduledStart);
+  const source = workerSource.slice(scheduledStart, scheduledEnd);
+
+  assert.match(source, /startDeletionDrain\(env\)\.promise\.catch/);
+  assert.match(source, /continuing scheduled registration scan/);
+  assert.match(source, /startScan\(envWithRuntimeSettings\(env, settings\)\)/);
+});
+
 test('active processing rows are failed only after storage confirms missing', () => {
   assert.equal(shouldMarkProcessingSourceMissing({
     status: 'pending',
