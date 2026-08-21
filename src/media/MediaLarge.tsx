@@ -1141,7 +1141,7 @@ export default function MediaLarge({
                       if (isFullVideoPlaying) { setIsMainVideoActuallyPlaying(false); }
                     }}
                     onEnded={() => setIsMainVideoActuallyPlaying(false)}
-                    preload={isFullVideoPlaying ? 'metadata' : 'auto'}
+                    preload="auto"
                     onLoadStart={() => {
                       if (!isFullVideoPlaying && isPreviewActive) {
                         setReadyPreviewSrc(undefined);

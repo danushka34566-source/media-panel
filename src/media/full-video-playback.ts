@@ -253,39 +253,28 @@ export const useAdaptiveFullVideoPlayback = ({
     events.forEach(([name, handler]) => video.addEventListener(name, handler));
     const timer = window.setInterval(() => emit('buffer'), policy.monitorIntervalMs);
 
-    // Keep the initial progressive source out of the browser's native loader
-    // while the manifest engine is selected. The source is restored by the
-    // fallback path if HLS is unavailable.
-    try {
-      video.removeAttribute('src');
-      video.load();
-    } catch { /* media element may already be detached */ }
-
-    // A manifest URL is authoritative only when the processor has created and
-    // verified it. For pending or legacy videos, begin progressive playback
-    // immediately instead of probing a fabricated HLS URL and waiting for its
-    // failure before falling back to the original.
+    // Progressive playback is already mounted by React with the final source.
+    // Leave that native load intact: removing and re-adding src here caused a
+    // second authenticated redirect and made the first Play click wait.
     if (!manifestUrl) {
       hlsInitializing = false;
       delete video.dataset.fullVideoHlsInitializing;
       currentSource = sourceUrl;
-      video.src = sourceUrl;
-      video.load();
-      const restoreProgressiveState = () => {
-        video.removeEventListener('loadedmetadata', restoreProgressiveState);
-        try { video.currentTime = resumeTime; } catch { /* metadata may follow */ }
-        if (shouldResume) { void video.play().catch(() => undefined); }
-      };
-      video.addEventListener('loadedmetadata', restoreProgressiveState);
-      if (video.readyState >= 1) { restoreProgressiveState(); }
+      if (shouldResume) { void video.play().catch(() => undefined); }
       return () => {
         disposed = true;
         window.clearInterval(timer);
         events.forEach(([name, handler]) => video.removeEventListener(name, handler));
-        video.removeEventListener('loadedmetadata', restoreProgressiveState);
         video.preload = 'metadata';
       };
     }
+
+    // Keep the initial progressive source out of the browser's native loader
+    // only when an HLS manifest engine is actually being selected.
+    try {
+      video.removeAttribute('src');
+      video.load();
+    } catch { /* media element may already be detached */ }
 
     // hls.js is loaded only for an activated full video, keeping preview cards
     // out of the bundle's runtime work and out of the network prefetch path.
