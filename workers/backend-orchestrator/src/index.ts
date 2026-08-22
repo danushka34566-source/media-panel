@@ -226,10 +226,13 @@ const GENERATED_MEDIA_SUFFIX_REGEX =
 const STALE_REGISTRATION_ERROR_MESSAGE =
   'Previous registration attempt stalled; queued for retry';
 const MISSING_UPLOAD_ERROR_PREFIX = 'Upload not found in storage';
-const WORKER_BUILD_ID = 'registration-retry-v34';
-export const DRIVE_COPY_VISIBILITY_ATTEMPTS = 41;
-export const DRIVE_COPY_VISIBILITY_DELAY_MS = 3000;
-export const DRIVE_RETRY_TARGET_VISIBILITY_ATTEMPTS = 12;
+const WORKER_BUILD_ID = 'registration-retry-v35';
+// A scheduled Worker must finish promptly. Drive copies can become visible
+// asynchronously, so persist the in-flight state and check again on the next
+// minute instead of polling long enough to lose the registration lease.
+export const DRIVE_COPY_VISIBILITY_ATTEMPTS = 3;
+export const DRIVE_COPY_VISIBILITY_DELAY_MS = 2000;
+export const DRIVE_RETRY_TARGET_VISIBILITY_ATTEMPTS = 3;
 export const DRIVE_COPY_REQUEST_TIMEOUT_MS = 15_000;
 // A registration scan owns a global lease. Bound every Drive operation in its
 // path so one stalled request cannot block all later scans indefinitely.
@@ -1940,8 +1943,8 @@ const waitForDriveDestination = async (
   env: Env,
   destinationKey: string,
   {
-    attempts = 12,
-    delayMs = 5000,
+    attempts = DRIVE_RETRY_TARGET_VISIBILITY_ATTEMPTS,
+    delayMs = DRIVE_COPY_VISIBILITY_DELAY_MS,
   }: {
     attempts?: number
     delayMs?: number
@@ -3312,7 +3315,6 @@ const scanAndRegisterWithLease = async (
         registered += 1;
       } catch (error) {
         const isRecoverableCopyDelay =
-          registrationPhase === 'preparing' &&
           isDriveStorageEnabled(env) &&
           isRecoverableDriveCopyError(error);
         const logRegistrationIssue = isRecoverableCopyDelay

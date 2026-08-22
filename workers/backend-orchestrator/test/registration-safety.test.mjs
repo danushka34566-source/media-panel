@@ -126,6 +126,9 @@ test('registration status and logs expose file-level queue progress', () => {
 
 test('Drive registration I/O is deadline-bound so a scan lease cannot stick forever', () => {
   assert.match(workerSource, /const REGISTRATION_STORAGE_TIMEOUT_MS = 30_000/);
+  assert.match(workerSource, /DRIVE_COPY_VISIBILITY_ATTEMPTS = 3/);
+  assert.match(workerSource, /DRIVE_RETRY_TARGET_VISIBILITY_ATTEMPTS = 3/);
+  assert.match(workerSource, /DRIVE_COPY_VISIBILITY_DELAY_MS = 2000/);
 
   const listStart = workerSource.indexOf('const listAllObjects');
   const listEnd = workerSource.indexOf('const putObject', listStart);
@@ -410,17 +413,17 @@ test('copy verification tolerates delayed Drive destination visibility', async (
   assert.equal(waits, 2);
 });
 
-test('Drive copy verification covers the observed visibility delay', () => {
+test('Drive copy verification is short and resumable', () => {
   const coveredDelay =
     (DRIVE_COPY_VISIBILITY_ATTEMPTS - 1) * DRIVE_COPY_VISIBILITY_DELAY_MS;
-  assert.ok(coveredDelay >= 120_000);
+  assert.ok(coveredDelay > 0 && coveredDelay <= 5_000);
 });
 
-test('a retry waits for a tracked destination before copying again', () => {
+test('a retry checks a tracked destination without holding the scan lease', () => {
   const coveredDelay =
     (DRIVE_RETRY_TARGET_VISIBILITY_ATTEMPTS - 1) *
     DRIVE_COPY_VISIBILITY_DELAY_MS;
-  assert.ok(coveredDelay >= 30_000);
+  assert.ok(coveredDelay > 0 && coveredDelay <= 5_000);
 });
 
 test('an in-flight tracked Drive copy is not started a second time', () => {
