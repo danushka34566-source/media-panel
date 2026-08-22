@@ -78,6 +78,15 @@ test('large registration backlogs are selected one FIFO batch at a time', () => 
     ).map(row => row.key),
     ['uploads/file-001.mp4'],
   );
+  assert.deepEqual(
+    selectOldestRegistrationBatch(
+      pending,
+      new Set(),
+      2,
+      new Set(['uploads/file-000.mp4']),
+    ).map(row => row.key),
+    ['uploads/file-001.mp4', 'uploads/file-002.mp4'],
+  );
 });
 
 test('registration scans process a bounded slice instead of one file per cron', () => {
@@ -85,6 +94,7 @@ test('registration scans process a bounded slice instead of one file per cron', 
   assert.match(workerSource, /maxRegisterPasses: getNumber\(env\.MAX_REGISTER_PASSES, 2/);
   assert.match(workerSource, /getNumber\(env\.REGISTER_BATCH_SIZE, 2, \{[\s\S]*?min: 1/);
   assert.match(workerSource, /getNumber\(env\.MAX_REGISTER_PASSES, 2, \{[\s\S]*?min: 1/);
+  assert.match(workerSource, /deferredRegistrationKeys/);
 });
 
 test('optional upload hint database work cannot stop the registration queue', () => {

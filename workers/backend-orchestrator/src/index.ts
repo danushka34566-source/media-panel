@@ -50,6 +50,7 @@ type RegistrationStatusRow = {
   media_id?: string | null
   extension?: string | null
   error_message?: string | null
+  updated_at?: string | Date | null
 };
 
 type UploadRegistrationHintRow = {
@@ -227,7 +228,7 @@ const GENERATED_MEDIA_SUFFIX_REGEX =
 const STALE_REGISTRATION_ERROR_MESSAGE =
   'Previous registration attempt stalled; queued for retry';
 const MISSING_UPLOAD_ERROR_PREFIX = 'Upload not found in storage';
-const WORKER_BUILD_ID = 'registration-retry-v39';
+const WORKER_BUILD_ID = 'registration-retry-v40';
 // A scheduled Worker must finish promptly. Drive copies can become visible
 // asynchronously, so persist the in-flight state and check again on the next
 // minute instead of polling long enough to lose the registration lease.
@@ -763,8 +764,10 @@ export const selectOldestRegistrationBatch = (
   pending: R2ObjectLike[],
   attemptedKeys: Set<string>,
   limit: number,
+  deferredKeys: Set<string> = new Set(),
 ) => pending
-  .filter(object => !attemptedKeys.has(object.key))
+  .filter(object =>
+    !attemptedKeys.has(object.key) && !deferredKeys.has(object.key))
   .sort((left, right) => {
     const leftUploaded = left.uploaded?.getTime();
     const rightUploaded = right.uploaded?.getTime();
@@ -2971,6 +2974,17 @@ const scanAndRegisterWithLease = async (
     });
 
     const now = Date.now();
+    const deferredRegistrationKeys = new Set(
+      pending
+        .filter(object => {
+          const row = registrationRowsByUrl.get(urlForKey(env, object.key));
+          const updatedAt = parseDateValue(row?.updated_at);
+          return row?.status === 'registering' &&
+            Boolean(updatedAt) &&
+            now - (updatedAt as Date).getTime() < staleRegistrationMinutes * 60 * 1000;
+        })
+        .map(object => object.key),
+    );
     for (const hint of hintRows) {
       const hintKey = keyFromStorageUrl(env, hint.url);
       if (!hintKey) { continue; }
@@ -3108,6 +3122,7 @@ const scanAndRegisterWithLease = async (
       pendingUploads,
       attemptedRegistrationKeys,
       registerBatchSize,
+      deferredRegistrationKeys,
     );
     if (batch.length === 0) {
       registrationRemaining = pendingUploads.length;
