@@ -233,7 +233,7 @@ const GENERATED_MEDIA_SUFFIX_REGEX =
 const STALE_REGISTRATION_ERROR_MESSAGE =
   'Previous registration attempt stalled; queued for retry';
 const MISSING_UPLOAD_ERROR_PREFIX = 'Upload not found in storage';
-const WORKER_BUILD_ID = 'registration-retry-v52';
+const WORKER_BUILD_ID = 'registration-retry-v53';
 // A scheduled Worker must finish promptly. Drive copies can become visible
 // asynchronously, so persist the in-flight state and check again on the next
 // minute instead of polling long enough to lose the registration lease.
@@ -3441,8 +3441,16 @@ const scanAndRegisterWithLease = async (
                 : 0,
             })
           : undefined;
+        const targetReadableWithoutSize =
+          shouldVerifyExistingTarget &&
+          recordedTargetSize === undefined
+          ? await storageObjectExists(env, registrationKey).catch(() => false)
+          : false;
         const targetAlreadyRegistered = shouldVerifyExistingTarget &&
-          isVerifiedStorageCopy(sourceSize, recordedTargetSize);
+          (
+            isVerifiedStorageCopy(sourceSize, recordedTargetSize) ||
+            targetReadableWithoutSize
+          );
         if (shouldWaitForTrackedRegistrationDestination({
           shouldVerifyExistingTarget,
           registrationStatus: existingRegistration?.status,
