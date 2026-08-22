@@ -258,7 +258,7 @@ const GENERATED_MEDIA_SUFFIX_REGEX =
 const STALE_REGISTRATION_ERROR_MESSAGE =
   'Previous registration attempt stalled; queued for retry';
 const MISSING_UPLOAD_ERROR_PREFIX = 'Upload not found in storage';
-const WORKER_BUILD_ID = 'v76';
+const WORKER_BUILD_ID = 'v77';
 // A scheduled Worker must finish promptly. Drive copies can become visible
 // asynchronously, so persist the in-flight state and check again on the next
 // minute instead of polling long enough to lose the registration lease.
@@ -446,6 +446,15 @@ export const isVerifiedStorageCopy = (
 ) => destinationSize !== undefined && (
   sourceSize === undefined || sourceSize === destinationSize
 );
+
+// Registration commits and ready-destination promotion require both sizes;
+// existence alone cannot prove that a Drive copy is complete.
+export const isExactVerifiedStorageCopy = (
+  sourceSize: number | undefined,
+  destinationSize: number | undefined,
+) => sourceSize !== undefined &&
+  destinationSize !== undefined &&
+  sourceSize === destinationSize;
 
 export const isProtectedRegistrationDestination = ({
   objectUrl,
@@ -840,6 +849,33 @@ const listDriveKeysForPrefix = async (
   });
 };
 
+const listDriveObjectSize = async (
+  env: Env,
+  key: string,
+  timeoutMs = REGISTRATION_STORAGE_TIMEOUT_MS,
+) => {
+  const listUrl = new URL(`${driveApiBaseUrl(env)}/api/v1/storage/list`);
+  listUrl.searchParams.set('projectId', env.DRIVE_STORAGE_PROJECT_ID || '');
+  listUrl.searchParams.set('bucket', env.DRIVE_STORAGE_BUCKET || '');
+  listUrl.searchParams.set('prefix', key);
+  listUrl.searchParams.set('limit', '10');
+  const response = await fetch(listUrl.toString(), {
+    headers: driveHeaders(env),
+    signal: AbortSignal.timeout(timeoutMs),
+  });
+  if (!response.ok) return undefined;
+  const data = await response.json() as {
+    objects?: Array<{ key?: string, fileName?: string, url?: string, size?: number | string }>
+  };
+  const object = (data.objects || []).find(item => {
+    const itemKey = item.key || item.fileName ||
+      (item.url ? keyFromStorageUrl(env, item.url) : '');
+    return itemKey === key;
+  });
+  const size = Number(object?.size);
+  return Number.isFinite(size) && size >= 0 ? size : undefined;
+};
+
 const driveObjectExists = async (
   env: Env,
   key: string,
@@ -865,19 +901,25 @@ const driveObjectExists = async (
   return true;
 };
 
-const storageObjectSize = async (env: Env, key: string) => {
+const storageObjectSize = async (
+  env: Env,
+  key: string,
+  timeoutMs = REGISTRATION_STORAGE_TIMEOUT_MS,
+) => {
   if (isDriveStorageEnabled(env)) {
     const response = await fetch(
       `${driveApiBaseUrl(env)}/api/v1/storage/object/${key.split('/').map(encodeURIComponent).join('/')}`,
       {
         method: 'HEAD',
         headers: driveHeaders(env),
-        signal: AbortSignal.timeout(REGISTRATION_STORAGE_TIMEOUT_MS),
+        signal: AbortSignal.timeout(timeoutMs),
       },
     );
     if (!response.ok) { return undefined; }
     const contentLength = response.headers.get('content-length');
-    if (contentLength === null) { return undefined; }
+    if (contentLength === null) {
+      return listDriveObjectSize(env, key, timeoutMs).catch(() => undefined);
+    }
     const size = Number(contentLength);
     return Number.isFinite(size) && size >= 0 ? size : undefined;
   }
@@ -2290,12 +2332,16 @@ const findReadyRegistrationKeys = async (
     // A Drive copy may become visible before the stale-row recovery window.
     // Probe only a small number of active claims so a ready copy can be
     // committed on the next scan without starting a duplicate copy.
-    const ready = await storageObjectExists(
+    const sourceSize = objectsByKey.get(sourceKey)?.size ??
+      await storageObjectSize(env, sourceKey).catch(() => undefined);
+    const destinationSize = await storageObjectSize(
       env,
       expectedKey,
       REGISTRATION_READY_CHECK_TIMEOUT_MS,
-    ).catch(() => false);
-    if (ready) { readyKeys.add(sourceKey); }
+    ).catch(() => undefined);
+    if (isExactVerifiedStorageCopy(sourceSize, destinationSize)) {
+      readyKeys.add(sourceKey);
+    }
   }));
   return readyKeys;
 };
@@ -3070,15 +3116,54 @@ const getRegisteredUploadFileMapRows = async (env: Env) => {
   const sql = sqlForEnv(env);
   await ensureRegisteredUploadFileMapTable(env);
   return (await sql`
-    SELECT media_id, stored_url, source_url, updated_at
-    FROM registered_upload_file_map
-    WHERE stored_url<>source_url
+    SELECT f.media_id, f.stored_url, f.source_url, f.updated_at
+    FROM registered_upload_file_map f
+    JOIN media m
+      ON m.id=f.media_id
+     AND m.url=f.stored_url
+    WHERE f.stored_url<>f.source_url
+    ORDER BY f.updated_at ASC, f.media_id ASC
   `) as unknown as Array<{
     media_id: string
     stored_url: string
     source_url: string
     updated_at: Date | string
   }>;
+};
+
+const repairOrphanedRegisteredUploadMaps = async (env: Env) => {
+  const sql = sqlForEnv(env);
+  const rows = await sql`
+    SELECT f.media_id, f.original_file_name, f.source_url
+    FROM registered_upload_file_map f
+    LEFT JOIN media m
+      ON m.id=f.media_id
+     AND m.url=f.stored_url
+    WHERE m.id IS NULL
+  ` as unknown as Array<{
+    media_id: string
+    original_file_name: string
+    source_url: string
+  }>;
+  for (const row of rows) {
+    await sql`
+      DELETE FROM registered_upload_file_map
+      WHERE media_id=${row.media_id}
+    `;
+    const fileName = row.original_file_name ||
+      getFileParts(keyFromStorageUrl(env, row.source_url)).fileName;
+    await setRegistrationStatus(env, {
+      url: row.source_url,
+      sourceUrl: row.source_url,
+      originalFileName: fileName,
+      fileName,
+      title: resolveRegistrationTitle({ originalFileName: fileName, fallbackFileName: fileName }),
+      extension: getFileParts(fileName).extension,
+      status: 'detected',
+      errorMessage: undefined,
+    });
+  }
+  return rows.length;
 };
 
 const upsertRegisteredUploadFileMap = async (
@@ -3210,21 +3295,25 @@ const cleanupRegisteredSourceFiles = async (
   objectsByKey: Map<string, R2ObjectLike>,
 ) => {
   let cleaned = 0;
-  for (const fileMap of fileMaps.slice(0, REGISTERED_SOURCE_CLEANUP_LIMIT)) {
+  const eligible = fileMaps.filter(fileMap => {
     const sourceKey = keyFromStorageUrl(env, fileMap.source_url);
     const storedKey = keyFromStorageUrl(env, fileMap.stored_url);
-    if (!sourceKey || !storedKey || sourceKey === storedKey) continue;
+    if (!sourceKey || !storedKey || sourceKey === storedKey) return false;
     const sourceObject = objectsByKey.get(sourceKey);
     const storedObject = objectsByKey.get(storedKey);
-    if (
-      !sourceObject ||
-      !storedObject ||
-      !isDeferredSourceCleanupSafe(
+    return Boolean(
+      sourceObject &&
+      storedObject &&
+      isDeferredSourceCleanupSafe(
         sourceObject.uploaded,
         parseDateValue(fileMap.updated_at),
-      ) ||
-      !isVerifiedStorageCopy(sourceObject.size, storedObject.size)
-    ) continue;
+      ) &&
+      isExactVerifiedStorageCopy(sourceObject.size, storedObject.size),
+    );
+  }).slice(0, REGISTERED_SOURCE_CLEANUP_LIMIT);
+  for (const fileMap of eligible) {
+    const sourceKey = keyFromStorageUrl(env, fileMap.source_url);
+    if (!sourceKey) continue;
     try {
       await deleteObject(env, sourceKey);
       cleaned += 1;
@@ -3242,6 +3331,7 @@ const cleanupRegisteredSourceFiles = async (
 
 const startScanLeaseHeartbeat = (env: Env, leaseToken: string) => {
   let stopped = false;
+  let leaseLost = false;
   let heartbeatInFlight: Promise<unknown> | undefined;
   const intervalMs = Math.max(
     10_000,
@@ -3252,6 +3342,7 @@ const startScanLeaseHeartbeat = (env: Env, leaseToken: string) => {
     heartbeatInFlight = renewScanLease(env, leaseToken)
       .then(renewed => {
         if (!renewed && !stopped) {
+          leaseLost = true;
           console.warn('Worker registration scan lease was lost');
         }
       })
@@ -3265,10 +3356,13 @@ const startScanLeaseHeartbeat = (env: Env, leaseToken: string) => {
       });
   };
   const timer = setInterval(heartbeat, intervalMs);
-  return async () => {
+  return {
+    isLost: () => leaseLost,
+    stop: async () => {
     stopped = true;
     clearInterval(timer);
     await heartbeatInFlight;
+    },
   };
 };
 
@@ -3516,7 +3610,13 @@ const commitRegisteredMedia = async (
   `;
   // URL cleanup is deliberately after the atomic commit. If this maintenance
   // query fails, the committed source remains protected and can be retried.
-  await sql`DELETE FROM media WHERE url=${url} AND id<>${id}`;
+  await sql`DELETE FROM media WHERE url=${url} AND id<>${id}`.catch(error => {
+    console.warn('Duplicate media URL cleanup deferred after safe commit', {
+      mediaId: id,
+      url,
+      error,
+    });
+  });
 };
 
 const scanAndRegisterWithLease = async (
@@ -3524,8 +3624,10 @@ const scanAndRegisterWithLease = async (
   leaseToken: string,
   {
     waitUntil,
+    assertLease,
   }: {
     waitUntil?: (promise: Promise<unknown>) => void
+    assertLease?: () => void
   } = {},
 ) => {
   await ensureRegisteredUploadFileMapTable(env);
@@ -3565,6 +3667,7 @@ const scanAndRegisterWithLease = async (
       }).catch(() => undefined));
     }
   };
+  await runMaintenance('repair_orphaned_maps', () => repairOrphanedRegisteredUploadMaps(env));
   await runMaintenance('clear_stale_statuses', () => clearStaleRegistrationStatuses(env));
   await runMaintenance('clear_resolved_statuses', () => clearResolvedRegistrationStatuses(env));
   await runMaintenance('clear_old_statuses', () => clearOldCompletedRegistrationStatuses(env));
@@ -3913,6 +4016,7 @@ const scanAndRegisterWithLease = async (
       batch.map(object => urlForKey(env, object.key)),
     );
     for (const object of batch) {
+      assertLease?.();
       if (!await renewScanLease(env, leaseToken)) {
         throw new Error('Worker registration scan lease was lost');
       }
@@ -3980,7 +4084,7 @@ const scanAndRegisterWithLease = async (
           });
         const listedTargetSize = objectsByKey.get(registrationKey)?.size;
         const recordedTargetSize = shouldVerifyExistingTarget
-          ? isVerifiedStorageCopy(sourceSize, listedTargetSize)
+          ? isExactVerifiedStorageCopy(sourceSize, listedTargetSize)
             ? listedTargetSize
             : await waitForVerifiedStorageCopy({
               sourceSize,
@@ -3994,7 +4098,7 @@ const scanAndRegisterWithLease = async (
             })
           : undefined;
         const targetAlreadyRegistered = shouldVerifyExistingTarget &&
-          isVerifiedStorageCopy(sourceSize, recordedTargetSize);
+          isExactVerifiedStorageCopy(sourceSize, recordedTargetSize);
         if (shouldWaitForTrackedRegistrationDestination({
           shouldVerifyExistingTarget,
           registrationStatus: existingRegistration?.status,
@@ -4057,6 +4161,7 @@ const scanAndRegisterWithLease = async (
           },
           commitRegistration: async () => {
             registrationPhase = 'committing';
+            assertLease?.();
             if (shouldUpsertMediaRow) {
               const mediaType = VIDEO_EXTENSIONS.has(extension) ? 'video' : 'photo';
               const uploadedAt = object.uploaded?.toISOString() || new Date().toISOString();
@@ -4264,11 +4369,18 @@ const scanAndRegister = async (
       scanSkipped: true,
     };
   }
-  const stopLeaseHeartbeat = startScanLeaseHeartbeat(env, leaseToken);
+  const leaseHeartbeat = startScanLeaseHeartbeat(env, leaseToken);
   try {
-    return await scanAndRegisterWithLease(env, leaseToken, { waitUntil });
+    return await scanAndRegisterWithLease(env, leaseToken, {
+      waitUntil,
+      assertLease: () => {
+        if (leaseHeartbeat.isLost()) {
+          throw new Error('Worker registration scan lease was lost');
+        }
+      },
+    });
   } finally {
-    await stopLeaseHeartbeat().catch(error => {
+    await leaseHeartbeat.stop().catch(error => {
       console.warn('Failed to stop worker scan lease heartbeat', error);
     });
     await releaseScanLease(env, leaseToken).catch(error => {

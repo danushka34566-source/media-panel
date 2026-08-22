@@ -14,6 +14,7 @@ import {
   findAvailableMediaId,
   getValidSubtitleUploadMetadata,
   isDeferredSourceCleanupSafe,
+  isExactVerifiedStorageCopy,
   isAllowedStreamDerivativeKey,
   isAllowedHlsDerivativeKey,
   isAllowedProcessorUploadKey,
@@ -204,7 +205,7 @@ test('Drive registration I/O is deadline-bound so a scan lease cannot stick fore
   const objectSizeEnd = workerSource.indexOf('const finalizeDriveUpload', objectSizeStart);
   assert.match(
     workerSource.slice(objectSizeStart, objectSizeEnd),
-    /signal: AbortSignal\.timeout\(REGISTRATION_STORAGE_TIMEOUT_MS\)/,
+    /signal: AbortSignal\.timeout\(timeoutMs\)/,
   );
 });
 
@@ -213,7 +214,7 @@ test('long scans keep their lease alive without a false whole-scan timeout', () 
   assert.doesNotMatch(workerSource, /Registration scan watchdog exceeded/);
   assert.match(workerSource, /startScanLeaseHeartbeat/);
   assert.match(workerSource, /setInterval\(heartbeat, intervalMs\)/);
-  assert.match(workerSource, /await stopLeaseHeartbeat\(\)/);
+  assert.match(workerSource, /await leaseHeartbeat\.stop\(\)/);
   assert.match(workerSource, /ctx\.waitUntil\(scan\.promise\.catch/);
 });
 
@@ -256,6 +257,9 @@ test('source cleanup is bounded and deferred outside the registration claim', ()
 test('tracked destinations require a verified size before commit', () => {
   assert.doesNotMatch(workerSource, /targetReadableWithoutSize/);
   assert.match(workerSource, /targetAlreadyRegistered = shouldVerifyExistingTarget &&/);
+  assert.equal(isExactVerifiedStorageCopy(100, 100), true);
+  assert.equal(isExactVerifiedStorageCopy(undefined, 100), false);
+  assert.equal(isExactVerifiedStorageCopy(100, undefined), false);
 });
 
 test('stalled registration rows are requeued instead of left as permanent errors', () => {
