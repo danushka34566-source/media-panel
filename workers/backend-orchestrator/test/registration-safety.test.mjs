@@ -95,6 +95,7 @@ test('registration scans process a bounded slice instead of one file per cron', 
   assert.match(workerSource, /getNumber\(env\.REGISTER_BATCH_SIZE, 2, \{[\s\S]*?min: 1/);
   assert.match(workerSource, /getNumber\(env\.MAX_REGISTER_PASSES, 2, \{[\s\S]*?min: 1/);
   assert.match(workerSource, /deferredRegistrationKeys/);
+  assert.match(workerSource, /error_message,\s*updated_at/);
 });
 
 test('optional upload hint database work cannot stop the registration queue', () => {
