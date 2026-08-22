@@ -17,6 +17,11 @@ type R2ObjectLike = {
   size?: number
 };
 
+type StorageListPage = {
+  objects: R2ObjectLike[]
+  nextContinuationToken?: string
+};
+
 type MediaRow = {
   id: string
   url: string
@@ -228,7 +233,7 @@ const GENERATED_MEDIA_SUFFIX_REGEX =
 const STALE_REGISTRATION_ERROR_MESSAGE =
   'Previous registration attempt stalled; queued for retry';
 const MISSING_UPLOAD_ERROR_PREFIX = 'Upload not found in storage';
-const WORKER_BUILD_ID = 'registration-retry-v46';
+const WORKER_BUILD_ID = 'registration-retry-v47';
 // A scheduled Worker must finish promptly. Drive copies can become visible
 // asynchronously, so persist the in-flight state and check again on the next
 // minute instead of polling long enough to lose the registration lease.
@@ -239,6 +244,10 @@ export const DRIVE_COPY_REQUEST_TIMEOUT_MS = 15_000;
 // A registration scan owns a global lease. Bound every Drive operation in its
 // path so one stalled request cannot block all later scans indefinitely.
 const REGISTRATION_STORAGE_TIMEOUT_MS = 30_000;
+// Keep each inventory request small enough for the Workers free resource
+// budget. The database status table is the durable FIFO queue; the storage
+// cursor only discovers a bounded slice of new objects on each scan.
+export const REGISTRATION_SCAN_PAGE_SIZE = 250;
 const DELETION_STORAGE_TIMEOUT_MS = 15_000;
 const DELETION_MUTATION_TIMEOUT_MS = 45_000;
 const DELETION_MUTATION_CONCURRENCY = 4;
@@ -1168,12 +1177,19 @@ const r2Request = async (
   return response;
 };
 
-const listAllObjects = async (env: Env) => {
+const listStoragePage = async (
+  env: Env,
+  continuationToken?: string,
+): Promise<StorageListPage> => {
   if (isDriveStorageEnabled(env)) {
     const listUrl = new URL(`${driveApiBaseUrl(env)}/api/v1/storage/list`);
     listUrl.searchParams.set('projectId', env.DRIVE_STORAGE_PROJECT_ID || '');
     listUrl.searchParams.set('bucket', env.DRIVE_STORAGE_BUCKET || '');
-    listUrl.searchParams.set('limit', '200000');
+    listUrl.searchParams.set('paged', '1');
+    listUrl.searchParams.set('limit', String(REGISTRATION_SCAN_PAGE_SIZE));
+    if (continuationToken) {
+      listUrl.searchParams.set('continuationToken', continuationToken);
+    }
     const response = await fetch(listUrl.toString(), {
       headers: driveHeaders(env),
       signal: AbortSignal.timeout(REGISTRATION_STORAGE_TIMEOUT_MS),
@@ -1183,63 +1199,60 @@ const listAllObjects = async (env: Env) => {
     }
     const data = await response.json() as {
       objects?: Array<{ key: string, uploadedAt?: string | null, size?: number }>
+      nextContinuationToken?: string | null
     };
-    return (data.objects || []).map(object => ({
-      key: object.key,
-      uploaded: object.uploadedAt ? new Date(object.uploadedAt) : undefined,
-      size: typeof object.size === 'number' ? object.size : undefined,
-    }));
+    return {
+      objects: (data.objects || []).map(object => ({
+        key: object.key,
+        uploaded: object.uploadedAt ? new Date(object.uploadedAt) : undefined,
+        size: typeof object.size === 'number' ? object.size : undefined,
+      })),
+      nextContinuationToken: trimToUndefined(data.nextContinuationToken),
+    };
   }
 
+  const query = new URLSearchParams({
+    'list-type': '2',
+    'max-keys': String(REGISTRATION_SCAN_PAGE_SIZE),
+  });
+  if (continuationToken) {
+    query.set('continuation-token', continuationToken);
+  }
+
+  const response = await r2Request(env, 'GET', '', {
+    query,
+    signal: AbortSignal.timeout(REGISTRATION_STORAGE_TIMEOUT_MS),
+  });
+  const xml = await response.text();
   const objects: R2ObjectLike[] = [];
-  let continuationToken: string | undefined;
-
-  while (true) {
-    const query = new URLSearchParams({
-      'list-type': '2',
-      'max-keys': '1000',
+  const contents = Array.from<RegExpMatchArray>(
+    xml.matchAll(/<Contents>([\s\S]*?)<\/Contents>/g),
+  );
+  contents.forEach(match => {
+    const content = match[1] || '';
+    const keyMatch = content.match(/<Key>([\s\S]*?)<\/Key>/);
+    if (!keyMatch?.[1]) { return; }
+    const lastModifiedMatch =
+      content.match(/<LastModified>([\s\S]*?)<\/LastModified>/);
+    const sizeMatch = content.match(/<Size>(\d+)<\/Size>/);
+    objects.push({
+      key: decodeXmlEntities(keyMatch[1]),
+      uploaded: lastModifiedMatch?.[1]
+        ? new Date(lastModifiedMatch[1])
+        : undefined,
+      size: sizeMatch?.[1] ? Number(sizeMatch[1]) : undefined,
     });
-    if (continuationToken) {
-      query.set('continuation-token', continuationToken);
-    }
+  });
 
-    const response = await r2Request(env, 'GET', '', {
-      query,
-      signal: AbortSignal.timeout(REGISTRATION_STORAGE_TIMEOUT_MS),
-    });
-    const xml = await response.text();
-
-    const contents = Array.from<RegExpMatchArray>(
-      xml.matchAll(/<Contents>([\s\S]*?)<\/Contents>/g),
-    );
-    contents.forEach(match => {
-      const content = match[1] || '';
-      const keyMatch = content.match(/<Key>([\s\S]*?)<\/Key>/);
-      if (!keyMatch?.[1]) { return; }
-      const lastModifiedMatch =
-        content.match(/<LastModified>([\s\S]*?)<\/LastModified>/);
-      const sizeMatch = content.match(/<Size>(\d+)<\/Size>/);
-      objects.push({
-        key: decodeXmlEntities(keyMatch[1]),
-        uploaded: lastModifiedMatch?.[1]
-          ? new Date(lastModifiedMatch[1])
-          : undefined,
-        size: sizeMatch?.[1] ? Number(sizeMatch[1]) : undefined,
-      });
-    });
-
-    const isTruncated = /<IsTruncated>true<\/IsTruncated>/.test(xml);
-    const nextTokenMatch =
-      xml.match(/<NextContinuationToken>([\s\S]*?)<\/NextContinuationToken>/);
-    continuationToken = nextTokenMatch?.[1]
+  const isTruncated = /<IsTruncated>true<\/IsTruncated>/.test(xml);
+  const nextTokenMatch =
+    xml.match(/<NextContinuationToken>([\s\S]*?)<\/NextContinuationToken>/);
+  return {
+    objects,
+    nextContinuationToken: isTruncated && nextTokenMatch?.[1]
       ? decodeXmlEntities(nextTokenMatch[1])
-      : undefined;
-    if (!isTruncated || !continuationToken) {
-      break;
-    }
-  }
-
-  return objects;
+      : undefined,
+  };
 };
 
 const putObject = async (
@@ -2805,6 +2818,59 @@ const startScanLeaseHeartbeat = (env: Env, leaseToken: string) => {
   };
 };
 
+let registrationScanCursorTableReady: Promise<void> | undefined;
+const ensureRegistrationScanCursorTable = async (env: Env) => {
+  if (!registrationScanCursorTableReady) {
+    const sql = sqlForEnv(env);
+    registrationScanCursorTableReady = sql`
+      CREATE TABLE IF NOT EXISTS worker_registration_scan_cursor (
+        cursor_name TEXT PRIMARY KEY,
+        continuation_token TEXT,
+        updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+      )
+    `.then(() => undefined);
+  }
+  try {
+    await registrationScanCursorTableReady;
+  } catch (error) {
+    registrationScanCursorTableReady = undefined;
+    throw error;
+  }
+};
+
+const getRegistrationScanCursor = async (env: Env) => {
+  await ensureRegistrationScanCursorTable(env);
+  const sql = sqlForEnv(env);
+  const rows = await sql`
+    SELECT continuation_token
+    FROM worker_registration_scan_cursor
+    WHERE cursor_name='registration'
+  ` as unknown as Array<{ continuation_token?: string | null }>;
+  return trimToUndefined(rows[0]?.continuation_token);
+};
+
+const setRegistrationScanCursor = async (
+  env: Env,
+  continuationToken?: string,
+) => {
+  await ensureRegistrationScanCursorTable(env);
+  const sql = sqlForEnv(env);
+  await sql`
+    INSERT INTO worker_registration_scan_cursor (
+      cursor_name,
+      continuation_token,
+      updated_at
+    ) VALUES (
+      'registration',
+      ${continuationToken ?? null},
+      now()
+    )
+    ON CONFLICT (cursor_name) DO UPDATE SET
+      continuation_token=EXCLUDED.continuation_token,
+      updated_at=now()
+  `;
+};
+
 const upsertMediaRow = async (
   env: Env,
   {
@@ -2909,6 +2975,9 @@ const scanAndRegisterWithLease = async (
   let missingProcessingSources = 0;
   let passes = 0;
   const attemptedRegistrationKeys = new Set<string>();
+  const inventoryCursor = await getRegistrationScanCursor(env);
+  const listedObjectsPagePromise = listStoragePage(env, inventoryCursor);
+  let inventoryCursorPersisted = false;
 
   for (let pass = 0; pass < maxRegisterPasses; pass += 1) {
     // Do not fan out direct Postgres connections here.  A large backlog used
@@ -2916,23 +2985,51 @@ const scanAndRegisterWithLease = async (
     // can terminate the scan before any item reaches `registering`.
     // Storage listing can overlap the first query, but database work remains
     // deliberately serial and bounded regardless of backlog size.
-    const listedObjectsPromise = listAllObjects(env);
     const rows = await getMediaRows(env);
     const hintRows = await getPendingUploadRegistrationHints(env);
     const registrationRows = await getRegistrationStatusRows(env);
     const registeredFileMaps = await getRegisteredUploadFileMapRows(env);
     const queuedDeletionPrefixes = await getQueuedDeletionPrefixes(env);
-    const listedObjects = await listedObjectsPromise;
-    const objects = listedObjects.filter(object =>
+    const storagePage = await listedObjectsPagePromise;
+    const listedObjects = storagePage.objects.filter(object =>
       !Array.from(queuedDeletionPrefixes).some(prefix =>
         deletionKeyMatchesPrefix(object.key, prefix)));
-    const objectsByKey = new Map(objects.map(object => [object.key, object]));
+    const objectsByKey = new Map(
+      listedObjects.map(object => [object.key, object]),
+    );
+    // The status table is the durable FIFO queue. Rehydrate queued source
+    // objects that are outside this inventory page without listing the whole
+    // bucket again; their size is fetched only if they are actually claimed.
+    registrationRows.forEach(row => {
+      if (row.status !== 'detected' && row.status !== 'registering') {
+        return;
+      }
+      const sourceUrl = trimToUndefined(row.source_url) || trimToUndefined(row.url);
+      const sourceKey = sourceUrl ? keyFromStorageUrl(env, sourceUrl) : '';
+      if (
+        !sourceKey ||
+        Array.from(queuedDeletionPrefixes).some(prefix =>
+          deletionKeyMatchesPrefix(sourceKey, prefix)) ||
+        objectsByKey.has(sourceKey)
+      ) {
+        return;
+      }
+      objectsByKey.set(sourceKey, {
+        key: sourceKey,
+        uploaded: parseDateValue(row.uploaded_at),
+      });
+    });
+    const objects = Array.from(objectsByKey.values());
     if (pass === 0) {
-      missingProcessingSources = await reconcileMissingProcessingSources(
-        env,
-        rows,
-        new Set(objectsByKey.keys()),
-      );
+      // A partial inventory cannot prove that an unrelated processing source
+      // is missing. Only reconcile when one page is the complete inventory.
+      if (!inventoryCursor && !storagePage.nextContinuationToken) {
+        missingProcessingSources = await reconcileMissingProcessingSources(
+          env,
+          rows,
+          new Set(listedObjects.map(object => object.key)),
+        );
+      }
     }
     const safelyCleanedSourceKeys = new Set<string>();
     for (const fileMap of registeredFileMaps) {
@@ -3154,6 +3251,15 @@ const scanAndRegisterWithLease = async (
     const pendingUploads = Array.from(pendingObjectByKey.values());
 
     await syncDetectedStatuses(env, pendingUploads, registrationRowsByUrl);
+    if (pass === 0 && !inventoryCursorPersisted) {
+      // Advance the cursor only after this page's detected rows are durable.
+      // If the Worker is reclaimed earlier, the same page is safely retried.
+      await setRegistrationScanCursor(
+        env,
+        storagePage.nextContinuationToken,
+      );
+      inventoryCursorPersisted = true;
+    }
     registrationRemaining = pendingUploads.length;
     passes += 1;
     if (pendingUploads.length === 0) { break; }

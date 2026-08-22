@@ -149,10 +149,18 @@ test('a registration scan does not fan out direct database connections for a bac
   const scanEnd = workerSource.indexOf('const scanAndRegister =', scanStart);
   const source = workerSource.slice(scanStart, scanEnd);
 
-  assert.match(source, /const listedObjectsPromise = listAllObjects\(env\)/);
+  assert.match(source, /const listedObjectsPagePromise = listStoragePage\(env, inventoryCursor\)/);
+  assert.match(source, /setRegistrationScanCursor\(/);
   assert.match(source, /const rows = await getMediaRows\(env\)/);
   assert.match(source, /const queuedDeletionPrefixes = await getQueuedDeletionPrefixes\(env\)/);
-  assert.doesNotMatch(source, /Promise\.all\(\[\s*listAllObjects\(env\)/);
+  assert.doesNotMatch(source, /listAllObjects\(env\)/);
+});
+
+test('storage inventory uses a bounded resumable page', () => {
+  assert.match(workerSource, /REGISTRATION_SCAN_PAGE_SIZE = 250/);
+  assert.match(workerSource, /paged.*1/);
+  assert.match(workerSource, /nextContinuationToken/);
+  assert.match(workerSource, /worker_registration_scan_cursor/);
 });
 
 test('registration status and logs expose file-level queue progress', () => {
@@ -171,7 +179,7 @@ test('Drive registration I/O is deadline-bound so a scan lease cannot stick fore
   assert.equal(SCAN_LEASE_SECONDS, 90);
   assert.match(workerSource, /String\(SCAN_LEASE_SECONDS\)\} \|\| ' seconds'/);
 
-  const listStart = workerSource.indexOf('const listAllObjects');
+  const listStart = workerSource.indexOf('const listStoragePage');
   const listEnd = workerSource.indexOf('const putObject', listStart);
   assert.match(
     workerSource.slice(listStart, listEnd),
