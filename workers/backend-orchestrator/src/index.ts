@@ -258,7 +258,7 @@ const GENERATED_MEDIA_SUFFIX_REGEX =
 const STALE_REGISTRATION_ERROR_MESSAGE =
   'Previous registration attempt stalled; queued for retry';
 const MISSING_UPLOAD_ERROR_PREFIX = 'Upload not found in storage';
-const WORKER_BUILD_ID = 'v82';
+const WORKER_BUILD_ID = 'v84';
 // A scheduled Worker must finish promptly. Drive copies can become visible
 // asynchronously, so persist the in-flight state and check again on the next
 // minute instead of polling long enough to lose the registration lease.
@@ -5268,21 +5268,6 @@ export default {
       // disable the scheduled registration run.
       console.warn('Unable to log scheduled registration trigger', error);
     }));
-    const settings = await getRuntimeProcessingSettingsForTrigger(env);
-    ctx.waitUntil(logBackendActivity(env, {
-      category: 'orchestrator',
-      event: 'scheduled_scan_dispatch',
-      status: 'info',
-      message: 'Scheduled registration dispatch evaluated',
-      details: {
-        orchestratorEnabled: settings.orchestratorEnabled,
-        registrationEnabled: settings.registrationEnabled,
-        registerBatchSize: settings.registerBatchSize,
-        maxRegisterPasses: settings.maxRegisterPasses,
-      },
-    }).catch(error => {
-      console.warn('Unable to log scheduled scan dispatch', error);
-    }));
     // Cleanup is independent of registration. It can hit a slow database or
     // storage operation, so it must never hold the scheduled registration
     // path hostage. Keep it alive separately and start the FIFO scan now.
@@ -5295,40 +5280,79 @@ export default {
         );
       }));
     }
-    if (!settings.orchestratorEnabled || !settings.registrationEnabled) {
+    // A Supabase settings socket can remain pending after its own query
+    // timeout. Do not await that socket in the scheduled handler: one stuck
+    // lookup previously allowed triggers to be logged while no registration
+    // scan was ever dispatched. Use the last cached settings when available,
+    // otherwise dispatch the safe enabled defaults after a short grace period;
+    // a successful panel lookup still wins if it completes first.
+    const fallbackSettings = runtimeSettingsCache?.settings ??
+      getDefaultRuntimeProcessingSettings(env);
+    let dispatched = false;
+    let fallbackTimer: ReturnType<typeof setTimeout> | undefined;
+    const dispatch = (settings: RuntimeProcessingSettings) => {
+      if (dispatched) { return; }
+      dispatched = true;
+      if (fallbackTimer) { clearTimeout(fallbackTimer); }
       ctx.waitUntil(logBackendActivity(env, {
         category: 'orchestrator',
-        event: 'scheduled_scan_skipped',
-        status: 'warning',
-        message: 'Scheduled registration skipped because it is disabled',
+        event: 'scheduled_scan_dispatch',
+        status: 'info',
+        message: 'Scheduled registration dispatch evaluated',
+        details: {
+          orchestratorEnabled: settings.orchestratorEnabled,
+          registrationEnabled: settings.registrationEnabled,
+          registerBatchSize: settings.registerBatchSize,
+          maxRegisterPasses: settings.maxRegisterPasses,
+        },
       }).catch(error => {
-        console.warn('Unable to log scheduled scan skip', error);
+        console.warn('Unable to log scheduled scan dispatch', error);
       }));
-      return;
-    }
-    const scan = startScan(
-      envWithRuntimeSettings(env, settings),
-      {
-        ...{ shareInFlight: false },
-        waitUntil: promise => ctx.waitUntil(promise),
-      },
-    );
-    ctx.waitUntil(logBackendActivity(env, {
-      category: 'orchestrator',
-      event: 'scheduled_scan_queued',
-      status: 'info',
-      message: scan.started
-        ? 'Scheduled registration scan queued'
-        : 'Scheduled registration scan joined an existing run',
-      details: { scanStarted: scan.started },
-    }).catch(error => {
-      console.warn('Unable to log scheduled scan queue state', error);
-    }));
-    if (scan.started) {
-      ctx.waitUntil(scan.promise.catch(error => {
-        console.warn('Scheduled registration scan failed', error);
+      if (!settings.orchestratorEnabled || !settings.registrationEnabled) {
+        ctx.waitUntil(logBackendActivity(env, {
+          category: 'orchestrator',
+          event: 'scheduled_scan_skipped',
+          status: 'warning',
+          message: 'Scheduled registration skipped because it is disabled',
+        }).catch(error => {
+          console.warn('Unable to log scheduled scan skip', error);
+        }));
+        return;
+      }
+      const scan = startScan(
+        envWithRuntimeSettings(env, settings),
+        {
+          ...{ shareInFlight: false },
+          waitUntil: promise => ctx.waitUntil(promise),
+        },
+      );
+      ctx.waitUntil(logBackendActivity(env, {
+        category: 'orchestrator',
+        event: 'scheduled_scan_queued',
+        status: 'info',
+        message: scan.started
+          ? 'Scheduled registration scan queued'
+          : 'Scheduled registration scan joined an existing run',
+        details: { scanStarted: scan.started },
+      }).catch(error => {
+        console.warn('Unable to log scheduled scan queue state', error);
       }));
-    }
+      if (scan.started) {
+        ctx.waitUntil(scan.promise.catch(error => {
+          console.warn('Scheduled registration scan failed', error);
+        }));
+      }
+    };
+    fallbackTimer = setTimeout(() => dispatch(fallbackSettings), 1_500);
+    ctx.waitUntil((async () => {
+      try {
+        const settings = await getRuntimeProcessingSettingsForTrigger(env);
+        dispatch(settings);
+      } catch (error) {
+        console.warn('Scheduled settings lookup failed; dispatching fallback', error);
+        dispatch(fallbackSettings);
+      }
+    })());
   },
 
   async fetch(request: Request, env: Env, ctx: ExecutionContext) {
