@@ -263,7 +263,7 @@ const GENERATED_MEDIA_SUFFIX_REGEX =
 const STALE_REGISTRATION_ERROR_MESSAGE =
   'Previous registration attempt stalled; queued for retry';
 const MISSING_UPLOAD_ERROR_PREFIX = 'Upload not found in storage';
-const WORKER_BUILD_ID = 'v78';
+const WORKER_BUILD_ID = 'v79';
 // A scheduled Worker must finish promptly. Drive copies can become visible
 // asynchronously, so persist the in-flight state and check again on the next
 // minute instead of polling long enough to lose the registration lease.
@@ -1986,6 +1986,7 @@ const copyObject = async (
   env: Env,
   sourceKey: string,
   destinationKey: string,
+  expectedSize?: number,
 ) => {
   if (isDriveStorageEnabled(env)) {
     try {
@@ -2036,14 +2037,22 @@ const copyObject = async (
       // minute queued retry. Preserve the endpoint's verified result.
       return { verified: true };
     } catch (error) {
-      if (
-        isDriveTimeoutLikeError(error) &&
-        await waitForDriveDestination(env, destinationKey)
-      ) {
-        // A timeout only proves that the destination exists, not that its
-        // size matches the source. Keep the explicit verification path for
-        // this case.
-        return { verified: false };
+      if (isDriveTimeoutLikeError(error)) {
+        // The Drive endpoint is synchronous and may still be copying when
+        // the Worker request reaches its 15s limit. Do one short exact-size
+        // probe, then persist the row as registering for the next scan. Do
+        // not nest the old 30s existence and size polls here: they could hold
+        // the global scan lease for several minutes and make every cron tick
+        // report scanSkipped=true.
+        const destinationSize = await storageObjectSize(
+          env,
+          destinationKey,
+          REGISTRATION_READY_CHECK_TIMEOUT_MS,
+        ).catch(() => undefined);
+        if (isExactVerifiedStorageCopy(expectedSize, destinationSize)) {
+          return { verified: true, pending: false };
+        }
+        return { verified: false, pending: true };
       }
       throw error;
     }
@@ -2063,8 +2072,8 @@ const copyAndVerifyObject = async (
   destinationKey: string,
   expectedSize?: number,
 ) => {
-  const copyResult = await copyObject(env, sourceKey, destinationKey);
-  if (copyResult.verified) {
+  const copyResult = await copyObject(env, sourceKey, destinationKey, expectedSize);
+  if (copyResult.verified || copyResult.pending) {
     return;
   }
 
@@ -2073,7 +2082,11 @@ const copyAndVerifyObject = async (
     : expectedSize;
   const destinationSize = await waitForVerifiedStorageCopy({
     sourceSize,
-    readDestinationSize: () => storageObjectSize(env, destinationKey),
+    readDestinationSize: () => storageObjectSize(
+      env,
+      destinationKey,
+      REGISTRATION_READY_CHECK_TIMEOUT_MS,
+    ),
     attempts: isDriveStorageEnabled(env)
       ? DRIVE_COPY_VISIBILITY_ATTEMPTS
       : 1,
@@ -2348,28 +2361,6 @@ const findReadyRegistrationKeys = async (
     }
   }));
   return readyKeys;
-};
-
-const waitForDriveDestination = async (
-  env: Env,
-  destinationKey: string,
-  {
-    attempts = DRIVE_RETRY_TARGET_VISIBILITY_ATTEMPTS,
-    delayMs = DRIVE_COPY_VISIBILITY_DELAY_MS,
-  }: {
-    attempts?: number
-    delayMs?: number
-  } = {},
-) => {
-  for (let attempt = 0; attempt < attempts; attempt += 1) {
-    if (await driveObjectExists(env, destinationKey).catch(() => false)) {
-      return true;
-    }
-    if (attempt < attempts - 1) {
-      await sleep(delayMs);
-    }
-  }
-  return false;
 };
 
 let uploadRegistrationHintsTableReady: Promise<void> | undefined;
@@ -3317,6 +3308,7 @@ const cleanupRegisteredSourceFiles = async (
   }).slice(0, REGISTERED_SOURCE_CLEANUP_LIMIT);
   for (const fileMap of eligible) {
     const sourceKey = keyFromStorageUrl(env, fileMap.source_url);
+    const storedKey = keyFromStorageUrl(env, fileMap.stored_url);
     if (!sourceKey) continue;
     try {
       await deleteObject(env, sourceKey);
@@ -3352,6 +3344,7 @@ const startScanLeaseHeartbeat = (env: Env, leaseToken: string) => {
       })
       .catch(error => {
         if (!stopped) {
+          leaseLost = true;
           console.warn('Worker registration scan lease heartbeat failed', error);
         }
       })
