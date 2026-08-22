@@ -64,6 +64,42 @@ export const INITIAL_BACKEND_STATUS_STATE: BackendStatusState = {
   consecutiveFailures: 0,
 };
 
+const BACKEND_STATUS_CACHE_KEY = 'media-panel:backend-status:v1';
+
+export const readCachedBackendStatusState = (): BackendStatusState => {
+  if (typeof window === 'undefined') {
+    return INITIAL_BACKEND_STATUS_STATE;
+  }
+  try {
+    const value = window.localStorage.getItem(BACKEND_STATUS_CACHE_KEY);
+    if (!value) { return INITIAL_BACKEND_STATUS_STATE; }
+    const parsed = JSON.parse(value) as BackendStatusState;
+    if (!parsed || typeof parsed !== 'object' || !parsed.lastConnected) {
+      return INITIAL_BACKEND_STATUS_STATE;
+    }
+    return {
+      latest: parsed.lastConnected,
+      lastConnected: parsed.lastConnected,
+      lastConnectedAt: parsed.lastConnectedAt,
+      consecutiveFailures: 0,
+    };
+  } catch {
+    return INITIAL_BACKEND_STATUS_STATE;
+  }
+};
+
+export const writeCachedBackendStatusState = (state: BackendStatusState) => {
+  if (typeof window === 'undefined' || !state.lastConnected) { return; }
+  try {
+    window.localStorage.setItem(BACKEND_STATUS_CACHE_KEY, JSON.stringify({
+      lastConnected: state.lastConnected,
+      lastConnectedAt: state.lastConnectedAt,
+    }));
+  } catch {
+    // Storage can be disabled or full; live status must continue normally.
+  }
+};
+
 export const recordBackendStatusProbe = (
   state: BackendStatusState,
   probe: BackendStatus,

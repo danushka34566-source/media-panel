@@ -35,6 +35,24 @@ export default function Modal({
 }) {
   const router = useRouter();
 
+  useEffect(() => {
+    // Keep wheel/touch scrolling inside the modal while it is open. Preserve
+    // the scrollbar compensation so the page underneath does not jump when
+    // the lock is applied or removed.
+    const body = document.body;
+    const previousOverflow = body.style.overflow;
+    const previousPaddingRight = body.style.paddingRight;
+    const scrollbarWidth = window.innerWidth - document.documentElement.clientWidth;
+    body.style.overflow = 'hidden';
+    if (scrollbarWidth > 0) {
+      body.style.paddingRight = `${scrollbarWidth}px`;
+    }
+    return () => {
+      body.style.overflow = previousOverflow;
+      body.style.paddingRight = previousPaddingRight;
+    };
+  }, []);
+
   const prefersReducedMotion = usePrefersReducedMotion();
 
   const contentRef = useRef<HTMLDivElement>(null);
@@ -77,6 +95,7 @@ export default function Modal({
           ? 'items-start pt-4 sm:pt-12 lg:pt-24'
           : 'items-center',
         'backdrop-blur-xl supports-[backdrop-filter]:backdrop-saturate-150',
+        'overscroll-contain',
       )}
       initial={!prefersReducedMotion
         ? {

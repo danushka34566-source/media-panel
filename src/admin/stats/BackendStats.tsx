@@ -21,8 +21,10 @@ import {
   INITIAL_BACKEND_STATUS_STATE,
   getBackendStatusSnapshot,
   isBackendStatusTransient,
+  readCachedBackendStatusState,
   recordBackendStatusProbe,
   type BackendStatus,
+  writeCachedBackendStatusState,
 } from './status-state';
 
 const formatDate = (value?: string) => {
@@ -56,6 +58,10 @@ export default function BackendStats() {
   >();
 
   useEffect(() => {
+    const cached = readCachedBackendStatusState();
+    if (cached.lastConnected) {
+      setStatusState(cached);
+    }
     let active = true;
     let timer: number | undefined;
     let controller: AbortController | undefined;
@@ -132,6 +138,12 @@ export default function BackendStats() {
     };
   }, []);
 
+  useEffect(() => {
+    if (statusState.lastConnected) {
+      writeCachedBackendStatusState(statusState);
+    }
+  }, [statusState]);
+
   const latest = statusState.latest;
   const snapshot = getBackendStatusSnapshot(statusState);
   const isTransient = isBackendStatusTransient(statusState);
@@ -158,6 +170,12 @@ export default function BackendStats() {
     : jobs
       .filter(job => job.transcode_status === 'pending' || job.transcode_status === 'failed')
       .slice(0, 3);
+  const hasRegistrationQueue = Boolean(
+    registrationJobs.length || registrationQueue.total,
+  );
+  const hasProcessingQueue = Boolean(
+    jobs.length || snapshot?.pending || snapshot?.processing || snapshot?.failed,
+  );
 
   const connectionText = useMemo(() => {
     if (!latest) { return 'Connecting…'; }
@@ -282,7 +300,7 @@ export default function BackendStats() {
       />
     </ScoreCard>
 
-    <ScoreCard title={<div className="flex w-full items-center justify-between gap-3">
+    {hasRegistrationQueue && <ScoreCard title={<div className="flex w-full items-center justify-between gap-3">
       <span>Registration activity</span>
       <button
         type="button"
@@ -337,7 +355,7 @@ export default function BackendStats() {
             </div>}
           />;
         })}
-    </ScoreCard>
+    </ScoreCard>}
 
     <ScoreCard title="Processor workers">
       <ScoreCardRow icon={<FiServer size={17} />} content={processorSummary} />
@@ -361,7 +379,7 @@ export default function BackendStats() {
       />)}
     </ScoreCard>
 
-    <ScoreCard title={<div className="flex w-full items-center justify-between gap-3">
+    {hasProcessingQueue && <ScoreCard title={<div className="flex w-full items-center justify-between gap-3">
       <span>Media processing activity</span>
       <button
         type="button"
@@ -422,7 +440,7 @@ export default function BackendStats() {
             </div>
           </div>}
         />)}
-    </ScoreCard>
+    </ScoreCard>}
 
     {isLogsOpen && <BackendLogsModal onClose={() => setIsLogsOpen(false)} />}
     {queueModal && <BackendQueueModal
