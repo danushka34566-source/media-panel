@@ -245,7 +245,11 @@ test('stalled registration rows are requeued instead of left as permanent errors
   assert.match(source, /status='detected'/);
   assert.match(source, /error_message=NULL/);
   assert.match(workerSource, /Previous registration attempt stalled; queued for retry/);
-  assert.doesNotMatch(source, /status='error'/);
+  // Transient Drive failures are also requeued by this maintenance pass. The
+  // permanent error state may therefore appear only in the recovery predicate,
+  // never as the target state of the update.
+  assert.match(source, /WHERE status='error'/);
+  assert.doesNotMatch(source, /SET\s+status='error'/);
 });
 
 test('manual retries explicitly requeue the matching registration record', () => {
@@ -567,6 +571,9 @@ test('delayed Drive copy visibility remains recoverable', () => {
   assert.equal(isRecoverableDriveCopyError(new Error(
     'Drive copy failed (403)',
   )), false);
+  assert.equal(isRecoverableDriveCopyError(new Error(
+    'Drive copy failed (520): error code: 520',
+  )), true);
 });
 
 test('a generated retry destination is not treated as a separate upload', () => {

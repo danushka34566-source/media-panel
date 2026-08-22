@@ -258,7 +258,7 @@ const GENERATED_MEDIA_SUFFIX_REGEX =
 const STALE_REGISTRATION_ERROR_MESSAGE =
   'Previous registration attempt stalled; queued for retry';
 const MISSING_UPLOAD_ERROR_PREFIX = 'Upload not found in storage';
-const WORKER_BUILD_ID = 'v74';
+const WORKER_BUILD_ID = 'v75';
 // A scheduled Worker must finish promptly. Drive copies can become visible
 // asynchronously, so persist the in-flight state and check again on the next
 // minute instead of polling long enough to lose the registration lease.
@@ -983,6 +983,7 @@ export const isRecoverableDriveCopyError = (error: unknown) => {
     ? error.message
     : String(error ?? '');
   return (
+    /^Drive copy failed \(5\d{2}\)/i.test(message) ||
     message.startsWith('Drive copy not ready:') ||
     message.startsWith('Copied destination is not readable in storage:') ||
     message.startsWith('Copied destination size mismatch:')
@@ -2581,7 +2582,27 @@ const clearStaleRegistrationStatuses = async (env: Env) => {
       )
     RETURNING url
   ` as unknown as Array<{ url: string }>;
-  return recoveredRows.length;
+  // A transient Drive 5xx can be reported after the copy request has already
+  // reached the storage service. Keep those rows in the durable queue instead
+  // of requiring a manual retry or leaving a permanent registration error.
+  const transientErrorRows = await sql`
+    UPDATE worker_registration_status
+    SET
+      status='detected',
+      error_message=NULL,
+      updated_at=now()
+    WHERE status='error'
+      AND (
+        error_message LIKE 'Drive copy failed (5%'
+        OR error_message LIKE 'Drive copy not ready:%'
+        OR error_message LIKE 'Copied destination is not readable in storage:%'
+        OR error_message LIKE 'Copied destination size mismatch:%'
+        OR error_message ILIKE '%timed out%'
+        OR error_message ILIKE '%timeout%'
+      )
+    RETURNING url
+  ` as unknown as Array<{ url: string }>;
+  return recoveredRows.length + transientErrorRows.length;
 };
 
 const clearOldCompletedRegistrationStatuses = async (env: Env) => {
