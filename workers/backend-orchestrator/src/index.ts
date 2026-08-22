@@ -233,7 +233,7 @@ const GENERATED_MEDIA_SUFFIX_REGEX =
 const STALE_REGISTRATION_ERROR_MESSAGE =
   'Previous registration attempt stalled; queued for retry';
 const MISSING_UPLOAD_ERROR_PREFIX = 'Upload not found in storage';
-const WORKER_BUILD_ID = 'registration-retry-v49';
+const WORKER_BUILD_ID = 'registration-retry-v50';
 // A scheduled Worker must finish promptly. Drive copies can become visible
 // asynchronously, so persist the in-flight state and check again on the next
 // minute instead of polling long enough to lose the registration lease.
@@ -2293,8 +2293,7 @@ const clearResolvedRegistrationStatuses = async (env: Env) => {
     WHERE EXISTS (
       SELECT 1
       FROM media m
-      WHERE (s.media_id IS NOT NULL AND m.id=s.media_id)
-        OR m.url=s.url
+      WHERE m.url=s.url
         OR (s.source_url IS NOT NULL AND m.url=s.source_url)
     )
       OR EXISTS (
@@ -2355,6 +2354,7 @@ type RegistrationStatusWrite = {
   mediaId?: string
   extension?: string
   errorMessage?: string
+  touchUpdatedAt?: boolean
 };
 
 type HlsArtifactMetadata = {
@@ -2368,6 +2368,26 @@ const upsertRegistrationStatusBatch = async (
   env: Env,
   rows: RegistrationStatusWrite[],
 ) => {
+  const preserveUpdatedAtRows = rows.filter(row => row.touchUpdatedAt === false);
+  for (const row of preserveUpdatedAtRows) {
+    const sql = sqlForEnv(env);
+    await sql`
+      UPDATE worker_registration_status
+      SET
+        file_name=COALESCE(${row.fileName ?? null}, file_name),
+        uploaded_at=COALESCE(${row.uploadedAt ?? null}, uploaded_at),
+        status=${row.status},
+        source_url=COALESCE(${row.sourceUrl ?? null}, source_url),
+        original_file_name=COALESCE(${row.originalFileName ?? null}, original_file_name),
+        title=COALESCE(${row.title ?? null}, title),
+        media_id=COALESCE(${row.mediaId ?? null}, media_id),
+        extension=COALESCE(${row.extension ?? null}, extension),
+        error_message=${row.errorMessage ?? null}
+      WHERE url=${row.url} OR source_url=${row.url}
+    `;
+  }
+  rows = rows.filter(row => row.touchUpdatedAt !== false);
+  if (rows.length === 0) return;
   const payload = JSON.stringify(rows.map(({
     url,
     fileName,
@@ -3450,6 +3470,16 @@ const scanAndRegisterWithLease = async (
           },
           commitRegistration: async () => {
             registrationPhase = 'committing';
+            // Persist the source-to-destination identity first. If the
+            // database connection drops afterward, the next scan can reuse
+            // this media ID instead of creating a second media row.
+            await upsertRegisteredUploadFileMap(env, {
+              mediaId,
+              originalFileName,
+              storedFileName: registeredFileName,
+              storedUrl: registrationUrl,
+              sourceUrl,
+            });
             if (shouldUpsertMediaRow) {
               const mediaType = VIDEO_EXTENSIONS.has(extension) ? 'video' : 'photo';
               const uploadedAt = object.uploaded?.toISOString() || new Date().toISOString();
@@ -3468,13 +3498,6 @@ const scanAndRegisterWithLease = async (
                 takenAtNaive: toNaivePostgresString(uploadedAt),
               });
             }
-            await upsertRegisteredUploadFileMap(env, {
-              mediaId,
-              originalFileName,
-              storedFileName: registeredFileName,
-              storedUrl: registrationUrl,
-              sourceUrl,
-            });
           },
           cleanupSource: async () => {
             if (registrationUrl !== sourceUrl) {
@@ -3557,6 +3580,7 @@ const scanAndRegisterWithLease = async (
             : error instanceof Error
               ? error.message
               : String(error ?? 'Registration failed'),
+          touchUpdatedAt: isRecoverableCopyDelay ? false : undefined,
         }).catch(() => undefined);
         await logBackendActivity(env, {
           category: 'registration',
