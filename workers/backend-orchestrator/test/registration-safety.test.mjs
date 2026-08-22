@@ -165,8 +165,8 @@ test('a registration scan does not fan out direct database connections for a bac
 
 test('storage inventory uses a bounded resumable page', () => {
   assert.match(workerSource, /REGISTRATION_SCAN_PAGE_SIZE = 100/);
-  assert.match(workerSource, /registrationAttemptsPerScan: getNumber\(env\.REGISTRATION_ATTEMPTS_PER_SCAN, 1/);
-  assert.match(workerSource, /Math\.min\(registerBatchSize, registrationAttemptsPerScan/);
+  assert.match(workerSource, /const registerBatchSize = configuredRegisterBatchSize/);
+  assert.match(workerSource, /const maxRegisterPasses = configuredMaxRegisterPasses/);
   assert.match(workerSource, /paged.*1/);
   assert.match(workerSource, /nextContinuationToken/);
   assert.match(workerSource, /worker_registration_scan_cursor/);

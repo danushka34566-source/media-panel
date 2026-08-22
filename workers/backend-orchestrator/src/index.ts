@@ -86,7 +86,6 @@ export interface Env {
   BACKEND_PROCESSOR_SHARED_SECRET?: string
   REGISTER_BATCH_SIZE?: string
   MAX_REGISTER_PASSES?: string
-  REGISTRATION_ATTEMPTS_PER_SCAN?: string
   STALE_PROCESSING_MINUTES?: string
   STALE_REGISTRATION_MINUTES?: string
   REGISTRATION_HISTORY_DAYS?: string
@@ -103,7 +102,6 @@ type RuntimeProcessingSettings = {
   videoProcessingEnabled: boolean
   registerBatchSize: number
   maxRegisterPasses: number
-  registrationAttemptsPerScan: number
   staleProcessingMinutes: number
   staleRegistrationMinutes: number
   registrationHistoryDays: number
@@ -166,7 +164,6 @@ const getRuntimeProcessingSettings = async (env: Env) => {
     defaults.videoProcessingEnabled = enabled('videoProcessingEnabled', true);
     defaults.registerBatchSize = number('registerBatchSize', defaults.registerBatchSize, 1, 100);
     defaults.maxRegisterPasses = number('maxRegisterPasses', defaults.maxRegisterPasses, 1, 20);
-    defaults.registrationAttemptsPerScan = number('registrationAttemptsPerScan', defaults.registrationAttemptsPerScan, 1, 3);
     defaults.staleProcessingMinutes = number('staleProcessingMinutes', defaults.staleProcessingMinutes, 1, 1440);
     defaults.staleRegistrationMinutes = number('staleRegistrationMinutes', defaults.staleRegistrationMinutes, 1, 1440);
     defaults.registrationHistoryDays = number('registrationHistoryDays', defaults.registrationHistoryDays, 1, 365);
@@ -187,7 +184,6 @@ const getDefaultRuntimeProcessingSettings = (env: Env): RuntimeProcessingSetting
     videoProcessingEnabled: true,
     registerBatchSize: getNumber(env.REGISTER_BATCH_SIZE, 2, { min: 1, max: 100 }),
     maxRegisterPasses: getNumber(env.MAX_REGISTER_PASSES, 2, { min: 1, max: 20 }),
-    registrationAttemptsPerScan: getNumber(env.REGISTRATION_ATTEMPTS_PER_SCAN, 1, { min: 1, max: 3 }),
     staleProcessingMinutes: getNumber(env.STALE_PROCESSING_MINUTES, 2, { min: 1, max: 1440 }),
     staleRegistrationMinutes: getNumber(env.STALE_REGISTRATION_MINUTES, 5, { min: 1, max: 1440 }),
     registrationHistoryDays: getNumber(env.REGISTRATION_HISTORY_DAYS, 14, { min: 1, max: 365 }),
@@ -227,7 +223,6 @@ const envWithRuntimeSettings = (
   ...env,
   REGISTER_BATCH_SIZE: String(settings.registerBatchSize),
   MAX_REGISTER_PASSES: String(settings.maxRegisterPasses),
-  REGISTRATION_ATTEMPTS_PER_SCAN: String(settings.registrationAttemptsPerScan),
   STALE_PROCESSING_MINUTES: String(settings.staleProcessingMinutes),
   STALE_REGISTRATION_MINUTES: String(settings.staleRegistrationMinutes),
   REGISTRATION_HISTORY_DAYS: String(settings.registrationHistoryDays),
@@ -263,7 +258,7 @@ const GENERATED_MEDIA_SUFFIX_REGEX =
 const STALE_REGISTRATION_ERROR_MESSAGE =
   'Previous registration attempt stalled; queued for retry';
 const MISSING_UPLOAD_ERROR_PREFIX = 'Upload not found in storage';
-const WORKER_BUILD_ID = 'v80';
+const WORKER_BUILD_ID = 'v81';
 // A scheduled Worker must finish promptly. Drive copies can become visible
 // asynchronously, so persist the in-flight state and check again on the next
 // minute instead of polling long enough to lose the registration lease.
@@ -3690,23 +3685,10 @@ const scanAndRegisterWithLease = async (
     min: 1,
     max: 10,
   });
-  const registrationAttemptsPerScan = getNumber(
-    env.REGISTRATION_ATTEMPTS_PER_SCAN,
-    1,
-    { min: 1, max: 3 },
-  );
-  // Keep the configured values visible to the panel, but enforce a bounded
-  // per-invocation budget for the actual Drive registration work. The budget
-  // is database-backed through runtime settings and can be changed without a
-  // code edit or redeploy.
-  const registerBatchSize = Math.min(
-    configuredRegisterBatchSize,
-    registrationAttemptsPerScan,
-  );
-  const maxRegisterPasses = Math.min(
-    configuredMaxRegisterPasses,
-    registrationAttemptsPerScan,
-  );
+  // Use the existing panel-backed queue settings directly. They are loaded
+  // from processing_configuration before the scheduled scan starts.
+  const registerBatchSize = configuredRegisterBatchSize;
+  const maxRegisterPasses = configuredMaxRegisterPasses;
   const staleRegistrationMinutes = getNumber(env.STALE_REGISTRATION_MINUTES, 15, {
     min: 1,
     max: 24 * 60,
@@ -3714,7 +3696,6 @@ const scanAndRegisterWithLease = async (
 
   let registered = 0;
   let registrationRemaining = 0;
-  let registrationAttempts = 0;
   let missingProcessingSources = 0;
   let passes = 0;
   const attemptedRegistrationKeys = new Set<string>();
@@ -3730,7 +3711,6 @@ const scanAndRegisterWithLease = async (
   let deferredObjectsByKey = new Map<string, R2ObjectLike>();
 
   for (let pass = 0; pass < maxRegisterPasses; pass += 1) {
-    if (registrationAttempts >= registrationAttemptsPerScan) break;
     // Do not fan out direct Postgres connections here.  A large backlog used
     // to make this single scan open several pooler connections at once, which
     // can terminate the scan before any item reaches `registering`.
@@ -4018,7 +3998,7 @@ const scanAndRegisterWithLease = async (
     const batch = selectOldestRegistrationBatch(
       pendingUploads,
       attemptedRegistrationKeys,
-      Math.min(registerBatchSize, registrationAttemptsPerScan - registrationAttempts),
+      registerBatchSize,
       deferredRegistrationKeys,
     );
     if (batch.length === 0) {
@@ -4039,7 +4019,6 @@ const scanAndRegisterWithLease = async (
         throw new Error('Worker registration scan lease was lost');
       }
       attemptedRegistrationKeys.add(object.key);
-      registrationAttempts += 1;
       const sourceUrl = urlForKey(env, object.key);
       let registrationUrl = sourceUrl;
       const { fileName, extension } = getFileParts(object.key);
@@ -5294,7 +5273,6 @@ export default {
         registrationEnabled: settings.registrationEnabled,
         registerBatchSize: settings.registerBatchSize,
         maxRegisterPasses: settings.maxRegisterPasses,
-        registrationAttemptsPerScan: settings.registrationAttemptsPerScan,
       },
     }).catch(error => {
       console.warn('Unable to log scheduled scan dispatch', error);

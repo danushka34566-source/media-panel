@@ -65,7 +65,6 @@ export async function POST(request: NextRequest) {
       : '1',
     REGISTER_BATCH_SIZE: String(settings.registerBatchSize),
     MAX_REGISTER_PASSES: String(settings.maxRegisterPasses),
-    REGISTRATION_ATTEMPTS_PER_SCAN: String(settings.registrationAttemptsPerScan),
     STALE_PROCESSING_MINUTES: String(settings.staleProcessingMinutes),
     STALE_REGISTRATION_MINUTES: String(settings.staleRegistrationMinutes),
     REGISTRATION_HISTORY_DAYS: String(settings.registrationHistoryDays),
