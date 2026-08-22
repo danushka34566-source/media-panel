@@ -105,6 +105,15 @@ test('detected and registering status transitions use batch database writes', ()
   );
 });
 
+test('only an in-progress registration is recovered as stalled', () => {
+  const staleStart = workerSource.indexOf('const clearStaleRegistrationStatuses');
+  const staleEnd = workerSource.indexOf('const clearOldCompletedRegistrationStatuses', staleStart);
+  const staleSource = workerSource.slice(staleStart, staleEnd);
+
+  assert.match(staleSource, /WHERE status='registering'/);
+  assert.doesNotMatch(staleSource, /status IN \('detected', 'registering'\)/);
+});
+
 test('a registration scan does not fan out direct database connections for a backlog', () => {
   const scanStart = workerSource.indexOf('const scanAndRegisterWithLease');
   const scanEnd = workerSource.indexOf('const scanAndRegister =', scanStart);
