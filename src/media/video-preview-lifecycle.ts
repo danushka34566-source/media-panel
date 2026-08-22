@@ -181,7 +181,7 @@ const getObserver = () => {
           : 0;
       }
     });
-    scheduleActivePreviewUpdate();
+    updateActivePreviews();
   }, {
     root: null,
     threshold: 0,
@@ -282,7 +282,7 @@ const onFullscreenChange = () => {
 export const setFullVideoPlaybackActive = (isActive: boolean) => {
   if (isFullVideoPlaybackActive === isActive) { return; }
   isFullVideoPlaybackActive = isActive;
-  scheduleActivePreviewUpdate();
+  updateActivePreviews();
 };
 
 const addMediaQueryListener = (query: MediaQueryList) => {
@@ -417,7 +417,14 @@ export default function useVideoPreviewLifecycle({
     // first paint instead of waiting for a later scroll or observer callback.
     releaseStaleFullVideoPlayback();
     entry.intersectionRatio = isInViewport(element) ? 1 : 0;
-    scheduleActivePreviewUpdate();
+    // Small lists benefit from immediate activation (and avoid a blank first
+    // frame). Once a detail/full page has many cards, defer repeated geometry
+    // scans to one frame instead of doing O(n²) work during mount.
+    if (entries.size <= 20) {
+      updateActivePreviews();
+    } else {
+      scheduleActivePreviewUpdate();
+    }
     getObserver()?.observe(element);
     scheduleViewportRefresh();
 
