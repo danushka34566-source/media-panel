@@ -196,6 +196,12 @@ export default function ProcessingConfigurationForm({
           defaultValue={settings.registerBatchSize}
         />
         <NumberSetting
+          name="registrationAttemptsPerScan"
+          label="Concurrent registration attempts"
+          description="Bounded files attempted per scheduled scan; changes are read from the database by the worker."
+          defaultValue={settings.registrationAttemptsPerScan}
+        />
+        <NumberSetting
           name="maxRegisterPasses"
           label="Maximum registration passes"
           description="Registration passes performed by one scan."
