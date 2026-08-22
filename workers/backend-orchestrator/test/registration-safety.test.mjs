@@ -366,6 +366,16 @@ test('processor termination returns the claimed job to the retry queue', () => {
   assert.equal(shouldRetryInterruptedJob('Unsupported video codec'), false);
 });
 
+test('scheduled maintenance requeues transient processing failures', () => {
+  const start = workerSource.indexOf('const retryStaleProcessing');
+  const end = workerSource.indexOf('let registeredUploadFileMapTableReady', start);
+  const source = workerSource.slice(start, end);
+  assert.match(source, /transcode_status='failed'/);
+  assert.match(source, /drive\|storage/);
+  assert.match(source, /5\[0-9\]\[0-9\]/);
+  assert.match(source, /Transient processing failure was returned to the pending queue/);
+});
+
 test('processor stream uploads are restricted to safe derivative keys', () => {
   assert.equal(isAllowedStreamDerivativeKey('124399888136-stream.mp4'), true);
   assert.equal(isAllowedStreamDerivativeKey('show-name-stream.webm'), true);

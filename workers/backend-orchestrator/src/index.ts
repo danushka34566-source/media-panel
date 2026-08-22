@@ -258,7 +258,7 @@ const GENERATED_MEDIA_SUFFIX_REGEX =
 const STALE_REGISTRATION_ERROR_MESSAGE =
   'Previous registration attempt stalled; queued for retry';
 const MISSING_UPLOAD_ERROR_PREFIX = 'Upload not found in storage';
-const WORKER_BUILD_ID = 'v59';
+const WORKER_BUILD_ID = 'v60';
 // A scheduled Worker must finish promptly. Drive copies can become visible
 // asynchronously, so persist the in-flight state and check again on the next
 // minute instead of polling long enough to lose the registration lease.
@@ -519,6 +519,54 @@ const json = (status: number, body: unknown) =>
       'Content-Type': 'application/json',
     },
   });
+
+const workerLandingPage = () => `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <meta name="color-scheme" content="dark">
+    <title>Media Panel</title>
+    <style>
+      :root{color-scheme:dark;font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:#07111f;color:#e6edf7}
+      *{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;overflow-x:hidden;background:radial-gradient(circle at 12% 12%,#4f46e555,transparent 34%),radial-gradient(circle at 88% 88%,#06b6d455,transparent 36%),#07111f}
+      body:before{content:"";position:fixed;inset:0;pointer-events:none;opacity:.2;background-image:linear-gradient(#94a3b81a 1px,transparent 1px),linear-gradient(90deg,#94a3b81a 1px,transparent 1px);background-size:44px 44px;mask-image:linear-gradient(to bottom,black,transparent 78%)}
+      main{position:relative;width:min(690px,calc(100% - 28px));padding:clamp(30px,7vw,68px);border:1px solid #ffffff1c;border-radius:30px;background:linear-gradient(145deg,#10243de8,#0a1729e8);box-shadow:0 28px 90px #0008,inset 0 1px #ffffff18;backdrop-filter:blur(18px)}
+      .eyebrow{display:flex;align-items:center;gap:10px;color:#a8baff;font-size:12px;font-weight:750;letter-spacing:.17em;text-transform:uppercase}.orb{width:11px;height:11px;border-radius:50%;background:#67e8f9;box-shadow:0 0 0 7px #67e8f922,0 0 26px #67e8f9}
+      h1{margin:24px 0 14px;font-size:clamp(42px,8vw,72px);line-height:.98;letter-spacing:-.065em}p{max-width:520px;margin:0;color:#a9b9cf;font-size:17px;line-height:1.65}.rule{width:72px;height:3px;margin:30px 0 24px;border-radius:3px;background:linear-gradient(90deg,#67e8f9,#818cf8)}
+      .links{display:flex;flex-wrap:wrap;gap:11px}.links a{display:inline-flex;align-items:center;gap:9px;padding:11px 15px;border:1px solid #ffffff1c;border-radius:13px;color:#d9e6f6;text-decoration:none;background:#ffffff09;font-size:14px;transition:.2s ease}.links a:hover{transform:translateY(-2px);border-color:#67e8f988;background:#67e8f914}.arrow{color:#67e8f9;font-size:16px}.footer{margin-top:36px;color:#6f829d;font-size:12px;line-height:1.6}
+      @media (max-width:520px){main{width:calc(100% - 18px);padding:31px 23px;border-radius:23px}p{font-size:15px}.links{display:grid}.links a{width:100%}}
+    </style>
+  </head>
+  <body>
+    <main>
+      <div class="eyebrow"><span class="orb"></span> iamnadith · media panel</div>
+      <h1>Make every memory count.</h1>
+      <p>A thoughtful media workspace for collecting, organizing, and enjoying the moments that matter.</p>
+      <div class="rule"></div>
+      <div class="links">
+        <a href="https://github.com/iamnadith" rel="noopener noreferrer">GitHub <span class="arrow">↗</span></a>
+        <a href="https://github.com/iamnadith/media-panel" rel="noopener noreferrer">Media Panel source <span class="arrow">↗</span></a>
+        <a href="https://www.nadith.pro" rel="noopener noreferrer">nadith.pro <span class="arrow">↗</span></a>
+      </div>
+      <div class="footer">Built with care by Nadith Dhanula.</div>
+    </main>
+  </body>
+</html>`;
+
+const landingResponse = (request: Request) => new Response(
+  request.method === 'HEAD' ? null : workerLandingPage(),
+  {
+    status: 200,
+    headers: {
+      'Content-Type': 'text/html; charset=UTF-8',
+      'Cache-Control': 'no-store',
+      'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'; img-src 'none'; base-uri 'none'; form-action 'none'",
+      'X-Content-Type-Options': 'nosniff',
+      'Referrer-Policy': 'no-referrer',
+    },
+  },
+);
 
 const isAuthorized = (
   request: Request,
@@ -2682,7 +2730,7 @@ const retryStaleProcessing = async (env: Env) => {
     min: 1,
     max: 24 * 60,
   });
-  const rows = await sql`
+  const staleRows = await sql`
     UPDATE media
     SET
       transcode_status='pending',
@@ -2692,11 +2740,36 @@ const retryStaleProcessing = async (env: Env) => {
       AND updated_at < now() - (${String(minutes)} || ' minutes')::interval
     RETURNING id
   ` as unknown as { id: string }[];
-  await Promise.all(rows.map(row => logBackendActivity(env, {
+  // A transient Drive/connection failure can be reported after the processor
+  // has already moved the row to `failed` (for example a 524 from Drive). Do
+  // not leave that recoverable failure stranded until someone manually edits
+  // the database; the next scheduled maintenance pass returns it to FIFO.
+  const transientRows = await sql`
+    UPDATE media
+    SET
+      transcode_status='pending',
+      transcode_error='Retryable processing interruption; queued for retry',
+      updated_at=now()
+    WHERE transcode_status='failed'
+      AND COALESCE(transcode_error, '') ~* ${
+        '(source download stalled|fetch failed|processor interrupted|' +
+        '(drive|storage) (put|upload|finalize) failed \\(5[0-9][0-9]\\)|' +
+        'connection terminated|connection reset|econnreset|timed? out|timeout)'
+      }
+    RETURNING id
+  ` as unknown as { id: string }[];
+  await Promise.all(staleRows.map(row => logBackendActivity(env, {
     category: 'processing',
     event: 'job_requeued',
     status: 'warning',
     message: 'Stalled processing job was returned to the pending queue',
+    mediaId: row.id,
+  })));
+  await Promise.all(transientRows.map(row => logBackendActivity(env, {
+    category: 'processing',
+    event: 'job_requeued',
+    status: 'warning',
+    message: 'Transient processing failure was returned to the pending queue',
     mediaId: row.id,
   })));
 };
@@ -4652,6 +4725,10 @@ export default {
 
   async fetch(request: Request, env: Env, ctx: ExecutionContext) {
     const url = new URL(request.url);
+
+    if (url.pathname === '/' && (request.method === 'GET' || request.method === 'HEAD')) {
+      return landingResponse(request);
+    }
 
     if (url.pathname === '/health') {
       return json(200, { ok: true, build: WORKER_BUILD_ID });
