@@ -258,7 +258,7 @@ const GENERATED_MEDIA_SUFFIX_REGEX =
 const STALE_REGISTRATION_ERROR_MESSAGE =
   'Previous registration attempt stalled; queued for retry';
 const MISSING_UPLOAD_ERROR_PREFIX = 'Upload not found in storage';
-const WORKER_BUILD_ID = 'v71';
+const WORKER_BUILD_ID = 'v72';
 // A scheduled Worker must finish promptly. Drive copies can become visible
 // asynchronously, so persist the in-flight state and check again on the next
 // minute instead of polling long enough to lose the registration lease.
@@ -286,6 +286,8 @@ const DELETION_MUTATION_CONCURRENCY = 4;
 const PROCESSING_SOURCE_RECONCILIATION_TIMEOUT_MS = 5_000;
 const PROCESSING_SOURCE_RECONCILIATION_LIMIT = 8;
 const PROCESSING_SOURCE_RECONCILIATION_CONCURRENCY = 4;
+const REGISTRATION_READY_CHECK_TIMEOUT_MS = 5_000;
+const REGISTRATION_READY_CHECK_LIMIT = 8;
 // A scheduled invocation can be terminated before finally{} runs. Keep the
 // cross-invocation lease short enough that the next cron can recover it.
 export const SCAN_LEASE_SECONDS = 90;
@@ -2260,6 +2262,40 @@ const buildRegistrationStatusLookup = async (
   return byUrl;
 };
 
+const findReadyRegistrationKeys = async (
+  env: Env,
+  rows: RegistrationStatusRow[],
+  objectsByKey: Map<string, R2ObjectLike>,
+) => {
+  const activeRows = rows
+    .filter(row => row.status === 'registering')
+    .slice(0, REGISTRATION_READY_CHECK_LIMIT);
+  if (activeRows.length === 0) { return new Set<string>(); }
+  const readyKeys = new Set<string>();
+  await Promise.all(activeRows.map(async row => {
+    const sourceUrl = trimToUndefined(row.source_url) || trimToUndefined(row.url);
+    if (!sourceUrl) { return; }
+    const sourceKey = keyFromStorageUrl(env, sourceUrl);
+    if (!sourceKey || !objectsByKey.has(sourceKey)) { return; }
+    const expectedUrl = await getExpectedRegistrationUrlForStatusRow(env, row)
+      .catch(() => undefined);
+    const expectedKey = expectedUrl
+      ? keyFromStorageUrl(env, expectedUrl)
+      : '';
+    if (!expectedKey || expectedKey === sourceKey) { return; }
+    // A Drive copy may become visible before the stale-row recovery window.
+    // Probe only a small number of active claims so a ready copy can be
+    // committed on the next scan without starting a duplicate copy.
+    const ready = await storageObjectExists(
+      env,
+      expectedKey,
+      REGISTRATION_READY_CHECK_TIMEOUT_MS,
+    ).catch(() => false);
+    if (ready) { readyKeys.add(sourceKey); }
+  }));
+  return readyKeys;
+};
+
 const waitForDriveDestination = async (
   env: Env,
   destinationKey: string,
@@ -3511,12 +3547,29 @@ const scanAndRegisterWithLease = async (
       return !updatedAt ||
         now - updatedAt.getTime() >= staleRegistrationMinutes * 60 * 1000;
     };
+    const readyRegistrationKeys = await findReadyRegistrationKeys(
+      env,
+      registrationRows,
+      pendingObjectByKey,
+    );
+    if (readyRegistrationKeys.size > 0) {
+      observe(logBackendActivity(env, {
+        category: 'registration',
+        event: 'registration_destination_ready',
+        status: 'info',
+        message: `Detected ${readyRegistrationKeys.size} completed Drive copy${readyRegistrationKeys.size === 1 ? '' : 'ies'} ready to commit`,
+        details: { count: readyRegistrationKeys.size },
+      }).catch(error => {
+        console.warn('Unable to log ready registration destinations', error);
+      }));
+    }
     const deferredRegistrationKeys = new Set(
       pending
         .filter(object => {
           const row = registrationRowsByUrl.get(urlForKey(env, object.key));
           return row?.status === 'registering' &&
-            !isStaleRegistration(row);
+            !isStaleRegistration(row) &&
+            !readyRegistrationKeys.has(object.key);
         })
         .map(object => object.key),
     );
