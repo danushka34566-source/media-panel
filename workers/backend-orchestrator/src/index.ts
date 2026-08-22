@@ -258,7 +258,7 @@ const GENERATED_MEDIA_SUFFIX_REGEX =
 const STALE_REGISTRATION_ERROR_MESSAGE =
   'Previous registration attempt stalled; queued for retry';
 const MISSING_UPLOAD_ERROR_PREFIX = 'Upload not found in storage';
-const WORKER_BUILD_ID = 'v73';
+const WORKER_BUILD_ID = 'v74';
 // A scheduled Worker must finish promptly. Drive copies can become visible
 // asynchronously, so persist the in-flight state and check again on the next
 // minute instead of polling long enough to lose the registration lease.
@@ -3557,7 +3557,7 @@ const scanAndRegisterWithLease = async (
         category: 'registration',
         event: 'registration_destination_ready',
         status: 'info',
-        message: `Detected ${readyRegistrationKeys.size} completed Drive copy${readyRegistrationKeys.size === 1 ? '' : 'ies'} ready to commit`,
+        message: `Detected ${readyRegistrationKeys.size} completed Drive cop${readyRegistrationKeys.size === 1 ? 'y' : 'ies'} ready to commit`,
         details: { count: readyRegistrationKeys.size },
       }).catch(error => {
         console.warn('Unable to log ready registration destinations', error);
