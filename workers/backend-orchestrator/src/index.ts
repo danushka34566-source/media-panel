@@ -233,7 +233,7 @@ const GENERATED_MEDIA_SUFFIX_REGEX =
 const STALE_REGISTRATION_ERROR_MESSAGE =
   'Previous registration attempt stalled; queued for retry';
 const MISSING_UPLOAD_ERROR_PREFIX = 'Upload not found in storage';
-const WORKER_BUILD_ID = 'registration-retry-v48';
+const WORKER_BUILD_ID = 'registration-retry-v49';
 // A scheduled Worker must finish promptly. Drive copies can become visible
 // asynchronously, so persist the in-flight state and check again on the next
 // minute instead of polling long enough to lose the registration lease.
@@ -765,6 +765,7 @@ export const isRecoverableDriveCopyError = (error: unknown) => {
     ? error.message
     : String(error ?? '');
   return (
+    message.startsWith('Drive copy not ready:') ||
     message.startsWith('Copied destination is not readable in storage:') ||
     message.startsWith('Copied destination size mismatch:')
   );
@@ -1726,8 +1727,26 @@ const copyObject = async (
       );
       if (!response.ok) {
         const text = await response.text().catch(() => '');
+        let detail = text;
+        try {
+          const data = JSON.parse(text) as {
+            error?: unknown
+            retryable?: unknown
+            code?: unknown
+          };
+          if (data.retryable === true || data.code === 'COPY_NOT_READY') {
+            throw new Error(
+              `Drive copy not ready: ${typeof data.error === 'string' ? data.error : 'destination is still becoming readable'}`,
+            );
+          }
+          detail = typeof data.error === 'string' ? data.error : text;
+        } catch (error) {
+          if (error instanceof Error && error.message.startsWith('Drive copy not ready:')) {
+            throw error;
+          }
+        }
         throw new Error(
-          `Drive copy failed (${response.status})${text ? `: ${text}` : ''}`,
+          `Drive copy failed (${response.status})${detail ? `: ${detail}` : ''}`,
         );
       }
       return;

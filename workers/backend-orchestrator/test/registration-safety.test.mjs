@@ -526,6 +526,9 @@ test('an in-flight tracked Drive copy is not started a second time', () => {
 
 test('delayed Drive copy visibility remains recoverable', () => {
   assert.equal(isRecoverableDriveCopyError(new Error(
+    'Drive copy not ready: destination is still becoming readable',
+  )), true);
+  assert.equal(isRecoverableDriveCopyError(new Error(
     'Copied destination is not readable in storage: uploads/123.mkv',
   )), true);
   assert.equal(isRecoverableDriveCopyError(new Error(
