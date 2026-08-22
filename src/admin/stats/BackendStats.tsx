@@ -9,6 +9,7 @@ import {
   FiFileText,
   FiHardDrive,
   FiList,
+  FiRefreshCw,
   FiServer,
   FiTrash2,
 } from 'react-icons/fi';
@@ -53,6 +54,8 @@ export default function BackendStats() {
     INITIAL_BACKEND_STATUS_STATE,
   );
   const [isLogsOpen, setIsLogsOpen] = useState(false);
+  const [isRecoveryRunning, setIsRecoveryRunning] = useState(false);
+  const [recoveryMessage, setRecoveryMessage] = useState<string>();
   const [queueModal, setQueueModal] = useState<
     'registration' | 'processing' | undefined
   >();
@@ -207,6 +210,29 @@ export default function BackendStats() {
             ? 'No processors in the last successful status check'
             : 'No active processors';
 
+  const runRecoveryScan = async () => {
+    if (isRecoveryRunning) { return; }
+    setIsRecoveryRunning(true);
+    setRecoveryMessage(undefined);
+    try {
+      const response = await fetch('/api/processing/run', {
+        method: 'POST',
+        cache: 'no-store',
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || data.error) {
+        throw new Error(data.error || 'Unable to queue recovery scan');
+      }
+      setRecoveryMessage(data.message || 'Recovery scan queued');
+    } catch (error) {
+      setRecoveryMessage(error instanceof Error
+        ? error.message
+        : 'Unable to queue recovery scan');
+    } finally {
+      setIsRecoveryRunning(false);
+    }
+  };
+
   return <ScoreCardContainer>
     <ScoreCard title="Backend Orchestrator">
       <ScoreCardRow
@@ -234,18 +260,35 @@ export default function BackendStats() {
       />
       <ScoreCardRow
         icon={<FiClock size={17} />}
-        content={<div className="flex w-full items-center justify-between gap-3">
+        content={<div className="flex w-full flex-wrap items-center justify-between gap-3">
           <span>Last successful check: {formatDate(
             statusState.lastConnected?.checkedAt,
           )}</span>
-          <button
-            type="button"
-            className="button flex shrink-0 items-center gap-1.5 px-2 py-1 text-xs normal-case tracking-normal"
-            onClick={() => setIsLogsOpen(true)}
-          >
-            <FiFileText size={14} />
-            View logs
-          </button>
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              className="button flex shrink-0 items-center gap-1.5 px-2 py-1 text-xs normal-case tracking-normal"
+              onClick={() => setIsLogsOpen(true)}
+            >
+              <FiFileText size={14} />
+              View logs
+            </button>
+            <button
+              type="button"
+              className="button flex shrink-0 items-center gap-1.5 px-2 py-1 text-xs normal-case tracking-normal"
+              onClick={() => void runRecoveryScan()}
+              disabled={isRecoveryRunning}
+            >
+              <FiRefreshCw
+                size={14}
+                className={isRecoveryRunning ? 'animate-spin' : undefined}
+              />
+              {isRecoveryRunning ? 'Queueing…' : 'Recovery scan'}
+            </button>
+          </div>
+          {recoveryMessage && <div className="basis-full text-xs text-dim">
+            {recoveryMessage}
+          </div>}
         </div>}
       />
     </ScoreCard>
