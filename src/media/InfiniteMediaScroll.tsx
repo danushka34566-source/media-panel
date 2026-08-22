@@ -71,8 +71,8 @@ export default function InfiniteMediaScroll({
   const keyGenerator = useCallback(
     (size: number, prev: Media[]) => {
       if (!hasStartedLoading || (prev && prev.length === 0)) { return null; }
-      return `${SWR_KEYS.INFINITE_MEDIA_SCROLL}-${cacheKey}${SIZE_KEY_SEPARATOR}${size}`;
-    }, [cacheKey, hasStartedLoading]);
+      return `${SWR_KEYS.INFINITE_MEDIA_SCROLL}-${cacheKey}-${sortBy ?? 'default'}-${sortWithPriority ? 'priority' : 'plain'}${SIZE_KEY_SEPARATOR}${size}`;
+    }, [cacheKey, hasStartedLoading, sortBy, sortWithPriority]);
 
   const fetcher = useCallback((
     keyWithSize: string,
@@ -125,6 +125,7 @@ export default function InfiniteMediaScroll({
     );
 
   const buttonContainerRef = useRef<HTMLDivElement>(null);
+  const loadingPageRef = useRef(false);
   const [isMoreButtonVisible, setIsMoreButtonVisible] = useState(false);
   
   const isLoadingOrValidating = isLoading || isValidating;
@@ -132,15 +133,48 @@ export default function InfiniteMediaScroll({
     ? 800
     : Math.max(800, window.innerHeight * loadAheadViewports);
 
+  const pages = useMemo(
+    () => (data ?? []).filter((page): page is Media[] => Array.isArray(page)),
+    [data],
+  );
+
+  const renderedPages = useMemo(() => {
+    const seenIds = new Set<string>();
+    return pages.map(page => page.filter(photo => {
+      if (seenIds.has(photo.id)) { return false; }
+      seenIds.add(photo.id);
+      return true;
+    }));
+  }, [pages]);
+
   const isFinished = useMemo(() =>
-    data && data[data.length - 1]?.length < itemsPerPage
-  , [data, itemsPerPage]);
+    Boolean(pages.length > 0 && pages[pages.length - 1]!.length < itemsPerPage),
+  [pages, itemsPerPage]);
 
   const advance = useCallback(() => {
-    if (!isFinished && !isLoadingOrValidating) {
-      setSize((data?.length ?? 0) + 1);
+    if (
+      error ||
+      isFinished ||
+      isLoadingOrValidating ||
+      loadingPageRef.current
+    ) {
+      return;
     }
-  }, [isFinished, isLoadingOrValidating, setSize, data]);
+    loadingPageRef.current = true;
+    Promise.resolve(setSize(pages.length + 1)).catch(() => undefined);
+  }, [error, isFinished, isLoadingOrValidating, setSize, pages.length]);
+
+  useEffect(() => {
+    if (!isLoadingOrValidating) { loadingPageRef.current = false; }
+  }, [isLoadingOrValidating]);
+
+  const retryFailedPage = useCallback(() => {
+    loadingPageRef.current = true;
+    Promise.resolve(mutate(undefined, {
+      revalidate: (_page: Media[] | undefined, key: [string, number]) =>
+        key[1] === pages.length,
+    } as any)).catch(() => undefined);
+  }, [mutate, pages.length]);
 
   const revalidateMedia: RevalidateMedia = useCallback((
     photoId: string,
@@ -173,7 +207,7 @@ export default function InfiniteMediaScroll({
     <div ref={buttonContainerRef}>
       <button
         type="button"
-        onClick={() => error ? mutate() : advance()}
+        onClick={() => error ? retryFailedPage() : advance()}
         disabled={isLoading || isValidating}
         className={clsx(
           'w-full flex justify-center',
@@ -190,11 +224,11 @@ export default function InfiniteMediaScroll({
 
   return (
     <>
-      {data?.map((photos, index) => (
+      {renderedPages.map((photos, index) => (
         children({
           key: `${cacheKey}-${index}`,
           photos, 
-          onLastMediaVisible: index === data.length - 1
+          onLastMediaVisible: index === renderedPages.length - 1
             ? advance
             : undefined,
           revalidateMedia,

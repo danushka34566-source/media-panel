@@ -50,6 +50,7 @@ import {
   PREFIX_ALBUM,
 } from '@/app/path';
 import { createLensKey } from '@/lens';
+import { getMediaSortPreferenceAction } from '@/auth/actions';
 
 // Table key
 export const KEY_MEDIA     = 'photos';
@@ -251,32 +252,46 @@ export function getMediaCached(
 
 export const getMediaNearIdCached = (
   ...args: Parameters<typeof getMediaNearId>
-) => unstable_cache(
-  getMediaNearId,
-  [KEY_MEDIA, ...getMediaCacheKeys(args[1])],
-  getCacheOptions([KEY_MEDIA, args[0], ...getMediaCacheKeys(args[1])]),
-)(...args).catch(async error => {
-  // Do not turn a transient related-items query failure into a broken detail
-  // page. The primary item is independently readable and can render alone.
-  console.error('Failed to load related media', { photoId: args[0], error });
-  const photo = await getMediaCached(args[0]);
-  return {
-    photos: photo ? [photo] : [],
-    indexNumber: photo ? 1 : undefined,
-  };
-}).then(({ photos, indexNumber }) => {
-  const [photoId] = args;
-  const photo = photos.find(({ id }) => id === photoId);
-  const currentIndex = photos.findIndex(p => p.id === photoId);
-  const nextStart = currentIndex >= 0 ? currentIndex + 1 : 1;
-  const nextEnd = nextStart + RELATED_GRID_MEDIA_TO_SHOW;
-  return {
-    photo: photo ? parseCachedMediaDates(photo) : undefined,
-    photos: parseCachedMediaItemsDates(photos),
-    photosGrid: photos.slice(nextStart, nextEnd),
-    indexNumber,
-  };
-});
+) => {
+  const [photoId, requestedOptions] = args;
+  const optionsPromise = requestedOptions.sortBy
+    ? Promise.resolve(requestedOptions)
+    : getMediaSortPreferenceAction()
+      .catch(() => null)
+      .then(sortBy => sortBy ? { ...requestedOptions, sortBy } : requestedOptions);
+  return optionsPromise
+    .then(options => {
+      const cacheKeys = [KEY_MEDIA, ...getMediaCacheKeys(options)];
+      return unstable_cache(
+        getMediaNearId,
+        cacheKeys,
+        getCacheOptions(cacheKeys),
+      )(photoId, options);
+    })
+    .catch(async error => {
+      // Do not turn a transient related-items query failure into a broken
+      // detail page. The primary item is independently readable and can
+      // render alone.
+      console.error('Failed to load related media', { photoId, error });
+      const photo = await getMediaCached(photoId);
+      return {
+        photos: photo ? [photo] : [],
+        indexNumber: photo ? 1 : undefined,
+      };
+    })
+    .then(({ photos, indexNumber }) => {
+      const photo = photos.find(({ id }) => id === photoId);
+      const currentIndex = photos.findIndex(p => p.id === photoId);
+      const nextStart = currentIndex >= 0 ? currentIndex + 1 : 1;
+      const nextEnd = nextStart + RELATED_GRID_MEDIA_TO_SHOW;
+      return {
+        photo: photo ? parseCachedMediaDates(photo) : undefined,
+        photos: parseCachedMediaItemsDates(photos),
+        photosGrid: photos.slice(nextStart, nextEnd),
+        indexNumber,
+      };
+    });
+};
 
 export const getMediaMetaCached = unstable_cache(
   getMediaMeta,
