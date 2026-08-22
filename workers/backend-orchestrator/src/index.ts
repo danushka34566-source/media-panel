@@ -228,7 +228,7 @@ const GENERATED_MEDIA_SUFFIX_REGEX =
 const STALE_REGISTRATION_ERROR_MESSAGE =
   'Previous registration attempt stalled; queued for retry';
 const MISSING_UPLOAD_ERROR_PREFIX = 'Upload not found in storage';
-const WORKER_BUILD_ID = 'registration-retry-v44';
+const WORKER_BUILD_ID = 'registration-retry-v45';
 // A scheduled Worker must finish promptly. Drive copies can become visible
 // asynchronously, so persist the in-flight state and check again on the next
 // minute instead of polling long enough to lose the registration lease.
@@ -1909,6 +1909,11 @@ const getExpectedRegistrationUrlForStatusRow = async (
   env: Env,
   row: RegistrationStatusRow,
 ) => {
+  // A detected row has not allocated an ID and cannot have an in-flight
+  // generated destination. Avoid hashing every detected backlog item on each
+  // scan; only rows that already carry an ID need destination protection.
+  const mediaId = trimToUndefined(row.media_id);
+  if (!mediaId) { return undefined; }
   const baseUrl = trimToUndefined(row.source_url) || trimToUndefined(row.url);
   if (!baseUrl) { return undefined; }
   const sourceKey = keyFromStorageUrl(env, baseUrl);
@@ -1919,10 +1924,6 @@ const getExpectedRegistrationUrlForStatusRow = async (
   if (!extension || !MEDIA_EXTENSIONS.has(extension)) {
     return undefined;
   }
-  const mediaId = trimToUndefined(row.media_id) || await mediaIdForObject(
-    env,
-    sourceKey,
-  );
   return urlForKey(
     env,
     buildRegistrationKey(env, sourceKey, mediaId, extension),
@@ -2966,6 +2967,7 @@ const scanAndRegisterWithLease = async (
     );
     const protectedRegistrationDestinationUrls = new Set<string>();
     await Promise.all(registrationRows.map(async row => {
+      if (!trimToUndefined(row.media_id)) { return; }
       const sourceUrl = trimToUndefined(row.source_url) || trimToUndefined(row.url);
       if (!sourceUrl) { return; }
       const sourceKey = keyFromStorageUrl(env, sourceUrl);
