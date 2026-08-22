@@ -258,7 +258,7 @@ const GENERATED_MEDIA_SUFFIX_REGEX =
 const STALE_REGISTRATION_ERROR_MESSAGE =
   'Previous registration attempt stalled; queued for retry';
 const MISSING_UPLOAD_ERROR_PREFIX = 'Upload not found in storage';
-const WORKER_BUILD_ID = 'v81';
+const WORKER_BUILD_ID = 'v82';
 // A scheduled Worker must finish promptly. Drive copies can become visible
 // asynchronously, so persist the in-flight state and check again on the next
 // minute instead of polling long enough to lose the registration lease.
@@ -2080,7 +2080,13 @@ const copyAndVerifyObject = async (
   expectedSize?: number,
 ) => {
   const copyResult = await copyObject(env, sourceKey, destinationKey, expectedSize);
-  if (copyResult.verified || copyResult.pending) {
+  if (copyResult.pending) {
+    // A timed-out Drive copy may still be running, but its destination has
+    // not passed exact-size verification. Keep the durable row registering;
+    // never commit metadata or delete the source until verification succeeds.
+    throw new Error('Drive copy not ready: destination size is not verified');
+  }
+  if (copyResult.verified) {
     return;
   }
 

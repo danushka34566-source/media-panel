@@ -163,6 +163,11 @@ test('a registration scan does not fan out direct database connections for a bac
   assert.doesNotMatch(source, /listAllObjects\(env\)/);
 });
 
+test('an unverified Drive copy cannot reach registration commit or source cleanup', () => {
+  assert.doesNotMatch(workerSource, /if \(copyResult\.verified \|\| copyResult\.pending\)/);
+  assert.match(workerSource, /if \(copyResult\.pending\)[\s\S]{0,500}throw new Error\('Drive copy not ready/);
+});
+
 test('storage inventory uses a bounded resumable page', () => {
   assert.match(workerSource, /REGISTRATION_SCAN_PAGE_SIZE = 100/);
   assert.match(workerSource, /const registerBatchSize = configuredRegisterBatchSize/);
