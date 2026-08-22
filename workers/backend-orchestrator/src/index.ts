@@ -258,7 +258,7 @@ const GENERATED_MEDIA_SUFFIX_REGEX =
 const STALE_REGISTRATION_ERROR_MESSAGE =
   'Previous registration attempt stalled; queued for retry';
 const MISSING_UPLOAD_ERROR_PREFIX = 'Upload not found in storage';
-const WORKER_BUILD_ID = 'v72';
+const WORKER_BUILD_ID = 'v73';
 // A scheduled Worker must finish promptly. Drive copies can become visible
 // asynchronously, so persist the in-flight state and check again on the next
 // minute instead of polling long enough to lose the registration lease.
@@ -3917,7 +3917,22 @@ const scanAndRegisterWithLease = async (
           },
           cleanupSource: async () => {
             if (registrationUrl !== sourceUrl) {
-              await deleteObject(env, object.key);
+              const cleanup = deleteObject(env, object.key).catch(error => {
+                console.warn('Source cleanup deferred after safe registration', {
+                  sourceUrl,
+                  registrationUrl,
+                  cleanupError: error,
+                });
+              });
+              // Source deletion is post-commit housekeeping. Do not make a
+              // successful database registration hold the scan lease while a
+              // Drive delete endpoint is slow; the registered file map makes
+              // this cleanup safely retryable on a later maintenance pass.
+              if (waitUntil) {
+                waitUntil(cleanup);
+                return;
+              }
+              await cleanup;
             }
           },
           onCleanupError: cleanupError => {
@@ -3959,7 +3974,7 @@ const scanAndRegisterWithLease = async (
         }).catch(error => {
           console.warn('Unable to log registration completion', error);
         }));
-        await revalidateMediaPanel(env, mediaId).catch(error => {
+        const revalidation = revalidateMediaPanel(env, mediaId).catch(error => {
           console.error('Media panel revalidation failed after registration', {
             mediaId,
             sourceUrl,
@@ -3967,6 +3982,11 @@ const scanAndRegisterWithLease = async (
             error,
           });
         });
+        if (waitUntil) {
+          waitUntil(revalidation);
+        } else {
+          await revalidation;
+        }
         knownUrls.add(registrationUrl);
         registered += 1;
       } catch (error) {
