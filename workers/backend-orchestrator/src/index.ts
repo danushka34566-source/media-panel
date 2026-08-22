@@ -228,7 +228,7 @@ const GENERATED_MEDIA_SUFFIX_REGEX =
 const STALE_REGISTRATION_ERROR_MESSAGE =
   'Previous registration attempt stalled; queued for retry';
 const MISSING_UPLOAD_ERROR_PREFIX = 'Upload not found in storage';
-const WORKER_BUILD_ID = 'registration-retry-v41';
+const WORKER_BUILD_ID = 'registration-retry-v42';
 // A scheduled Worker must finish promptly. Drive copies can become visible
 // asynchronously, so persist the in-flight state and check again on the next
 // minute instead of polling long enough to lose the registration lease.
@@ -242,10 +242,6 @@ const REGISTRATION_STORAGE_TIMEOUT_MS = 30_000;
 const DELETION_STORAGE_TIMEOUT_MS = 15_000;
 const DELETION_MUTATION_TIMEOUT_MS = 45_000;
 const DELETION_MUTATION_CONCURRENCY = 4;
-// A single scheduled scan must not pin the isolate's shared in-flight promise
-// forever. Individual database/storage calls are already bounded; this is a
-// final recovery guard for a provider/runtime promise that never settles.
-export const SCAN_WATCHDOG_TIMEOUT_MS = 120_000;
 // A scheduled invocation can be terminated before finally{} runs. Keep the
 // cross-invocation lease short enough that the next cron can recover it.
 export const SCAN_LEASE_SECONDS = 90;
@@ -1207,7 +1203,10 @@ const listAllObjects = async (env: Env) => {
       query.set('continuation-token', continuationToken);
     }
 
-    const response = await r2Request(env, 'GET', '', { query });
+    const response = await r2Request(env, 'GET', '', {
+      query,
+      signal: AbortSignal.timeout(REGISTRATION_STORAGE_TIMEOUT_MS),
+    });
     const xml = await response.text();
 
     const contents = Array.from<RegExpMatchArray>(
@@ -2767,6 +2766,38 @@ const releaseScanLease = async (env: Env, leaseToken: string) => {
   `;
 };
 
+const startScanLeaseHeartbeat = (env: Env, leaseToken: string) => {
+  let stopped = false;
+  let heartbeatInFlight: Promise<unknown> | undefined;
+  const intervalMs = Math.max(
+    10_000,
+    Math.floor((SCAN_LEASE_SECONDS * 1000) / 3),
+  );
+  const heartbeat = () => {
+    if (stopped || heartbeatInFlight) { return; }
+    heartbeatInFlight = renewScanLease(env, leaseToken)
+      .then(renewed => {
+        if (!renewed && !stopped) {
+          console.warn('Worker registration scan lease was lost');
+        }
+      })
+      .catch(error => {
+        if (!stopped) {
+          console.warn('Worker registration scan lease heartbeat failed', error);
+        }
+      })
+      .finally(() => {
+        heartbeatInFlight = undefined;
+      });
+  };
+  const timer = setInterval(heartbeat, intervalMs);
+  return async () => {
+    stopped = true;
+    clearInterval(timer);
+    await heartbeatInFlight;
+  };
+};
+
 const upsertMediaRow = async (
   env: Env,
   {
@@ -3454,9 +3485,13 @@ const scanAndRegister = async (env: Env) => {
       scanSkipped: true,
     };
   }
+  const stopLeaseHeartbeat = startScanLeaseHeartbeat(env, leaseToken);
   try {
     return await scanAndRegisterWithLease(env, leaseToken);
   } finally {
+    await stopLeaseHeartbeat().catch(error => {
+      console.warn('Failed to stop worker scan lease heartbeat', error);
+    });
     await releaseScanLease(env, leaseToken).catch(error => {
       console.warn('Failed to release worker scan lease', error);
     });
@@ -4226,20 +4261,11 @@ const startScan = (
       details: { storageProvider: detectStorageProvider(env) },
     });
     try {
-      let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
-      const watchdog = new Promise<never>((_, reject) => {
-        timeoutHandle = setTimeout(() => {
-          reject(new Error(
-            `Registration scan watchdog exceeded ${SCAN_WATCHDOG_TIMEOUT_MS}ms`,
-          ));
-        }, SCAN_WATCHDOG_TIMEOUT_MS);
-      });
-      let result: Awaited<ReturnType<typeof scanAndRegister>>;
-      try {
-        result = await Promise.race([scanAndRegister(env), watchdog]);
-      } finally {
-        if (timeoutHandle) { clearTimeout(timeoutHandle); }
-      }
+      // Every database, storage, and Drive operation in the scan has its own
+      // bounded timeout. Do not race the whole queue against a wall-clock
+      // watchdog: that creates a false timeout while the underlying scan keeps
+      // running and still owns the lease, making later cron runs look stalled.
+      const result = await scanAndRegister(env);
       await logBackendActivity(env, {
         category: 'orchestrator',
         event: 'scan_completed',
