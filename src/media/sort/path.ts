@@ -115,9 +115,9 @@ const getPathSortComponents = (pathname: string) => {
 export const getPathForSortBy = (pathname: string, sortBy: SortBy) => {
   const { gridOrFull } = getPathSortComponents(pathname);
   const { sortType, sortOrder } = getSortByComponents(sortBy);
-  if (sortBy === USER_DEFAULT_SORT_BY) {
-    return gridOrFull === 'grid' ? PATH_GRID_INFERRED : PATH_FULL_INFERRED;
-  }
+  // Keep an explicitly selected sort canonical in the URL, including when it
+  // matches the configured default. Bare /grid and /full remain the only
+  // preference-resolving entry points.
   return `/${gridOrFull}/${sortType}/${sortOrder}`;
 };
 
@@ -160,14 +160,7 @@ export const getSortStateFromPath = (
     sortType: string
     sortOrder: string
   }) => {
-    const { sortBy } = _getSortOptionsFromParams(sortType, sortOrder);
-    if (sortBy === USER_DEFAULT_SORT_BY) {
-      return gridOrFull === 'grid'
-        ? PATH_GRID_INFERRED
-        : PATH_FULL_INFERRED;
-    } else {
-      return `/${gridOrFull}/${sortType}/${sortOrder}`;
-    }
+    return `/${gridOrFull}/${sortType}/${sortOrder}`;
   };
 
   // Core paths
