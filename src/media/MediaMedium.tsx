@@ -141,7 +141,7 @@ export default function MediaMedium({
                   alt={altTextForMedia(photo)}
                   className="absolute inset-0 w-full h-full"
                   classNameImage="w-full h-full object-cover"
-                  loading="eager"
+                  loading={priority ? 'eager' : 'lazy'}
                   fetchPriority={priority ? 'high' : 'low'}
                   onError={() => setPosterFailedMediaId(photo.id)}
                   showLoadingIndicator
@@ -176,7 +176,7 @@ export default function MediaMedium({
                 classNameImage="object-cover w-full h-full"
                 alt={altTextForMedia(photo)}
                 priority={priority}
-                loading="eager"
+                loading={priority ? 'eager' : 'lazy'}
                 fetchPriority={priority ? 'high' : 'low'}
                 showLoadingIndicator
               />

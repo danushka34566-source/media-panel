@@ -1,5 +1,5 @@
 import InlineVideoPreview from '@/media/InlineVideoPreview';
-import { fireEvent, render } from '@testing-library/react';
+import { act, fireEvent, render } from '@testing-library/react';
 
 describe('inline video preview', () => {
   it('stays transparent until a frame is ready and hides during buffering', () => {
@@ -44,5 +44,39 @@ describe('inline video preview', () => {
     expect(pauseSpy).toHaveBeenCalled();
     playSpy.mockRestore();
     pauseSpy.mockRestore();
+  });
+
+  it('retries a transient play rejection without requiring a page refresh', async () => {
+    jest.useFakeTimers();
+    let attempts = 0;
+    const playSpy = jest.spyOn(
+      HTMLMediaElement.prototype,
+      'play',
+    ).mockImplementation(() => {
+      attempts += 1;
+      return attempts === 1
+        ? Promise.reject(new Error('mobile resume race'))
+        : Promise.resolve();
+    });
+    const pauseSpy = jest.spyOn(
+      HTMLMediaElement.prototype,
+      'pause',
+    ).mockImplementation(() => undefined);
+
+    render(<InlineVideoPreview
+      src="preview.mp4"
+      active
+      onError={jest.fn()}
+    />);
+    await act(async () => {
+      jest.runOnlyPendingTimers();
+      await Promise.resolve();
+    });
+    act(() => { jest.advanceTimersByTime(180); });
+
+    expect(attempts).toBe(2);
+    playSpy.mockRestore();
+    pauseSpy.mockRestore();
+    jest.useRealTimers();
   });
 });

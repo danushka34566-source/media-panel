@@ -1,7 +1,8 @@
 'use client';
 
 import { clsx } from 'clsx/lite';
-import { useEffect, useRef, useState } from 'react';
+import { useRef, useState } from 'react';
+import useVideoPreviewRecovery from './useVideoPreviewRecovery';
 
 export default function InlineVideoPreview({
   src,
@@ -14,28 +15,12 @@ export default function InlineVideoPreview({
 }) {
   const [isReady, setIsReady] = useState(false);
   const ref = useRef<HTMLVideoElement>(null);
-  useEffect(() => {
-    const video = ref.current;
-    if (!video) { return; }
-    const playIfActive = () => {
-      if (!active || document.hidden) { return; }
-      void video.play().catch(() => setIsReady(false));
-    };
-    const onVisibilityChange = () => playIfActive();
-    if (active) { playIfActive(); } else {
-      video.pause();
-    }
-    document.addEventListener('visibilitychange', onVisibilityChange);
-    document.addEventListener('resume', playIfActive);
-    window.addEventListener('pageshow', playIfActive);
-    window.addEventListener('focus', playIfActive);
-    return () => {
-      document.removeEventListener('visibilitychange', onVisibilityChange);
-      document.removeEventListener('resume', playIfActive);
-      window.removeEventListener('pageshow', playIfActive);
-      window.removeEventListener('focus', playIfActive);
-    };
-  }, [active]);
+  const recovery = useVideoPreviewRecovery({
+    videoRef: ref,
+    active,
+    src,
+    onFatalError: onError,
+  });
   return <video
     ref={ref}
     className={clsx(
@@ -52,15 +37,23 @@ export default function InlineVideoPreview({
     preload="auto"
     src={src}
     onLoadStart={() => setIsReady(false)}
-    onLoadedData={() => setIsReady(true)}
-    onCanPlay={event => {
-      if (active) {
-        void event.currentTarget.play().catch(() => setIsReady(false));
-      }
+    onLoadedData={() => {
+      setIsReady(true);
+      recovery.onLoadedData();
     }}
-    onPlaying={() => setIsReady(true)}
+    onCanPlay={() => recovery.onCanPlay()}
+    onPlaying={() => {
+      setIsReady(true);
+      recovery.onPlaying();
+    }}
     onWaiting={() => setIsReady(false)}
-    onStalled={() => setIsReady(false)}
-    onError={onError}
+    onStalled={() => {
+      setIsReady(false);
+      recovery.onStalled();
+    }}
+    onError={() => {
+      setIsReady(false);
+      recovery.onError();
+    }}
   />;
 }

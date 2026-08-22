@@ -21,6 +21,7 @@ import useVisibility from '@/utility/useVisibility';
 import { LuPlay } from 'react-icons/lu';
 import useVideoPreviewLifecycle from './video-preview-lifecycle';
 import useMediaPreload from './useMediaPreload';
+import useVideoPreviewRecovery from './useVideoPreviewRecovery';
 
 export default function MediaSmall({
   photo,
@@ -51,6 +52,7 @@ export default function MediaSmall({
   const [videoFailedMediaId, setVideoFailedMediaId] = useState<string>();
   const [posterFailedMediaId, setPosterFailedMediaId] = useState<string>();
   const aspectRatio = thumbnailAspectRatio ?? getMediaAspectRatio(photo);
+  const hasVideoFailed = videoFailedMediaId === photo.id;
   const {
     isActive: isPreviewActive,
     isExiting: isPreviewExiting,
@@ -65,9 +67,15 @@ export default function MediaSmall({
     preloadUrl: previewSrc,
   });
   const shouldRenderPreview = isPreviewActive || isPreviewExiting;
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const videoRecovery = useVideoPreviewRecovery({
+    videoRef,
+    active: shouldRenderPreview && !hasVideoFailed,
+    src: previewSrc,
+    onFatalError: () => setVideoFailedMediaId(photo.id),
+  });
   const isInPreloadRange = useMediaPreload({ ref });
   const isVideoReady = videoReadyMediaId === photo.id;
-  const hasVideoFailed = videoFailedMediaId === photo.id;
   const hasPosterFailed = posterFailedMediaId === photo.id;
   const shouldShowPoster = isInPreloadRange &&
     (!isPreviewActive || !isVideoReady);
@@ -108,6 +116,7 @@ export default function MediaSmall({
             : shouldShowPoster && <div className="absolute inset-0 bg-black" />}
           {shouldRenderPreview && previewSrc && !hasVideoFailed &&
             <video
+              ref={videoRef}
               src={previewSrc}
               poster={posterSrc}
               className={clsx(
@@ -120,8 +129,14 @@ export default function MediaSmall({
               disablePictureInPicture
               disableRemotePlayback
               preload="auto"
-              onLoadedData={() => setVideoReadyMediaId(photo.id)}
-              onError={() => setVideoFailedMediaId(photo.id)}
+              onLoadedData={() => {
+                setVideoReadyMediaId(photo.id);
+                videoRecovery.onLoadedData();
+              }}
+              onCanPlay={() => videoRecovery.onCanPlay()}
+              onPlaying={() => videoRecovery.onPlaying()}
+              onStalled={() => videoRecovery.onStalled()}
+              onError={() => videoRecovery.onError()}
             />}
           <div className="absolute inset-0 bg-black/20" />
           <span className={clsx(

@@ -76,6 +76,7 @@ import useVideoPreviewLifecycle, {
   setFullVideoPlaybackActive,
   shouldSuspendVideoPreviews,
 } from './video-preview-lifecycle';
+import useVideoPreviewRecovery from './useVideoPreviewRecovery';
 import useMediaPreload from './useMediaPreload';
 import { FULL_IMAGE_LOAD_AHEAD_VIEWPORTS } from './loading-policy';
 import {
@@ -527,19 +528,16 @@ export default function MediaLarge({
   const isAutomaticPreviewReady =
     readyPreviewSrc === automaticPreviewSrc &&
     readyPreviewActivationId === previewActivationId;
-  useEffect(() => {
-    if (!isVideo || isFullVideoPlaying) { return; }
-    const video = videoRef.current;
-    if (!video) { return; }
-    if (isPreviewActive) {
-      void video.play().catch(() => {
-        setReadyPreviewSrc(undefined);
-        setReadyPreviewActivationId(undefined);
-      });
-    } else {
-      video.pause();
-    }
-  }, [isFullVideoPlaying, isPreviewActive, isVideo, shouldMountPreview]);
+  const previewRecovery = useVideoPreviewRecovery({
+    videoRef,
+    active: Boolean(isVideo && !isFullVideoPlaying && isPreviewActive),
+    src: automaticPreviewSrc,
+    onFatalError: () => {
+      if (automaticPreviewSrc) {
+        setFailedGeneratedPreviewSrc(automaticPreviewSrc);
+      }
+    },
+  });
   // Full-mode tiles are large, so prepare several upcoming images before the
   // user reaches them. Video previews use a separate strict viewport hook.
   const fullImagePreloadDistance = typeof window === 'undefined'
@@ -1199,20 +1197,19 @@ export default function MediaLarge({
                       if (!isFullVideoPlaying && automaticPreviewSrc) {
                         setReadyPreviewSrc(automaticPreviewSrc);
                         setReadyPreviewActivationId(previewActivationId);
+                        previewRecovery.onLoadedData();
                       }
                     }}
-                    onCanPlay={event => {
+                    onCanPlay={() => {
                       if (!isFullVideoPlaying && isPreviewActive) {
-                        void event.currentTarget.play().catch(() => {
-                          setReadyPreviewSrc(undefined);
-                          setReadyPreviewActivationId(undefined);
-                        });
+                        previewRecovery.onCanPlay();
                       }
                     }}
                     onPlaying={() => {
                       if (!isFullVideoPlaying && automaticPreviewSrc) {
                         setReadyPreviewSrc(automaticPreviewSrc);
                         setReadyPreviewActivationId(previewActivationId);
+                        previewRecovery.onPlaying();
                       }
                     }}
                     onWaiting={() => {
@@ -1225,6 +1222,7 @@ export default function MediaLarge({
                       if (!isFullVideoPlaying) {
                         setReadyPreviewSrc(undefined);
                         setReadyPreviewActivationId(undefined);
+                        previewRecovery.onStalled();
                       }
                     }}
                     onError={event => {
@@ -1243,7 +1241,9 @@ export default function MediaLarge({
                           }
                         }
                       } else {
-                        setFailedGeneratedPreviewSrc(automaticPreviewSrc);
+                        setReadyPreviewSrc(undefined);
+                        setReadyPreviewActivationId(undefined);
+                        previewRecovery.onError();
                       }
                     }}
                     onLoadedMetadata={(e) => {
