@@ -281,6 +281,11 @@ export const REGISTRATION_ATTEMPTS_PER_SCAN = 1;
 const DELETION_STORAGE_TIMEOUT_MS = 15_000;
 const DELETION_MUTATION_TIMEOUT_MS = 45_000;
 const DELETION_MUTATION_CONCURRENCY = 4;
+// Source reconciliation is maintenance only. It must never consume the
+// whole scheduled invocation before the durable registration queue runs.
+const PROCESSING_SOURCE_RECONCILIATION_TIMEOUT_MS = 5_000;
+const PROCESSING_SOURCE_RECONCILIATION_LIMIT = 8;
+const PROCESSING_SOURCE_RECONCILIATION_CONCURRENCY = 4;
 // A scheduled invocation can be terminated before finally{} runs. Keep the
 // cross-invocation lease short enough that the next cron can recover it.
 export const SCAN_LEASE_SECONDS = 90;
@@ -948,8 +953,9 @@ const createDriveSignedDownloadUrl = async (env: Env, key: string) => {
 };
 
 const areUniqueMediaNamesEnabled = (env: Env) =>
-  env.UNIQUE_MEDIA_NAMES === '1' ||
-  env.NEXT_PUBLIC_UNIQUE_MEDIA_NAMES === '1';
+  env.UNIQUE_MEDIA_NAMES !== undefined
+    ? env.UNIQUE_MEDIA_NAMES !== '0'
+    : env.NEXT_PUBLIC_UNIQUE_MEDIA_NAMES !== '0';
 
 const GENERATED_MEDIA_ID_PATTERN = /^\d{12}$/;
 
@@ -1085,6 +1091,21 @@ const connectionStringWithoutSslMode = (value: string) => {
 const isRetryableSupabaseConnectionError = (error: unknown) =>
   /connection terminated unexpectedly|connection reset|econnreset|socket closed/i
     .test(error instanceof Error ? error.message : String(error));
+const isSupabasePostgresUrl = (value: string) => {
+  try {
+    const hostname = new URL(value).hostname;
+    return /(?:^|\.)supabase\.co$/i.test(hostname) ||
+      /\.pooler\.supabase\.com$/i.test(hostname);
+  } catch {
+    return false;
+  }
+};
+const shouldDisablePostgresSsl = (env: Env) => {
+  const explicit = env.DISABLE_POSTGRES_SSL?.trim();
+  if (explicit === '1') { return true; }
+  if (explicit === '0') { return false; }
+  return isSupabasePostgresUrl(env.POSTGRES_URL);
+};
 const describePostgresQuery = (text: string) => text
   .replace(/\s+/g, ' ')
   .trim()
@@ -1101,7 +1122,7 @@ const supabaseSqlForEnv = (env: Env): SqlQuery => {
       // events: the runtime may reclaim the socket after a prior invocation.
       const client = new Client({
         connectionString: connectionStringWithoutSslMode(env.POSTGRES_URL),
-        ssl: env.DISABLE_POSTGRES_SSL === '1'
+        ssl: shouldDisablePostgresSsl(env)
           ? false
           : { rejectUnauthorized: false },
         connectionTimeoutMillis: SUPABASE_CONNECT_TIMEOUT_MS,
@@ -1145,16 +1166,6 @@ const supabaseSqlForEnv = (env: Env): SqlQuery => {
     return [];
   };
   return sql as SqlQuery;
-};
-
-const isSupabasePostgresUrl = (value: string) => {
-  try {
-    const hostname = new URL(value).hostname;
-    return /(?:^|\.)supabase\.co$/i.test(hostname) ||
-      /\.pooler\.supabase\.com$/i.test(hostname);
-  } catch {
-    return false;
-  }
 };
 
 const sqlForEnv = (env: Env) =>
@@ -2070,16 +2081,20 @@ export const shouldMarkProcessingSourceMissing = ({
   (status === 'pending' || status === 'processing') &&
   (!sourceKey || (!isListed && exists === false));
 
-const processingSourceExists = async (env: Env, key: string) => {
+const processingSourceExists = async (
+  env: Env,
+  key: string,
+  timeoutMs = DELETION_STORAGE_TIMEOUT_MS,
+) => {
   if (isDriveStorageEnabled(env)) {
     const keys = await listDriveKeysForPrefix(
       env,
       key,
-      DELETION_STORAGE_TIMEOUT_MS,
+      timeoutMs,
     );
     return keys.includes(key);
   }
-  return storageObjectExists(env, key, DELETION_STORAGE_TIMEOUT_MS);
+  return storageObjectExists(env, key, timeoutMs);
 };
 
 const markProcessingSourceMissing = async (env: Env, mediaId: string) => {
@@ -2109,36 +2124,65 @@ const reconcileMissingProcessingSources = async (
   listedKeys: Set<string>,
 ) => {
   let missing = 0;
-  for (const row of rows) {
-    if (row.transcode_status !== 'pending' &&
-      row.transcode_status !== 'processing') {
-      continue;
-    }
-    const sourceKey = keyFromStorageUrl(env, row.url);
-    const isListed = Boolean(sourceKey && listedKeys.has(sourceKey));
-    let exists: boolean | undefined;
-    if (sourceKey && !isListed) {
+  const candidates = rows.filter(row =>
+    row.transcode_status === 'pending' || row.transcode_status === 'processing');
+  const unchecked: MediaRow[] = [];
+  const checks = candidates.slice(0, PROCESSING_SOURCE_RECONCILIATION_LIMIT);
+  for (let offset = 0; offset < checks.length; offset += PROCESSING_SOURCE_RECONCILIATION_CONCURRENCY) {
+    const batch = checks.slice(
+      offset,
+      offset + PROCESSING_SOURCE_RECONCILIATION_CONCURRENCY,
+    );
+    const results = await Promise.all(batch.map(async row => {
+      const sourceKey = keyFromStorageUrl(env, row.url);
+      const isListed = Boolean(sourceKey && listedKeys.has(sourceKey));
+      if (!sourceKey || isListed) {
+        return { row, sourceKey, isListed, exists: undefined as boolean | undefined };
+      }
       try {
-        exists = await processingSourceExists(env, sourceKey);
+        const exists = await processingSourceExists(
+          env,
+          sourceKey,
+          PROCESSING_SOURCE_RECONCILIATION_TIMEOUT_MS,
+        );
+        return { row, sourceKey, isListed, exists };
       } catch (error) {
         console.warn('Skipping processing source reconciliation', {
           mediaId: row.id,
           sourceKey,
           error,
         });
-        continue;
+        return { row, sourceKey, isListed, exists: undefined as boolean | undefined };
+      }
+    }));
+    for (const { row, sourceKey, isListed, exists } of results) {
+      if (shouldMarkProcessingSourceMissing({
+        status: row.transcode_status,
+        sourceKey: sourceKey || '',
+        isListed,
+        exists,
+      })) {
+        await markProcessingSourceMissing(env, row.id);
+        missing += 1;
       }
     }
-    if (shouldMarkProcessingSourceMissing({
-      status: row.transcode_status,
-      sourceKey,
-      isListed,
-      exists,
-    })) {
-      await markProcessingSourceMissing(env, row.id);
-      missing += 1;
-    }
   }
+  if (candidates.length > checks.length) {
+    unchecked.push(...candidates.slice(checks.length));
+  }
+  if (unchecked.length > 0) {
+    console.info('Deferred processing source reconciliation', {
+      checked: checks.length,
+      deferred: unchecked.length,
+    });
+  }
+  /*
+   * The previous implementation checked every missing source serially. With
+   * a Drive-backed library that meant dozens of 15-second list requests could
+   * keep the scan lease alive for many minutes, so the next cron looked
+   * stalled and no registration work progressed. Keep this maintenance pass
+   * bounded; deferred rows are checked on later scans.
+  */
   return missing;
 };
 
