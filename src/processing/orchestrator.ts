@@ -14,6 +14,13 @@ export type ProcessingOrchestratorRunResult = {
   registeringUrls?: string[]
 };
 
+export type ProcessingOrchestratorRecoveryResult =
+  ProcessingOrchestratorRunResult & {
+    scanStarted?: boolean
+    requeued?: number
+    statusMessage?: string
+  };
+
 export const runProcessingOrchestrator = async () => {
   const [settings, connection] = await Promise.all([
     getProcessingSettingsSafe(),
@@ -48,6 +55,37 @@ export const runProcessingOrchestrator = async () => {
     triggered: true,
     ...data,
   } satisfies ProcessingOrchestratorRunResult;
+};
+
+export const runProcessingOrchestratorRecovery = async () => {
+  const [settings, connection] = await Promise.all([
+    getProcessingSettingsSafe(),
+    getProcessingConnectionSettingsSafe(),
+  ]);
+  if (!settings.orchestratorEnabled || !settings.registrationEnabled) {
+    return { triggered: false } satisfies ProcessingOrchestratorRecoveryResult;
+  }
+  if (!connection.orchestratorBaseUrl || !connection.orchestratorSharedSecret) {
+    return { triggered: false } satisfies ProcessingOrchestratorRecoveryResult;
+  }
+
+  const baseUrl = connection.orchestratorBaseUrl.replace(/\/+$/, '');
+  const response = await fetch(`${baseUrl}/recovery`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${connection.orchestratorSharedSecret}`,
+    },
+  });
+  if (!response.ok) {
+    const text = await response.text().catch(() => '');
+    throw new Error(
+      text || `Backend Orchestrator recovery failed (${response.status})`,
+    );
+  }
+  return {
+    triggered: true,
+    ...await response.json().catch(() => ({})),
+  } satisfies ProcessingOrchestratorRecoveryResult;
 };
 
 export const retryWorkerRegistration = async ({

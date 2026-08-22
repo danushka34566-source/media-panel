@@ -217,19 +217,19 @@ export default function BackendStats() {
     setIsRecoveryRunning(true);
     setRecoveryMessage(undefined);
     try {
-      const response = await fetch('/api/processing/run', {
+      const response = await fetch('/api/processing/recovery', {
         method: 'POST',
         cache: 'no-store',
       });
       const data = await response.json().catch(() => ({}));
       if (!response.ok || data.error) {
-        throw new Error(data.error || 'Unable to queue recovery scan');
+        throw new Error(data.error || 'Unable to start registration recovery');
       }
-      setRecoveryMessage(data.message || 'Recovery scan queued');
+      setRecoveryMessage(data.message || 'Registration recovery queued');
     } catch (error) {
       setRecoveryMessage(error instanceof Error
         ? error.message
-        : 'Unable to queue recovery scan');
+        : 'Unable to start registration recovery');
     } finally {
       setIsRecoveryRunning(false);
     }
