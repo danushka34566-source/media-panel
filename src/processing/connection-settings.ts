@@ -13,6 +13,12 @@ export type ProcessingConnectionSettings = {
   processorSharedSecret?: string
 };
 
+export type ProcessingConnectionSettingsResolution = {
+  stored: ProcessingConnectionSettings
+  effective: ProcessingConnectionSettings
+  usingEnvironmentFallback: boolean
+};
+
 const CONNECTION_KEYS = [
   'orchestratorBaseUrl',
   'orchestratorSharedSecret',
@@ -43,7 +49,7 @@ export const normalizeOrchestratorBaseUrl = (value: unknown) => {
   return url.toString().replace(/\/+$/, '');
 };
 
-export const getProcessingConnectionSettings = async (): Promise<ProcessingConnectionSettings> => {
+const getStoredProcessingConnectionSettings = async () => {
   await ensureProcessingSettingsTable();
   const { rows } = await query<{ key: string, value: string }>(`
     SELECT key, value
@@ -52,20 +58,49 @@ export const getProcessingConnectionSettings = async (): Promise<ProcessingConne
   `, [CONNECTION_KEYS]);
   const stored = Object.fromEntries(rows.map(row => [row.key, row.value]));
   return {
-    orchestratorBaseUrl: normalizeOrchestratorBaseUrl(
-      stored.orchestratorBaseUrl ?? envFallbacks.orchestratorBaseUrl,
-    ),
-    orchestratorSharedSecret: trim(
-      stored.orchestratorSharedSecret ?? envFallbacks.orchestratorSharedSecret,
-    ),
-    processorSharedSecret: trim(
-      stored.processorSharedSecret ?? envFallbacks.processorSharedSecret,
-    ),
+    orchestratorBaseUrl: normalizeOrchestratorBaseUrl(stored.orchestratorBaseUrl),
+    orchestratorSharedSecret: trim(stored.orchestratorSharedSecret),
+    processorSharedSecret: trim(stored.processorSharedSecret),
   };
+};
+
+export const getProcessingConnectionSettings = async (): Promise<ProcessingConnectionSettings> => {
+  const stored = await getStoredProcessingConnectionSettings();
+  return {
+    orchestratorBaseUrl: stored.orchestratorBaseUrl ?? envFallbacks.orchestratorBaseUrl,
+    orchestratorSharedSecret:
+      stored.orchestratorSharedSecret ?? envFallbacks.orchestratorSharedSecret,
+    processorSharedSecret:
+      stored.processorSharedSecret ?? envFallbacks.processorSharedSecret,
+  };
+};
+
+export const getProcessingConnectionSettingsResolution = async () => {
+  const stored = await getStoredProcessingConnectionSettings();
+  const effective: ProcessingConnectionSettings = {
+    orchestratorBaseUrl: stored.orchestratorBaseUrl ?? envFallbacks.orchestratorBaseUrl,
+    orchestratorSharedSecret:
+      stored.orchestratorSharedSecret ?? envFallbacks.orchestratorSharedSecret,
+    processorSharedSecret:
+      stored.processorSharedSecret ?? envFallbacks.processorSharedSecret,
+  };
+  return {
+    stored,
+    effective,
+    usingEnvironmentFallback: CONNECTION_KEYS.some(key =>
+      !stored[key] && Boolean(envFallbacks[key])),
+  } satisfies ProcessingConnectionSettingsResolution;
 };
 
 export const getProcessingConnectionSettingsSafe = async () =>
   getProcessingConnectionSettings().catch(() => ({ ...envFallbacks }));
+
+export const getProcessingConnectionSettingsResolutionSafe = async (): Promise<ProcessingConnectionSettingsResolution> =>
+  getProcessingConnectionSettingsResolution().catch(() => ({
+    stored: {} as ProcessingConnectionSettings,
+    effective: { ...envFallbacks },
+    usingEnvironmentFallback: CONNECTION_KEYS.some(key => Boolean(envFallbacks[key])),
+  } satisfies ProcessingConnectionSettingsResolution));
 
 export const saveProcessingConnectionSettings = async (
   updates: ProcessingConnectionSettings,

@@ -43,7 +43,7 @@ const NumberSetting = ({
         max={max}
         defaultValue={defaultValue}
         className={clsx(
-          'h-9 min-w-0 grow rounded-lg border border-medium bg-main px-3',
+          'h-9 min-w-0 grow rounded-lg border-medium bg-main px-3',
           'text-right text-main outline-hidden transition-colors',
           'focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20',
         )}
@@ -81,7 +81,7 @@ const TextSetting = ({
     placeholder={placeholder}
     autoComplete={type === 'password' ? 'new-password' : undefined}
     className={clsx(
-      'h-9 min-w-0 w-full rounded-lg border border-medium bg-main px-3',
+      'h-9 min-w-0 w-full rounded-lg border-medium bg-main px-3',
       'text-main outline-hidden transition-colors',
       'focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20',
     )}
@@ -97,6 +97,7 @@ export default function ProcessingConfigurationForm({
     orchestratorBaseUrl?: string
     hasOrchestratorSecret: boolean
     hasProcessorSecret: boolean
+    usingEnvironmentFallback: boolean
   }
 }) {
   const [state, action, isPending] = useActionState(
@@ -114,50 +115,52 @@ export default function ProcessingConfigurationForm({
   );
 
   return <form action={action} className="space-y-6">
-    <div className="rounded-lg border border-medium px-3 sm:px-4">
-      <div className="border-b border-medium py-3">
+    <div className="overflow-hidden rounded-lg border-medium">
+      <div className="border-b border-medium px-3 py-3 sm:px-4">
         <div className="text-xs font-semibold uppercase tracking-wide text-dim">
           Connection
         </div>
         <p className="mt-1 text-sm leading-5 text-dim">
-          These values override environment variables and are stored in the
-          project database. Secret fields stay masked; leave them blank to
-          keep the current secret.
+          {connectionSettings?.usingEnvironmentFallback
+            ? 'The active connection currently comes from environment fallback. Save values here to manage it from the panel.'
+            : 'These values are stored in the project database. Secret fields stay masked; leave them blank to keep the current secret.'}
         </p>
       </div>
-      <TextSetting
-        name="orchestratorBaseUrl"
-        label="Orchestrator URL"
-        description="Public URL of the deployed Cloudflare Worker."
-        defaultValue={connectionSettings?.orchestratorBaseUrl}
-        placeholder="https://worker.example.workers.dev"
-        type="url"
-      />
-      <TextSetting
-        name="orchestratorSharedSecret"
-        label="Panel key"
-        description={connectionSettings?.hasOrchestratorSecret
-          ? 'Configured — enter a new value only to rotate it.'
-          : 'Shared secret used by the panel and orchestrator.'}
-        placeholder={connectionSettings?.hasOrchestratorSecret
-          ? 'Configured — leave blank to keep'
-          : 'Enter panel key'}
-        type="password"
-      />
-      <TextSetting
-        name="processorSharedSecret"
-        label="Processor key"
-        description={connectionSettings?.hasProcessorSecret
-          ? 'Configured — enter a new value only to rotate it.'
-          : 'Shared secret used by the orchestrator and processors.'}
-        placeholder={connectionSettings?.hasProcessorSecret
-          ? 'Configured — leave blank to keep'
-          : 'Enter processor key'}
-        type="password"
-      />
+      <div className="divide-y divide-medium px-3 sm:px-4">
+        <TextSetting
+          name="orchestratorBaseUrl"
+          label="Orchestrator URL"
+          description="Public URL of the deployed Cloudflare Worker."
+          defaultValue={connectionSettings?.orchestratorBaseUrl}
+          placeholder="https://worker.example.workers.dev"
+          type="url"
+        />
+        <TextSetting
+          name="orchestratorSharedSecret"
+          label="Panel key"
+          description={connectionSettings?.hasOrchestratorSecret
+            ? 'Configured — enter a new value only to rotate it.'
+            : 'Shared secret used by the panel and orchestrator.'}
+          placeholder={connectionSettings?.hasOrchestratorSecret
+            ? 'Configured — leave blank to keep'
+            : 'Enter panel key'}
+          type="password"
+        />
+        <TextSetting
+          name="processorSharedSecret"
+          label="Processor key"
+          description={connectionSettings?.hasProcessorSecret
+            ? 'Configured — enter a new value only to rotate it.'
+            : 'Shared secret used by the orchestrator and processors.'}
+          placeholder={connectionSettings?.hasProcessorSecret
+            ? 'Configured — leave blank to keep'
+            : 'Enter processor key'}
+          type="password"
+        />
+      </div>
     </div>
 
-    <div className="divide-y divide-medium rounded-lg border border-medium px-3 sm:px-4">
+    <div className="overflow-hidden divide-y divide-medium rounded-lg border-medium px-3 sm:px-4">
       <ConfigToggle
         name="orchestratorEnabled"
         label="Backend Orchestrator"
@@ -181,76 +184,80 @@ export default function ProcessingConfigurationForm({
       />
     </div>
 
-    <div className="rounded-lg border border-medium px-3 sm:px-4">
-      <div className="border-b border-medium py-3 text-xs font-semibold uppercase tracking-wide text-dim">
+    <div className="overflow-hidden rounded-lg border-medium">
+      <div className="border-b border-medium px-3 py-3 text-xs font-semibold uppercase tracking-wide text-dim sm:px-4">
         Orchestrator
       </div>
-      <NumberSetting
-        name="registerBatchSize"
-        label="Registration batch size"
-        description="Maximum uploads registered in one scan pass."
-        defaultValue={settings.registerBatchSize}
-      />
-      <NumberSetting
-        name="maxRegisterPasses"
-        label="Maximum registration passes"
-        description="Registration passes performed by one scan."
-        defaultValue={settings.maxRegisterPasses}
-      />
-      <NumberSetting
-        name="staleProcessingMinutes"
-        label="Processing recovery lease"
-        description="Requeue a job after heartbeats stop for this long."
-        defaultValue={settings.staleProcessingMinutes}
-        suffix="min"
-      />
-      <NumberSetting
-        name="staleRegistrationMinutes"
-        label="Registration recovery lease"
-        description="Mark an abandoned registration attempt as stalled."
-        defaultValue={settings.staleRegistrationMinutes}
-        suffix="min"
-      />
-      <NumberSetting
-        name="registrationHistoryDays"
-        label="Registration history"
-        description="Keep completed registration tracking for this long."
-        defaultValue={settings.registrationHistoryDays}
-        suffix="days"
-      />
+      <div className="divide-y divide-medium px-3 sm:px-4">
+        <NumberSetting
+          name="registerBatchSize"
+          label="Registration batch size"
+          description="Maximum uploads registered in one scan pass."
+          defaultValue={settings.registerBatchSize}
+        />
+        <NumberSetting
+          name="maxRegisterPasses"
+          label="Maximum registration passes"
+          description="Registration passes performed by one scan."
+          defaultValue={settings.maxRegisterPasses}
+        />
+        <NumberSetting
+          name="staleProcessingMinutes"
+          label="Processing recovery lease"
+          description="Requeue a job after heartbeats stop for this long."
+          defaultValue={settings.staleProcessingMinutes}
+          suffix="min"
+        />
+        <NumberSetting
+          name="staleRegistrationMinutes"
+          label="Registration recovery lease"
+          description="Mark an abandoned registration attempt as stalled."
+          defaultValue={settings.staleRegistrationMinutes}
+          suffix="min"
+        />
+        <NumberSetting
+          name="registrationHistoryDays"
+          label="Registration history"
+          description="Keep completed registration tracking for this long."
+          defaultValue={settings.registrationHistoryDays}
+          suffix="days"
+        />
+      </div>
     </div>
 
-    <div className="rounded-lg border border-medium px-3 sm:px-4">
-      <div className="border-b border-medium py-3 text-xs font-semibold uppercase tracking-wide text-dim">
+    <div className="overflow-hidden rounded-lg border-medium">
+      <div className="border-b border-medium px-3 py-3 text-xs font-semibold uppercase tracking-wide text-dim sm:px-4">
         Backend Processors
       </div>
-      <NumberSetting
-        name="processorPollIntervalMs"
-        label="Active polling interval"
-        description="Delay after a processor completes a job."
-        defaultValue={settings.processorPollIntervalMs}
-        suffix="ms"
-      />
-      <NumberSetting
-        name="processorIdleIntervalMs"
-        label="Idle polling interval"
-        description="Delay when no processing job is available."
-        defaultValue={settings.processorIdleIntervalMs}
-        suffix="ms"
-      />
-      <NumberSetting
-        name="processorHeartbeatIntervalMs"
-        label="Heartbeat interval"
-        description="How often a processor renews its active-job lease."
-        defaultValue={settings.processorHeartbeatIntervalMs}
-        suffix="ms"
-      />
-      <NumberSetting
-        name="processorClaimLimit"
-        label="Jobs claimed per processor"
-        description="Concurrent jobs assigned to each polling processor."
-        defaultValue={settings.processorClaimLimit}
-      />
+      <div className="divide-y divide-medium px-3 sm:px-4">
+        <NumberSetting
+          name="processorPollIntervalMs"
+          label="Active polling interval"
+          description="Delay after a processor completes a job."
+          defaultValue={settings.processorPollIntervalMs}
+          suffix="ms"
+        />
+        <NumberSetting
+          name="processorIdleIntervalMs"
+          label="Idle polling interval"
+          description="Delay when no processing job is available."
+          defaultValue={settings.processorIdleIntervalMs}
+          suffix="ms"
+        />
+        <NumberSetting
+          name="processorHeartbeatIntervalMs"
+          label="Heartbeat interval"
+          description="How often a processor renews its active-job lease."
+          defaultValue={settings.processorHeartbeatIntervalMs}
+          suffix="ms"
+        />
+        <NumberSetting
+          name="processorClaimLimit"
+          label="Jobs claimed per processor"
+          description="Concurrent jobs assigned to each polling processor."
+          defaultValue={settings.processorClaimLimit}
+        />
+      </div>
     </div>
 
     <div
@@ -269,8 +276,8 @@ export default function ProcessingConfigurationForm({
         type="submit"
         disabled={isPending}
         className={clsx(
-          'inline-flex h-9 items-center justify-center rounded-lg bg-main px-4',
-          'text-sm font-medium text-inverse transition-opacity',
+          'inline-flex h-9 items-center justify-center rounded-lg bg-invert px-4',
+          'text-sm font-medium text-invert transition-opacity',
           'hover:opacity-85 disabled:cursor-wait disabled:opacity-60',
         )}
       >

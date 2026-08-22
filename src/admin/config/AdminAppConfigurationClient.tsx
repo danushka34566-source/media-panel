@@ -55,6 +55,7 @@ export default function AdminAppConfigurationClient({
   hasDatabase,
   postgresProvider,
   isPostgresSslEnabled,
+  postgresSslMode,
   hasRedisStorage,
   hasDriveStorage,
   hasCloudflareR2Storage,
@@ -172,6 +173,8 @@ export default function AdminAppConfigurationClient({
       orchestratorBaseUrl?: string
       hasOrchestratorSecret: boolean
       hasProcessorSecret: boolean
+      isConfigured: boolean
+      usingEnvironmentFallback: boolean
     }
     applicationSettings?: {
       publicPageBuildOptimizations: boolean
@@ -307,7 +310,7 @@ export default function AdminAppConfigurationClient({
               ? renderSubStatus(
                 'checked',
                 // eslint-disable-next-line max-len
-                `${postgresProvider === 'supabase' ? 'Supabase Postgres' : 'Neon Postgres'}: connected${!isPostgresSslEnabled ? ' (SSL disabled)' : ''}`,
+                `${postgresProvider === 'supabase' ? 'Supabase Postgres' : 'Neon Postgres'}: connected`,
               )
               : renderSubStatus('missing', <>
                 Postgres:
@@ -324,6 +327,21 @@ export default function AdminAppConfigurationClient({
               </>)}
             {renderEnvVars([
               'POSTGRES_URL',
+            ])}
+            <div className="mt-2 text-sm leading-relaxed text-dim">
+              {postgresProvider === 'supabase'
+                ? isPostgresSslEnabled
+                  ? 'SSL enabled for Supabase (manual override).'
+                  : postgresSslMode === 'manual'
+                    ? 'SSL disabled for Supabase (manual override).'
+                    : 'SSL disabled automatically for Supabase pooler compatibility.'
+                : isPostgresSslEnabled
+                  ? postgresSslMode === 'manual'
+                    ? 'SSL enabled for Neon (manual override).'
+                    : 'SSL enabled automatically for Neon.'
+                  : 'SSL disabled for Neon (manual override).'}
+            </div>
+            {postgresSslMode === 'manual' && renderEnvVars([
               'DISABLE_POSTGRES_SSL',
             ])}
           </ChecklistRow>
@@ -436,14 +454,12 @@ export default function AdminAppConfigurationClient({
           <ChecklistRow
             title="Backend Orchestrator"
             status={processingConnectionSettings
-              ? Boolean(
-                processingConnectionSettings.orchestratorBaseUrl &&
-                processingConnectionSettings.hasOrchestratorSecret,
-              )
+              ? processingConnectionSettings.isConfigured
               : hasBackendOrchestrator}
           >
-            Configure the deployed URL and panel key in the form below.
-            Values are stored securely in the project database.
+            {processingConnectionSettings?.usingEnvironmentFallback
+              ? 'Connected using the existing environment fallback. Save the values in the form below to move this connection into the project database.'
+              : 'Configure the deployed URL and panel key in the form below. Values are stored securely in the project database.'}
           </ChecklistRow>
           <ChecklistRow
             title="Backend Processor authentication"

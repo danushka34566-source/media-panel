@@ -74,31 +74,30 @@ The panel accepts one normal PostgreSQL connection URI in `POSTGRES_URL`.
 
 ### Neon
 
-Use the Neon pooled or direct URI and leave SSL enabled:
+Use the Neon pooled or direct URI. SSL is enabled automatically; no extra
+flag is required:
 
 ```env
 POSTGRES_URL=postgresql://user:password@ep-example-pooler.region.aws.neon.tech/dbname?sslmode=require
-DISABLE_POSTGRES_SSL=0
 ```
 
 ### Supabase
 
-Use the Supabase transaction-pooler URI (normally port `6543`):
+Use the Supabase transaction-pooler URI (normally port `6543`). Supabase
+compatibility mode disables the client-side TLS layer automatically:
 
 ```env
 POSTGRES_URL=postgresql://postgres.project-ref:password@aws-0-region.pooler.supabase.com:6543/postgres
-DISABLE_POSTGRES_SSL=1
 ```
 
-For this project, `DISABLE_POSTGRES_SSL=1` tells the Node PostgreSQL client to
-disable its TLS layer for the Supabase connection. This is the compatibility
-setting used when Supabase's pooler certificate/handshake causes connection
-failures. Set it only for the Supabase deployment that requires it; keep
-`DISABLE_POSTGRES_SSL=0` for Neon and normal verified TLS connections.
+`DISABLE_POSTGRES_SSL` is optional. Leave it unset for provider-aware behavior:
+Supabase disables TLS for pooler compatibility and Neon keeps strict TLS. Set
+it to `1` or `0` only when an explicit override is needed; an explicit value
+wins over automatic detection and is passed to the Worker deployment config.
 
-The same URI and flag must be present in the panel environment and in the
-orchestrator's generated Worker secrets. Do not expose `POSTGRES_URL` to the
-browser.
+The panel passes the URI and resolved SSL mode to the orchestrator's generated
+Worker secrets. The SSL flag can remain unset in the panel environment. Do not
+expose `POSTGRES_URL` to the browser.
 
 ## Environment variables
 
@@ -116,7 +115,7 @@ the related feature is enabled.
 | `NEXT_PUBLIC_NAV_TITLE`, `NEXT_PUBLIC_NAV_CAPTION`, `NEXT_PUBLIC_PAGE_ABOUT` | Navigation/about copy. |
 | `AUTH_SECRET` | Auth.js session/signing secret. |
 | `POSTGRES_URL` | Neon or Supabase PostgreSQL URI. |
-| `DISABLE_POSTGRES_SSL` | `1` for required Supabase compatibility mode; normally `0`. |
+| `DISABLE_POSTGRES_SSL` | Optional `1`/`0` override; otherwise provider-aware automatically. |
 | `MEDIA_ID_FORWARDING_TABLE` | Optional legacy media-ID forwarding table. |
 
 ### Storage and uploads
@@ -159,7 +158,7 @@ first-install fallback.
 | `DRIVE_STORAGE_PROJECT_ID`, `DRIVE_STORAGE_BUCKET` | Worker-side Drive settings. |
 | `R2_PUBLIC_BASE_URL`, `R2_ACCOUNT_ID`, `R2_BUCKET` | Worker-side R2 settings. |
 | `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` | Worker-side R2 S3 credentials. |
-| `UNIQUE_MEDIA_NAMES` | Use generated unique media object names (`1` or `0`). |
+| `UNIQUE_MEDIA_NAMES` | Use generated unique media object names; enabled by default. Set `0` to disable. |
 | `REGISTER_BATCH_SIZE` | Files attempted per registration pass; default `2`. |
 | `MAX_REGISTER_PASSES` | Registration passes per scheduled run; default `2`. |
 | `STALE_PROCESSING_MINUTES`, `STALE_REGISTRATION_MINUTES` | Lease recovery ages. |
@@ -199,7 +198,8 @@ Google's callback URL is `https://YOUR_DOMAIN/api/auth/callback/google`.
 
 In **Admin → Configuration → Performance**, enable **Prebuild public pages**
 to generate every public media and category page during the next production
-build. It is disabled by default. When disabled, public pages are generated
+build. It is disabled by default. When prebuilding is disabled, public pages
+are generated
 on first visit and served through the normal revalidation/cache paths. Saving
 the setting revalidates existing public cache entries immediately; the full
 prebuild takes effect on the next build.

@@ -3,7 +3,9 @@ import { APP_CONFIGURATION } from '@/app/config';
 import { testConnectionsAction } from '@/admin/actions';
 import { generateAuthSecret } from '@/auth';
 import { getProcessingSettingsSafe } from '@/processing/settings';
-import { getProcessingConnectionSettingsSafe } from '@/processing/connection-settings';
+import {
+  getProcessingConnectionSettingsResolutionSafe,
+} from '@/processing/connection-settings';
 import { getSiteAccessSettingsSafe } from '@/auth/site-access';
 import { getApplicationSettingsSafe } from '@/app/application-settings';
 
@@ -23,7 +25,7 @@ export default async function AdminAppConfigurationServer({
     testConnectionsAction().catch(() => ({})),
     generateAuthSecret(),
     getProcessingSettingsSafe(),
-    getProcessingConnectionSettingsSafe(),
+    getProcessingConnectionSettingsResolutionSafe(),
     getSiteAccessSettingsSafe(),
     getApplicationSettingsSafe(),
   ]);
@@ -35,13 +37,22 @@ export default async function AdminAppConfigurationServer({
       secret,
       processingSettings,
       processingConnectionSettings: {
-        orchestratorBaseUrl: processingConnectionSettings.orchestratorBaseUrl,
+        // Only show values explicitly saved in the panel. The effective
+        // runtime connection may still use environment fallbacks below.
+        orchestratorBaseUrl:
+          processingConnectionSettings.stored.orchestratorBaseUrl,
         hasOrchestratorSecret: Boolean(
-          processingConnectionSettings.orchestratorSharedSecret,
+          processingConnectionSettings.stored.orchestratorSharedSecret,
         ),
         hasProcessorSecret: Boolean(
-          processingConnectionSettings.processorSharedSecret,
+          processingConnectionSettings.stored.processorSharedSecret,
         ),
+        isConfigured: Boolean(
+          processingConnectionSettings.effective.orchestratorBaseUrl &&
+          processingConnectionSettings.effective.orchestratorSharedSecret,
+        ),
+        usingEnvironmentFallback:
+          processingConnectionSettings.usingEnvironmentFallback,
       },
       siteAccessSettings,
       applicationSettings,

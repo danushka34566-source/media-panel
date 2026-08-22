@@ -22,8 +22,8 @@ export default function PublicPageOptimizationForm({
   const [publicPageBuildOptimizations, setPublicPageBuildOptimizations] =
     useState(enabled);
 
-  return <form action={action} className="space-y-3">
-    <div className="rounded-lg border border-medium px-3 sm:px-4">
+  return <form action={action} className="space-y-5">
+    <div className="overflow-hidden rounded-lg border-medium px-3 sm:px-4">
       <ConfigToggle
         name="publicPageBuildOptimizations"
         label="Prebuild public pages"
@@ -34,25 +34,25 @@ export default function PublicPageOptimizationForm({
         onChange={setPublicPageBuildOptimizations}
       />
     </div>
-    <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+    <div className="flex min-h-10 flex-col gap-3 border-t border-medium pt-4 sm:flex-row sm:items-center sm:justify-between">
       <span className={clsx(
         'min-h-5 text-sm',
         state.error ? 'text-red-600' : 'text-dim',
       )}>
         {state.error || (state.saved
-          ? 'Saved. The next production build will use this setting.'
+          ? 'Application settings saved.'
           : '')}
       </span>
       <button
         type="submit"
         disabled={isPending}
         className={clsx(
-          'inline-flex h-9 items-center justify-center rounded-lg bg-main px-4',
-          'text-sm font-medium text-inverse transition-opacity',
+          'inline-flex h-9 items-center justify-center rounded-lg bg-invert px-4',
+          'text-sm font-medium text-invert transition-opacity',
           'hover:opacity-85 disabled:cursor-wait disabled:opacity-60',
         )}
       >
-        {isPending ? 'Saving…' : 'Save public page settings'}
+        {isPending ? 'Saving…' : 'Save performance settings'}
       </button>
     </div>
   </form>;

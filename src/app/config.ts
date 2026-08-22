@@ -177,12 +177,20 @@ export const POSTGRES_PROVIDER: PostgresProvider =
     ? 'supabase'
     : 'neon';
 export const ACTIVE_POSTGRES_URL = primaryPostgresUrl;
-// The SSL override exists only for Supabase pooler compatibility. Neon keeps
-// TLS enabled regardless of that Supabase-specific switch.
-export const POSTGRES_SSL_ENABLED =
-  POSTGRES_PROVIDER === 'supabase'
-    ? process.env.DISABLE_POSTGRES_SSL !== '1'
-    : true;
+// SSL is provider-aware by default. Supabase poolers use compatibility mode
+// unless the operator explicitly sets DISABLE_POSTGRES_SSL to 0. Neon keeps
+// TLS enabled unless the operator explicitly sets it to 1.
+const POSTGRES_SSL_OVERRIDE =
+  process.env.DISABLE_POSTGRES_SSL?.trim();
+export const POSTGRES_SSL_DISABLED =
+  POSTGRES_SSL_OVERRIDE === '1'
+    ? true
+    : POSTGRES_SSL_OVERRIDE === '0'
+      ? false
+      : POSTGRES_PROVIDER === 'supabase';
+export const POSTGRES_SSL_ENABLED = !POSTGRES_SSL_DISABLED;
+export const POSTGRES_SSL_MODE = POSTGRES_SSL_OVERRIDE === '0' ||
+  POSTGRES_SSL_OVERRIDE === '1' ? 'manual' : 'automatic';
 
 // STORAGE: REDIS
 export const HAS_REDIS_STORAGE =
@@ -249,7 +257,7 @@ export const PRESERVE_ORIGINAL_UPLOADS =
   // Legacy environment variable
   process.env.NEXT_PUBLIC_PRO_MODE === '1';
 export const UNIQUE_MEDIA_NAMES =
-  process.env.NEXT_PUBLIC_UNIQUE_MEDIA_NAMES === '1';
+  process.env.NEXT_PUBLIC_UNIQUE_MEDIA_NAMES !== '0';
 export const IMAGE_QUALITY =
   process.env.NEXT_PUBLIC_IMAGE_QUALITY
     ? parseInt(process.env.NEXT_PUBLIC_IMAGE_QUALITY)
@@ -424,6 +432,7 @@ export const APP_CONFIGURATION = {
   hasDatabase: HAS_DATABASE,
   postgresProvider: POSTGRES_PROVIDER,
   isPostgresSslEnabled: POSTGRES_SSL_ENABLED,
+  postgresSslMode: POSTGRES_SSL_MODE,
   hasRedisStorage: HAS_REDIS_STORAGE,
   hasDriveStorage: HAS_DRIVE_STORAGE,
   hasCloudflareR2Storage: HAS_CLOUDFLARE_R2_STORAGE,

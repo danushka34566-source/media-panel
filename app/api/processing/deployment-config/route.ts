@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import {
   ACTIVE_POSTGRES_URL,
-  POSTGRES_SSL_ENABLED,
+  POSTGRES_SSL_DISABLED,
 } from '@/app/config';
 import { getProcessingSettingsSafe } from '@/processing/settings';
 import { getProcessingConnectionSettingsSafe } from '@/processing/connection-settings';
@@ -33,7 +33,10 @@ export async function POST(request: NextRequest) {
     request.nextUrl.origin;
   const config: Record<string, string | undefined> = {
     POSTGRES_URL: value(ACTIVE_POSTGRES_URL),
-    DISABLE_POSTGRES_SSL: POSTGRES_SSL_ENABLED ? '0' : '1',
+    // Pass the resolved provider-aware value so the Worker does not need a
+    // second guess about Supabase versus Neon. Explicit env overrides have
+    // already been applied by config.ts.
+    DISABLE_POSTGRES_SSL: POSTGRES_SSL_DISABLED ? '1' : '0',
     MEDIA_PANEL_BASE_URL: panelBaseUrl,
     AUTOMATION_API_SECRET: connection.orchestratorSharedSecret,
     BACKEND_ORCHESTRATOR_SHARED_SECRET: connection.orchestratorSharedSecret,
@@ -57,7 +60,9 @@ export async function POST(request: NextRequest) {
     R2_SECRET_ACCESS_KEY: value(
       process.env.CLOUDFLARE_R2_SECRET_ACCESS_KEY,
     ),
-    UNIQUE_MEDIA_NAMES: process.env.NEXT_PUBLIC_UNIQUE_MEDIA_NAMES || '0',
+    UNIQUE_MEDIA_NAMES: process.env.NEXT_PUBLIC_UNIQUE_MEDIA_NAMES === '0'
+      ? '0'
+      : '1',
     REGISTER_BATCH_SIZE: String(settings.registerBatchSize),
     MAX_REGISTER_PASSES: String(settings.maxRegisterPasses),
     STALE_PROCESSING_MINUTES: String(settings.staleProcessingMinutes),
