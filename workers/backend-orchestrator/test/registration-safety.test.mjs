@@ -139,6 +139,7 @@ test('only an in-progress registration is recovered as stalled', () => {
   const staleSource = workerSource.slice(staleStart, staleEnd);
 
   assert.match(staleSource, /WHERE status='registering'/);
+  assert.match(staleSource, /media_id IS NULL/);
   assert.doesNotMatch(staleSource, /status IN \('detected', 'registering'\)/);
   assert.match(staleSource, /WHERE status='detected'[\s\S]*?error_message=\$\{STALE_REGISTRATION_ERROR_MESSAGE\}/);
 });

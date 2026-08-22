@@ -228,7 +228,7 @@ const GENERATED_MEDIA_SUFFIX_REGEX =
 const STALE_REGISTRATION_ERROR_MESSAGE =
   'Previous registration attempt stalled; queued for retry';
 const MISSING_UPLOAD_ERROR_PREFIX = 'Upload not found in storage';
-const WORKER_BUILD_ID = 'registration-retry-v45';
+const WORKER_BUILD_ID = 'registration-retry-v46';
 // A scheduled Worker must finish promptly. Drive copies can become visible
 // asynchronously, so persist the in-flight state and check again on the next
 // minute instead of polling long enough to lose the registration lease.
@@ -2229,7 +2229,10 @@ const clearStaleRegistrationStatuses = async (env: Env) => {
     -- made an idle backlog look like every file had failed. Only recover a
     -- file that was actually claimed and left in registering.
     WHERE status='registering'
-      AND updated_at < now() - (${String(minutes)} || ' minutes')::interval
+      AND (
+        media_id IS NULL
+        OR updated_at < now() - (${String(minutes)} || ' minutes')::interval
+      )
   `;
 };
 
@@ -3165,37 +3168,14 @@ const scanAndRegisterWithLease = async (
       registrationRemaining = pendingUploads.length;
       break;
     }
-    const batchHintUrls = batch.map(object => urlForKey(env, object.key));
-    const hintsByUrl = await getUploadRegistrationHints(env, batchHintUrls);
-    await upsertRegistrationStatuses(env, batch.map(object => {
-      const currentUrl = urlForKey(env, object.key);
-      const uploadHint = hintsByUrl.get(currentUrl);
-      const existingRegistration = registrationRowsByUrl.get(currentUrl);
-      const fileParts = getFileParts(object.key);
-      const originalFileName =
-        resolveRegistrationOriginalFileName({
-          hint: uploadHint,
-          statusRow: existingRegistration,
-          fallbackFileName: fileParts.fileName,
-        }) || fileParts.fileName;
-      return {
-        url: currentUrl,
-        fileName: originalFileName,
-        uploadedAt: object.uploaded?.toISOString(),
-        status: 'registering',
-        sourceUrl: resolveRegistrationSourceUrl(
-          existingRegistration,
-          currentUrl,
-        ),
-        originalFileName,
-        title: resolveRegistrationTitle({
-          originalFileName,
-          fallbackFileName: fileParts.fileName,
-        }),
-        extension: fileParts.extension,
-        errorMessage: undefined,
-      } satisfies RegistrationStatusWrite;
-    }));
+    // Keep the selected rows as `detected` until each file has an allocated
+    // media ID and is actually entering its copy/commit attempt. Marking the
+    // whole batch as `registering` first left null-ID rows looking stalled if
+    // the Worker was reclaimed between the batch write and the first file.
+    const hintsByUrl = await getUploadRegistrationHints(
+      env,
+      batch.map(object => urlForKey(env, object.key)),
+    );
     for (const object of batch) {
       if (!await renewScanLease(env, leaseToken)) {
         throw new Error('Worker registration scan lease was lost');
