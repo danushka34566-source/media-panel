@@ -226,7 +226,7 @@ const GENERATED_MEDIA_SUFFIX_REGEX =
 const STALE_REGISTRATION_ERROR_MESSAGE =
   'Previous registration attempt stalled; queued for retry';
 const MISSING_UPLOAD_ERROR_PREFIX = 'Upload not found in storage';
-const WORKER_BUILD_ID = 'registration-retry-v36';
+const WORKER_BUILD_ID = 'registration-retry-v37';
 // A scheduled Worker must finish promptly. Drive copies can become visible
 // asynchronously, so persist the in-flight state and check again on the next
 // minute instead of polling long enough to lose the registration lease.
@@ -2167,6 +2167,14 @@ const clearStaleRegistrationStatuses = async (env: Env) => {
     min: 1,
     max: 24 * 60,
   });
+  // Remove the misleading legacy marker from rows that were never claimed.
+  // Their normal state is detected, and they remain eligible for FIFO work.
+  await sql`
+    UPDATE worker_registration_status
+    SET error_message=NULL
+    WHERE status='detected'
+      AND error_message=${STALE_REGISTRATION_ERROR_MESSAGE}
+  `;
   await sql`
     UPDATE worker_registration_status
     SET

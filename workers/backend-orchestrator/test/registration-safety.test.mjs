@@ -112,6 +112,7 @@ test('only an in-progress registration is recovered as stalled', () => {
 
   assert.match(staleSource, /WHERE status='registering'/);
   assert.doesNotMatch(staleSource, /status IN \('detected', 'registering'\)/);
+  assert.match(staleSource, /WHERE status='detected'[\s\S]*?error_message=\$\{STALE_REGISTRATION_ERROR_MESSAGE\}/);
 });
 
 test('a registration scan does not fan out direct database connections for a backlog', () => {
