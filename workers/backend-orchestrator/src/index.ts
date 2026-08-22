@@ -263,7 +263,7 @@ const GENERATED_MEDIA_SUFFIX_REGEX =
 const STALE_REGISTRATION_ERROR_MESSAGE =
   'Previous registration attempt stalled; queued for retry';
 const MISSING_UPLOAD_ERROR_PREFIX = 'Upload not found in storage';
-const WORKER_BUILD_ID = 'v79';
+const WORKER_BUILD_ID = 'v80';
 // A scheduled Worker must finish promptly. Drive copies can become visible
 // asynchronously, so persist the in-flight state and check again on the next
 // minute instead of polling long enough to lose the registration lease.
@@ -1990,22 +1990,34 @@ const copyObject = async (
 ) => {
   if (isDriveStorageEnabled(env)) {
     try {
-      const response = await fetch(
-        `${driveApiBaseUrl(env)}/api/v1/storage/copy`,
-        {
-          method: 'POST',
-          signal: AbortSignal.timeout(DRIVE_COPY_REQUEST_TIMEOUT_MS),
-          headers: driveHeaders(env, {
-            'Content-Type': 'application/json',
-          }),
-          body: JSON.stringify({
-            projectId: env.DRIVE_STORAGE_PROJECT_ID,
-            bucket: env.DRIVE_STORAGE_BUCKET,
-            fromKey: sourceKey,
-            toKey: destinationKey,
-          }),
-        },
-      );
+      const controller = new AbortController();
+      let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+      const response = await Promise.race([
+        fetch(
+          `${driveApiBaseUrl(env)}/api/v1/storage/copy`,
+          {
+            method: 'POST',
+            signal: controller.signal,
+            headers: driveHeaders(env, {
+              'Content-Type': 'application/json',
+            }),
+            body: JSON.stringify({
+              projectId: env.DRIVE_STORAGE_PROJECT_ID,
+              bucket: env.DRIVE_STORAGE_BUCKET,
+              fromKey: sourceKey,
+              toKey: destinationKey,
+            }),
+          },
+        ),
+        new Promise<Response>((_, reject) => {
+          timeoutHandle = setTimeout(() => {
+            controller.abort();
+            reject(new Error('Drive copy request timed out'));
+          }, DRIVE_COPY_REQUEST_TIMEOUT_MS);
+        }),
+      ]).finally(() => {
+        if (timeoutHandle) clearTimeout(timeoutHandle);
+      });
       if (!response.ok) {
         const text = await response.text().catch(() => '');
         let detail = text;
