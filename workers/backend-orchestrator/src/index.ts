@@ -258,7 +258,7 @@ const GENERATED_MEDIA_SUFFIX_REGEX =
 const STALE_REGISTRATION_ERROR_MESSAGE =
   'Previous registration attempt stalled; queued for retry';
 const MISSING_UPLOAD_ERROR_PREFIX = 'Upload not found in storage';
-const WORKER_BUILD_ID = 'registration-retry-v54';
+const WORKER_BUILD_ID = 'registration-retry-v55';
 // A scheduled Worker must finish promptly. Drive copies can become visible
 // asynchronously, so persist the in-flight state and check again on the next
 // minute instead of polling long enough to lose the registration lease.
@@ -4478,7 +4478,7 @@ const startScan = (
     try {
       // Activity logging is observability only. A transient database failure
       // here must never prevent the actual FIFO scan from starting.
-      await logBackendActivity(env, {
+      void logBackendActivity(env, {
         category: 'orchestrator',
         event: 'scan_started',
         status: 'info',
@@ -4492,7 +4492,7 @@ const startScan = (
       // watchdog: that creates a false timeout while the underlying scan keeps
       // running and still owns the lease, making later cron runs look stalled.
       const result = await scanAndRegister(env);
-      await logBackendActivity(env, {
+      void logBackendActivity(env, {
         category: 'orchestrator',
         event: 'scan_completed',
         status: 'success',
@@ -4503,7 +4503,7 @@ const startScan = (
       });
       return result;
     } catch (error) {
-      await logBackendActivity(env, {
+      void logBackendActivity(env, {
         category: 'orchestrator',
         event: 'scan_failed',
         status: 'error',
