@@ -201,6 +201,21 @@ test('long scans keep their lease alive without a false whole-scan timeout', () 
   assert.match(workerSource, /ctx\.waitUntil\(scan\.promise\.catch/);
 });
 
+test('observability database failures cannot disable scheduled registration', () => {
+  const startScanStart = workerSource.indexOf('const startScan =');
+  const startScanEnd = workerSource.indexOf('const scheduleScan =', startScanStart);
+  const startScanSource = workerSource.slice(startScanStart, startScanEnd);
+  assert.match(startScanSource, /logBackendActivity\(env, \{[\s\S]*event: 'scan_started'/);
+  assert.match(startScanSource, /event: 'scan_started'[\s\S]*\.catch\(error =>/);
+  assert.match(startScanSource, /event: 'scan_completed'[\s\S]*\.catch\(error =>/);
+  assert.match(startScanSource, /event: 'scan_failed'[\s\S]*\.catch\(logError =>/);
+
+  const scheduledStart = workerSource.indexOf('async scheduled(');
+  const scheduledEnd = workerSource.indexOf('async fetch(', scheduledStart);
+  const scheduledSource = workerSource.slice(scheduledStart, scheduledEnd);
+  assert.match(scheduledSource, /event: 'scheduled_triggered'[\s\S]*\.catch\(error =>/);
+});
+
 test('scheduled scans do not share an in-memory promise across cron events', () => {
   assert.match(workerSource, /startScan\([\s\S]*?\{ shareInFlight: false \}/);
   assert.match(workerSource, /if \(shareInFlight && scanInFlight\)/);

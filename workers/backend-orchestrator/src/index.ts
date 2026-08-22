@@ -228,7 +228,7 @@ const GENERATED_MEDIA_SUFFIX_REGEX =
 const STALE_REGISTRATION_ERROR_MESSAGE =
   'Previous registration attempt stalled; queued for retry';
 const MISSING_UPLOAD_ERROR_PREFIX = 'Upload not found in storage';
-const WORKER_BUILD_ID = 'registration-retry-v42';
+const WORKER_BUILD_ID = 'registration-retry-v43';
 // A scheduled Worker must finish promptly. Drive copies can become visible
 // asynchronously, so persist the in-flight state and check again on the next
 // minute instead of polling long enough to lose the registration lease.
@@ -4253,14 +4253,18 @@ const startScan = (
     return { started: false, promise: scanInFlight };
   }
   const promise = (async () => {
-    await logBackendActivity(env, {
-      category: 'orchestrator',
-      event: 'scan_started',
-      status: 'info',
-      message: 'Storage scan started',
-      details: { storageProvider: detectStorageProvider(env) },
-    });
     try {
+      // Activity logging is observability only. A transient database failure
+      // here must never prevent the actual FIFO scan from starting.
+      await logBackendActivity(env, {
+        category: 'orchestrator',
+        event: 'scan_started',
+        status: 'info',
+        message: 'Storage scan started',
+        details: { storageProvider: detectStorageProvider(env) },
+      }).catch(error => {
+        console.warn('Unable to log registration scan start', error);
+      });
       // Every database, storage, and Drive operation in the scan has its own
       // bounded timeout. Do not race the whole queue against a wall-clock
       // watchdog: that creates a false timeout while the underlying scan keeps
@@ -4272,6 +4276,8 @@ const startScan = (
         status: 'success',
         message: 'Storage scan completed',
         details: result,
+      }).catch(error => {
+        console.warn('Unable to log registration scan completion', error);
       });
       return result;
     } catch (error) {
@@ -4280,6 +4286,8 @@ const startScan = (
         event: 'scan_failed',
         status: 'error',
         message: error instanceof Error ? error.message : 'Storage scan failed',
+      }).catch(logError => {
+        console.warn('Unable to log registration scan failure', logError);
       });
       throw error;
     }
@@ -4317,6 +4325,10 @@ export default {
         cron: controller.cron,
         scheduledTime: controller.scheduledTime,
       },
+    }).catch(error => {
+      // The trigger log is useful, but never let a transient database failure
+      // disable the scheduled registration run.
+      console.warn('Unable to log scheduled registration trigger', error);
     });
     const settings = await getRuntimeProcessingSettings(env);
     // Cleanup is independent of registration. It can hit a slow database or
