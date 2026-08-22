@@ -43,6 +43,8 @@ describe('private-site public routes', () => {
       '/api/processing/jobs/claim',
       false,
     )).toBe(true);
+    expect(isPathAllowedWithoutSessionInPrivateMode('/api/site-info', false))
+      .toBe(true);
     expect(isPathAllowedWithoutSessionInPrivateMode('/', false)).toBe(false);
     expect(isPathAllowedWithoutSessionInPrivateMode('/api/subtitles', false))
       .toBe(false);

@@ -17,4 +17,5 @@ export const isPathAllowedWithoutSessionInPrivateMode = (
   PRIVATE_MODE_PUBLIC_PATHS.some(path => matchesPath(pathname, path)) ||
   (newRegistrationsEnabled && matchesPath(pathname, '/sign-up')) ||
   matchesPath(pathname, '/api/auth') ||
+  matchesPath(pathname, '/api/site-info') ||
   matchesPath(pathname, '/api/processing');
