@@ -100,7 +100,7 @@ test('registration scans process a bounded slice instead of one file per cron', 
 
 test('worker landing links use clear configured labels', () => {
   assert.match(workerSource, /<a href=\"\$\{escapeLandingHtml\(metadata\.githubUrl\)\}[^>]*>GitHub/);
-  assert.match(workerSource, /<a href=\"\$\{escapeLandingHtml\(metadata\.repoUrl\)\}[^>]*>Media Panel/);
+  assert.match(workerSource, /<a href=\"\$\{escapeLandingHtml\(metadata\.panelUrl\)\}[^>]*>Media Panel/);
   assert.match(workerSource, /<a href=\"\$\{escapeLandingHtml\(metadata\.portfolioUrl\)\}[^>]*>Portfolio/);
 });
 

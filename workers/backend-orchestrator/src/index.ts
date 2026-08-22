@@ -258,7 +258,7 @@ const GENERATED_MEDIA_SUFFIX_REGEX =
 const STALE_REGISTRATION_ERROR_MESSAGE =
   'Previous registration attempt stalled; queued for retry';
 const MISSING_UPLOAD_ERROR_PREFIX = 'Upload not found in storage';
-const WORKER_BUILD_ID = 'v66';
+const WORKER_BUILD_ID = 'v67';
 // A scheduled Worker must finish promptly. Drive copies can become visible
 // asynchronously, so persist the in-flight state and check again on the next
 // minute instead of polling long enough to lose the registration lease.
@@ -527,6 +527,7 @@ type WorkerLandingMetadata = {
   ownerName?: string
   repoName?: string
   repoUrl?: string
+  panelUrl?: string
   githubUrl?: string
   portfolioUrl?: string
 };
@@ -554,6 +555,17 @@ const safeLandingUrl = (value: unknown) => {
   }
 };
 
+const isGitHubRepositoryUrl = (value?: string) => {
+  if (!value) { return false; }
+  try {
+    const url = new URL(value);
+    return url.hostname.toLowerCase() === 'github.com' &&
+      url.pathname.split('/').filter(Boolean).length >= 2;
+  } catch {
+    return false;
+  }
+};
+
 const escapeLandingHtml = (value: unknown) => String(value ?? '')
   .replace(/&/g, '&amp;')
   .replace(/</g, '&lt;')
@@ -567,6 +579,7 @@ const getWorkerLandingMetadata = async (env: Env) => {
   }
   const baseUrl = env.MEDIA_PANEL_BASE_URL?.trim().replace(/\/+$/, '');
   if (!baseUrl) { return DEFAULT_LANDING_METADATA; }
+  const configuredPanelUrl = safeLandingUrl(baseUrl);
   try {
     const response = await fetch(`${baseUrl}/api/site-info`, {
       headers: { Accept: 'application/json' },
@@ -575,6 +588,21 @@ const getWorkerLandingMetadata = async (env: Env) => {
     });
     if (!response.ok) { throw new Error(`Panel metadata returned ${response.status}`); }
     const value = await response.json() as Partial<WorkerLandingMetadata>;
+    const configuredRepoUrl = safeLandingUrl(value.repoUrl);
+    const configuredGithubUrl = safeLandingUrl(value.githubUrl);
+    // Older panel deployments exposed the repository as repoUrl and a GitHub
+    // profile as githubUrl. Normalize both shapes so the buttons never point
+    // at the wrong destination while the panel deployment rolls forward.
+    const githubUrl = isGitHubRepositoryUrl(configuredGithubUrl)
+      ? configuredGithubUrl
+      : isGitHubRepositoryUrl(configuredRepoUrl)
+        ? configuredRepoUrl
+        : configuredGithubUrl;
+    const panelUrl = configuredPanelUrl || (
+      configuredRepoUrl && !isGitHubRepositoryUrl(configuredRepoUrl)
+        ? configuredRepoUrl
+        : undefined
+    );
     const metadata: WorkerLandingMetadata = {
       title: typeof value.title === 'string' && value.title.trim()
         ? value.title.trim()
@@ -589,8 +617,9 @@ const getWorkerLandingMetadata = async (env: Env) => {
         ? value.ownerName.trim()
         : undefined,
       repoName: typeof value.repoName === 'string' ? value.repoName.trim() : undefined,
-      repoUrl: safeLandingUrl(value.repoUrl),
-      githubUrl: safeLandingUrl(value.githubUrl),
+      repoUrl: configuredRepoUrl,
+      panelUrl,
+      githubUrl,
       portfolioUrl: safeLandingUrl(value.portfolioUrl),
     };
     landingMetadataCache = { expiresAt: Date.now() + 60_000, metadata };
@@ -620,7 +649,7 @@ const workerLandingPage = (metadata: WorkerLandingMetadata) => {
   const ownerName = escapeLandingHtml(configuredOwner);
   const links = [
     metadata.githubUrl && `<a href="${escapeLandingHtml(metadata.githubUrl)}" rel="noopener noreferrer">GitHub <span class="arrow">-&gt;</span></a>`,
-    metadata.repoUrl && `<a href="${escapeLandingHtml(metadata.repoUrl)}" rel="noopener noreferrer">Media Panel <span class="arrow">-&gt;</span></a>`,
+    metadata.panelUrl && `<a href="${escapeLandingHtml(metadata.panelUrl)}" rel="noopener noreferrer">Media Panel <span class="arrow">-&gt;</span></a>`,
     metadata.portfolioUrl && `<a href="${escapeLandingHtml(metadata.portfolioUrl)}" rel="noopener noreferrer">Portfolio <span class="arrow">-&gt;</span></a>`,
   ].filter(Boolean).join('');
   return `<!doctype html>
