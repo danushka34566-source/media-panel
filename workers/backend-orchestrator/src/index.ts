@@ -258,7 +258,7 @@ const GENERATED_MEDIA_SUFFIX_REGEX =
 const STALE_REGISTRATION_ERROR_MESSAGE =
   'Previous registration attempt stalled; queued for retry';
 const MISSING_UPLOAD_ERROR_PREFIX = 'Upload not found in storage';
-const WORKER_BUILD_ID = 'registration-retry-v56';
+const WORKER_BUILD_ID = 'registration-retry-v57';
 // A scheduled Worker must finish promptly. Drive copies can become visible
 // asynchronously, so persist the in-flight state and check again on the next
 // minute instead of polling long enough to lose the registration lease.
@@ -4441,10 +4441,10 @@ const status = async (
             FROM worker_registration_status
             WHERE status IN ('detected', 'registering', 'error')
             ORDER BY
-              CASE WHEN job.status='registering' THEN 0 ELSE 1 END,
-              job.uploaded_at ASC NULLS LAST,
-              job.updated_at ASC,
-              job.url ASC
+              CASE WHEN status='registering' THEN 0 ELSE 1 END,
+              uploaded_at ASC NULLS LAST,
+              updated_at ASC,
+              url ASC
             LIMIT ${registrationJobLimit}
           ) job
         ), '[]'::jsonb) AS jobs
