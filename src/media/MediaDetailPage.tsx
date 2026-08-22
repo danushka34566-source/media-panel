@@ -232,6 +232,7 @@ export default function MediaDetailPage({
           {...categoryPathParams}
           autoplaySmartPreviews
           suspendSmartPreviewsOnMainPlayback
+          animate={false}
           animateOnFirstLoadOnly
         />}
       />

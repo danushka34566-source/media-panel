@@ -19,6 +19,7 @@ export default function MediaFullPage({
     <div className="space-y-1">
       <MediaListLarge
         photos={photos}
+        animate={false}
       />
       {photosCount > photos.length &&
         <MediaListLargeInfinite

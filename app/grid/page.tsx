@@ -7,6 +7,9 @@ import { getDataForCategoriesCached } from '@/category/cache';
 import { getMediaCached, getMediaMetaCached } from '@/media/cache';
 import { FEED_META_QUERY_OPTIONS, getFeedQueryOptions } from '@/feed';
 import { getEffectiveMediaSortOptions } from '@/media/sort/preference';
+import { getPathForSortBy } from '@/media/sort/path';
+import { USER_DEFAULT_SORT_BY } from '@/app/config';
+import { redirect } from 'next/navigation';
 
 export const maxDuration = 60;
 
@@ -25,6 +28,12 @@ export async function generateMetadata(): Promise<Metadata> {
 
 export default async function GridPage() {
   const sortOptions = await getEffectiveMediaSortOptions();
+  // Resolve the account preference before rendering any grid markup. The
+  // client used to render the default URL first and redirect a few moments
+  // later, causing a visible order flash and a second data load.
+  if (sortOptions.sortBy !== USER_DEFAULT_SORT_BY) {
+    redirect(getPathForSortBy('/grid', sortOptions.sortBy));
+  }
   const [
     photos,
     photosCount,

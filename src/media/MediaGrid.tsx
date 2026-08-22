@@ -238,6 +238,9 @@ export default function MediaGrid({
               {...{
                 photo,
                 ...categories,
+                // Limit route prefetching to the first viewport. Prefetching
+                // every detail route in a large grid saturates the connection.
+                prefetch: index < 6,
                 selected: photo.id === selectedMedia?.id,
                 priority: prioritizeInitialMedia ? index < 2 : undefined,
                 initiallyLoadPreviewImage:

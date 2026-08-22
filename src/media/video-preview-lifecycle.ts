@@ -35,6 +35,7 @@ let areGlobalListenersAttached = false;
 let reducedMotionQuery: MediaQueryList | undefined;
 let coarsePointerQuery: MediaQueryList | undefined;
 let visibilityRefreshFrame: number | undefined;
+let activePreviewUpdateFrame: number | undefined;
 let isFullVideoPlaybackActive = false;
 // Mount the real card video shortly before it enters the viewport. Reusing the
 // same element avoids a second request/decoder startup when it becomes visible.
@@ -157,6 +158,17 @@ const updateActivePreviews = () => {
   });
 };
 
+// A detail page can register hundreds of cards in one React commit. Running
+// a full geometry scan once per card creates an O(n²) layout storm and makes
+// navigation lag. Coalesce lifecycle updates to one animation frame.
+const scheduleActivePreviewUpdate = () => {
+  if (activePreviewUpdateFrame !== undefined) { return; }
+  activePreviewUpdateFrame = window.requestAnimationFrame(() => {
+    activePreviewUpdateFrame = undefined;
+    updateActivePreviews();
+  });
+};
+
 const getObserver = () => {
   if (typeof IntersectionObserver === 'undefined') { return undefined; }
   observer ??= new IntersectionObserver(observerEntries => {
@@ -169,7 +181,7 @@ const getObserver = () => {
           : 0;
       }
     });
-    updateActivePreviews();
+    scheduleActivePreviewUpdate();
   }, {
     root: null,
     threshold: 0,
@@ -234,6 +246,10 @@ const cancelScheduledViewportRefresh = () => {
 
 const onPageHide = () => {
   cancelScheduledViewportRefresh();
+  if (activePreviewUpdateFrame !== undefined) {
+    window.cancelAnimationFrame(activePreviewUpdateFrame);
+    activePreviewUpdateFrame = undefined;
+  }
   entries.forEach(entry => {
     setPreviewMounted(entry, false);
     if (entry.isActive) {
@@ -266,7 +282,7 @@ const onFullscreenChange = () => {
 export const setFullVideoPlaybackActive = (isActive: boolean) => {
   if (isFullVideoPlaybackActive === isActive) { return; }
   isFullVideoPlaybackActive = isActive;
-  updateActivePreviews();
+  scheduleActivePreviewUpdate();
 };
 
 const addMediaQueryListener = (query: MediaQueryList) => {
@@ -310,6 +326,10 @@ const attachGlobalListeners = () => {
 const detachGlobalListeners = () => {
   if (!areGlobalListenersAttached || entries.size > 0) { return; }
   areGlobalListenersAttached = false;
+  if (activePreviewUpdateFrame !== undefined) {
+    window.cancelAnimationFrame(activePreviewUpdateFrame);
+    activePreviewUpdateFrame = undefined;
+  }
   window.removeEventListener('resize', scheduleViewportRefresh);
   window.removeEventListener('scroll', scheduleViewportRefresh, true);
   document.removeEventListener(
@@ -397,7 +417,7 @@ export default function useVideoPreviewLifecycle({
     // first paint instead of waiting for a later scroll or observer callback.
     releaseStaleFullVideoPlayback();
     entry.intersectionRatio = isInViewport(element) ? 1 : 0;
-    updateActivePreviews();
+    scheduleActivePreviewUpdate();
     getObserver()?.observe(element);
     scheduleViewportRefresh();
 
@@ -411,7 +431,7 @@ export default function useVideoPreviewLifecycle({
       idsByElement.delete(element);
       entries.delete(id);
       detachGlobalListeners();
-      updateActivePreviews();
+      scheduleActivePreviewUpdate();
     };
   }, [
     activationKey,

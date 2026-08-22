@@ -480,9 +480,6 @@ export default function MediaLarge({
       });
     }).catch(() => undefined);
   }, [isVideo, photo.url]);
-  useEffect(() => {
-    warmFullVideoDownload();
-  }, [warmFullVideoDownload]);
   useAdaptiveFullVideoPlayback({
     // Zoom owns the active full-video session while open; keeping the inline
     // controller detached prevents two HLS pipelines from downloading at once.
@@ -555,6 +552,15 @@ export default function MediaLarge({
   const shouldLoadPreviewImage = Boolean(priority) ||
     initiallyLoadPreviewImage ||
     isInPreloadRange;
+  // Do not prewarm every original video when a long full page mounts. That
+  // creates one signed-download request per card (including cards hundreds of
+  // rows below the viewport), exhausting browser/network memory and causing
+  // the page to crash while scrolling. Cards near the viewport are warmed;
+  // pointer-hover and explicit play still warm immediately on demand.
+  useEffect(() => {
+    if (!isVideo || !isInPreloadRange) { return; }
+    warmFullVideoDownload();
+  }, [isInPreloadRange, isVideo, warmFullVideoDownload]);
   const shouldLoadVideoPoster = shouldLoadPreviewImage &&
     Boolean(posterSrc && !hasPosterFailed);
   const showZoomControls = _showZoomControls && areZoomControlsShown && !isVideo;

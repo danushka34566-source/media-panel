@@ -2,8 +2,10 @@
 
 import { RefObject, useEffect, useId, useState } from 'react';
 
-// Images are prepared before they enter the viewport and remain mounted after
-// that point. Video previews use their own stricter mount/unmount lifecycle.
+// Images are prepared shortly before they enter the viewport and released once
+// they are well behind it. Keeping every image node mounted made long full
+// pages retain hundreds of decoded bitmaps and eventually crash mobile
+// browsers.
 // One shared observer keeps initial large-grid activation inexpensive.
 const PRELOAD_AHEAD_PX = 1200;
 const RELEASE_BEHIND_PX = 500;
@@ -34,10 +36,6 @@ const isInPreloadRange = (
 };
 
 const setEntryRange = (entry: Entry, isInRange: boolean) => {
-  // Image components are intentionally sticky for the current page visit. A
-  // loaded image should not disappear and need to decode again when scrolling
-  // back to it. Video posters still unmount only after their preview is ready.
-  if (!isInRange) { return; }
   if (entry.isInRange === isInRange) { return; }
   entry.isInRange = isInRange;
   entry.setInRange(isInRange);
@@ -73,8 +71,9 @@ const getObserver = (preloadAheadPx: number, releaseBehindPx: number) => {
 };
 
 const onPageHide = () => {
-  // Keep image mounts intact for bfcache/app-return restores. Preview videos
-  // are released separately by useVideoPreviewLifecycle.
+  // Release image nodes while the page is suspended; pageshow will rehydrate
+  // only the nearby range instead of restoring every decoded bitmap at once.
+  entries.forEach(entry => setEntryRange(entry, false));
 };
 
 const onPageShow = () => requestAnimationFrame(refreshRanges);

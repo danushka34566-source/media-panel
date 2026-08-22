@@ -30,7 +30,7 @@ export default function MediaListLarge({
           photo={photo}
           priority={index === 0}
           initiallyLoadPreviewImage={index < 2}
-          prefetch={index === 0 ? true : undefined}
+          prefetch={index < 3}
           prefetchRelatedLinks={prefetchFirstMediaLinks && index === 0}
           revalidateMedia={revalidateMedia}
           shouldZoomOnFKeydown={false}

@@ -6,6 +6,9 @@ import MediaFullPage from '@/media/MediaFullPage';
 import { getMediaCached, getMediaMetaCached } from '@/media/cache';
 import { FEED_META_QUERY_OPTIONS, getFeedQueryOptions } from '@/feed';
 import { getEffectiveMediaSortOptions } from '@/media/sort/preference';
+import { getPathForSortBy } from '@/media/sort/path';
+import { USER_DEFAULT_SORT_BY } from '@/app/config';
+import { redirect } from 'next/navigation';
 
 export const maxDuration = 60;
 
@@ -24,6 +27,9 @@ export async function generateMetadata(): Promise<Metadata> {
 
 export default async function FullPage() {
   const sortOptions = await getEffectiveMediaSortOptions();
+  if (sortOptions.sortBy !== USER_DEFAULT_SORT_BY) {
+    redirect(getPathForSortBy('/full', sortOptions.sortBy));
+  }
   const [
     photos,
     photosCount,
