@@ -1,10 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
 import {
   ACTIVE_POSTGRES_URL,
-  BACKEND_ORCHESTRATOR_SHARED_SECRET,
   POSTGRES_SSL_ENABLED,
 } from '@/app/config';
 import { getProcessingSettingsSafe } from '@/processing/settings';
+import { getProcessingConnectionSettingsSafe } from '@/processing/connection-settings';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -20,10 +20,11 @@ const publicUrl = (input?: string) => {
 };
 
 export async function POST(request: NextRequest) {
+  const connection = await getProcessingConnectionSettingsSafe();
   const bearer = request.headers.get('authorization')
     ?.match(/^Bearer\s+(.+)$/i)?.[1];
-  if (!BACKEND_ORCHESTRATOR_SHARED_SECRET ||
-    bearer !== BACKEND_ORCHESTRATOR_SHARED_SECRET) {
+  if (!connection.orchestratorSharedSecret ||
+    bearer !== connection.orchestratorSharedSecret) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
@@ -34,11 +35,9 @@ export async function POST(request: NextRequest) {
     POSTGRES_URL: value(ACTIVE_POSTGRES_URL),
     DISABLE_POSTGRES_SSL: POSTGRES_SSL_ENABLED ? '0' : '1',
     MEDIA_PANEL_BASE_URL: panelBaseUrl,
-    AUTOMATION_API_SECRET: BACKEND_ORCHESTRATOR_SHARED_SECRET,
-    BACKEND_ORCHESTRATOR_SHARED_SECRET,
-    BACKEND_PROCESSOR_SHARED_SECRET: value(
-      process.env.BACKEND_PROCESSOR_SHARED_SECRET,
-    ),
+    AUTOMATION_API_SECRET: connection.orchestratorSharedSecret,
+    BACKEND_ORCHESTRATOR_SHARED_SECRET: connection.orchestratorSharedSecret,
+    BACKEND_PROCESSOR_SHARED_SECRET: connection.processorSharedSecret,
     DRIVE_STORAGE_BASE_URL: value(process.env.DRIVE_STORAGE_BASE_URL),
     DRIVE_STORAGE_API_KEY: value(process.env.DRIVE_STORAGE_API_KEY),
     DRIVE_STORAGE_PROJECT_ID: value(

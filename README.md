@@ -142,6 +142,12 @@ and the `ETag` response header when using browser multipart uploads.
 
 ### Orchestrator and processor
 
+The panel's **Admin → Configuration → Processing** section is the preferred
+place for the Worker URL, panel key, processor key, queue limits, and recovery
+settings. Those values are stored in the database and are used by the panel
+and deployment bootstrap. Environment variables below remain supported as a
+first-install fallback.
+
 | Variable | Purpose |
 | --- | --- |
 | `BACKEND_ORCHESTRATOR_BASE_URL` | Deployed registration Worker URL. |
@@ -190,6 +196,13 @@ Google's callback URL is `https://YOUR_DOMAIN/api/auth/callback/google`.
 | `GOOGLE_PLACES_API_KEY` | Optional location lookup. |
 
 ### Media, sorting, display, and diagnostics
+
+In **Admin → Configuration → Performance**, enable **Prebuild public pages**
+to generate every public media and category page during the next production
+build. It is disabled by default. When disabled, public pages are generated
+on first visit and served through the normal revalidation/cache paths. Saving
+the setting revalidates existing public cache entries immediately; the full
+prebuild takes effect on the next build.
 
 These remaining supported variables are also available in `.env.example`:
 

@@ -7,7 +7,7 @@ import {
   parseProcessingSettings,
 } from './settings-schema';
 
-const ensureProcessingSettingsTable = () => query(`
+export const ensureProcessingSettingsTable = () => query(`
   CREATE TABLE IF NOT EXISTS processing_configuration (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL,

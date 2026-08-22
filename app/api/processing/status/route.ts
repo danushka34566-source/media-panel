@@ -1,9 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { isSessionAuthorized } from '@/auth/api';
-import {
-  BACKEND_ORCHESTRATOR_BASE_URL,
-  BACKEND_ORCHESTRATOR_SHARED_SECRET,
-} from '@/app/config';
+import { getProcessingConnectionSettingsSafe } from '@/processing/connection-settings';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 30;
@@ -36,8 +33,9 @@ export async function GET(request: NextRequest) {
   if (!await isSessionAuthorized('edit')) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
-  if (!BACKEND_ORCHESTRATOR_BASE_URL ||
-    !BACKEND_ORCHESTRATOR_SHARED_SECRET) {
+  const connection = await getProcessingConnectionSettingsSafe();
+  if (!connection.orchestratorBaseUrl ||
+    !connection.orchestratorSharedSecret) {
     return NextResponse.json({ configured: false });
   }
   try {
@@ -46,14 +44,14 @@ export async function GET(request: NextRequest) {
       ? Math.min(Math.max(Math.round(rawQueueLimit), 1), 5_000)
       : undefined;
     const statusUrl = new URL(
-      `${BACKEND_ORCHESTRATOR_BASE_URL.replace(/\/+$/, '')}/status`,
+      `${connection.orchestratorBaseUrl.replace(/\/+$/, '')}/status`,
     );
     if (queueLimit) { statusUrl.searchParams.set('queueLimit', String(queueLimit)); }
     const response = await fetch(
       statusUrl,
       {
         headers: {
-          Authorization: `Bearer ${BACKEND_ORCHESTRATOR_SHARED_SECRET}`,
+          Authorization: `Bearer ${connection.orchestratorSharedSecret}`,
         },
         cache: 'no-store',
         signal: AbortSignal.timeout(STATUS_TIMEOUT_MS),

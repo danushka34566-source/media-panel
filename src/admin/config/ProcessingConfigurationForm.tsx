@@ -1,6 +1,6 @@
 'use client';
 
-import { useActionState } from 'react';
+import { useActionState, useState } from 'react';
 import clsx from 'clsx/lite';
 import {
   PROCESSING_NUMBER_LIMITS,
@@ -10,31 +10,9 @@ import {
   ProcessingSettingsActionState,
   saveProcessingSettingsAction,
 } from '@/processing/settings-actions';
+import ConfigToggle from './ConfigToggle';
 
 const initialState: ProcessingSettingsActionState = {};
-
-const Toggle = ({
-  name,
-  label,
-  description,
-  defaultChecked,
-}: {
-  name: keyof ProcessingSettings
-  label: string
-  description: string
-  defaultChecked: boolean
-}) => <label className="flex items-start justify-between gap-4 py-2">
-  <span>
-    <span className="block font-medium text-main">{label}</span>
-    <span className="block text-sm text-dim">{description}</span>
-  </span>
-  <input
-    type="checkbox"
-    name={name}
-    defaultChecked={defaultChecked}
-    className="mt-1 size-4 accent-blue-600"
-  />
-</label>;
 
 const NumberSetting = ({
   name,
@@ -51,13 +29,13 @@ const NumberSetting = ({
 }) => {
   const [min, max] = PROCESSING_NUMBER_LIMITS[name];
   return <label
-    className="grid gap-2 py-2 sm:grid-cols-[1fr_10rem] sm:items-center"
+    className="grid gap-2.5 py-3 sm:grid-cols-[minmax(0,1fr)_13rem] sm:items-center"
   >
-    <span>
-      <span className="block font-medium text-main">{label}</span>
-      <span className="block text-sm text-dim">{description}</span>
+    <span className="min-w-0">
+      <span className="block font-medium leading-5 text-main">{label}</span>
+      <span className="mt-1 block text-sm leading-5 text-dim">{description}</span>
     </span>
-    <span className="flex items-center gap-2">
+    <span className="flex min-w-0 items-center gap-2">
       <input
         type="number"
         name={name}
@@ -65,49 +43,148 @@ const NumberSetting = ({
         max={max}
         defaultValue={defaultValue}
         className={clsx(
-          'min-w-0 grow rounded-md border border-medium bg-main px-3 py-2',
-          'text-right text-main outline-hidden focus:border-blue-500',
+          'h-9 min-w-0 grow rounded-lg border border-medium bg-main px-3',
+          'text-right text-main outline-hidden transition-colors',
+          'focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20',
         )}
       />
-      {suffix && <span className="w-7 text-xs text-dim">{suffix}</span>}
+      {suffix && <span className="min-w-[2.75rem] text-xs text-dim">{suffix}</span>}
     </span>
   </label>;
 };
 
+const TextSetting = ({
+  name,
+  label,
+  description,
+  defaultValue,
+  placeholder,
+  type = 'text',
+}: {
+  name: string
+  label: string
+  description: string
+  defaultValue?: string
+  placeholder?: string
+  type?: 'text' | 'url' | 'password'
+}) => <label
+  className="grid gap-2.5 py-3 sm:grid-cols-[minmax(0,1fr)_13rem] sm:items-center"
+>
+  <span className="min-w-0">
+    <span className="block font-medium leading-5 text-main">{label}</span>
+    <span className="mt-1 block text-sm leading-5 text-dim">{description}</span>
+  </span>
+  <input
+    type={type}
+    name={name}
+    defaultValue={defaultValue}
+    placeholder={placeholder}
+    autoComplete={type === 'password' ? 'new-password' : undefined}
+    className={clsx(
+      'h-9 min-w-0 w-full rounded-lg border border-medium bg-main px-3',
+      'text-main outline-hidden transition-colors',
+      'focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20',
+    )}
+  />
+</label>;
+
 export default function ProcessingConfigurationForm({
   settings,
+  connectionSettings,
 }: {
   settings: ProcessingSettings
+  connectionSettings?: {
+    orchestratorBaseUrl?: string
+    hasOrchestratorSecret: boolean
+    hasProcessorSecret: boolean
+  }
 }) {
   const [state, action, isPending] = useActionState(
     saveProcessingSettingsAction,
     initialState,
   );
+  const [orchestratorEnabled, setOrchestratorEnabled] = useState(
+    settings.orchestratorEnabled,
+  );
+  const [registrationEnabled, setRegistrationEnabled] = useState(
+    settings.registrationEnabled,
+  );
+  const [videoProcessingEnabled, setVideoProcessingEnabled] = useState(
+    settings.videoProcessingEnabled,
+  );
 
-  return <form action={action} className="space-y-4">
-    <div className="divide-y divide-medium">
-      <Toggle
-        name="orchestratorEnabled"
-        label="Backend Orchestrator"
-        description="Allow the panel to trigger the Cloudflare orchestrator."
-        defaultChecked={settings.orchestratorEnabled}
+  return <form action={action} className="space-y-6">
+    <div className="rounded-lg border border-medium px-3 sm:px-4">
+      <div className="border-b border-medium py-3">
+        <div className="text-xs font-semibold uppercase tracking-wide text-dim">
+          Connection
+        </div>
+        <p className="mt-1 text-sm leading-5 text-dim">
+          These values override environment variables and are stored in the
+          project database. Secret fields stay masked; leave them blank to
+          keep the current secret.
+        </p>
+      </div>
+      <TextSetting
+        name="orchestratorBaseUrl"
+        label="Orchestrator URL"
+        description="Public URL of the deployed Cloudflare Worker."
+        defaultValue={connectionSettings?.orchestratorBaseUrl}
+        placeholder="https://worker.example.workers.dev"
+        type="url"
       />
-      <Toggle
-        name="registrationEnabled"
-        label="Storage scanning and registration"
-        description="Detect and register new image and video uploads."
-        defaultChecked={settings.registrationEnabled}
+      <TextSetting
+        name="orchestratorSharedSecret"
+        label="Panel key"
+        description={connectionSettings?.hasOrchestratorSecret
+          ? 'Configured — enter a new value only to rotate it.'
+          : 'Shared secret used by the panel and orchestrator.'}
+        placeholder={connectionSettings?.hasOrchestratorSecret
+          ? 'Configured — leave blank to keep'
+          : 'Enter panel key'}
+        type="password"
       />
-      <Toggle
-        name="videoProcessingEnabled"
-        label="Video processing"
-        description="Allow processors to claim pending video jobs."
-        defaultChecked={settings.videoProcessingEnabled}
+      <TextSetting
+        name="processorSharedSecret"
+        label="Processor key"
+        description={connectionSettings?.hasProcessorSecret
+          ? 'Configured — enter a new value only to rotate it.'
+          : 'Shared secret used by the orchestrator and processors.'}
+        placeholder={connectionSettings?.hasProcessorSecret
+          ? 'Configured — leave blank to keep'
+          : 'Enter processor key'}
+        type="password"
       />
     </div>
 
-    <div className="border-t border-medium pt-3">
-      <div className="pb-1 font-bold text-main">Orchestrator</div>
+    <div className="divide-y divide-medium rounded-lg border border-medium px-3 sm:px-4">
+      <ConfigToggle
+        name="orchestratorEnabled"
+        label="Backend Orchestrator"
+        description="Allow the panel to trigger the Cloudflare orchestrator."
+        checked={orchestratorEnabled}
+        onChange={setOrchestratorEnabled}
+      />
+      <ConfigToggle
+        name="registrationEnabled"
+        label="Storage scanning and registration"
+        description="Detect and register new image and video uploads."
+        checked={registrationEnabled}
+        onChange={setRegistrationEnabled}
+      />
+      <ConfigToggle
+        name="videoProcessingEnabled"
+        label="Video processing"
+        description="Allow processors to claim pending video jobs."
+        checked={videoProcessingEnabled}
+        onChange={setVideoProcessingEnabled}
+      />
+    </div>
+
+    <div className="rounded-lg border border-medium px-3 sm:px-4">
+      <div className="border-b border-medium py-3 text-xs font-semibold uppercase tracking-wide text-dim">
+        Orchestrator
+      </div>
       <NumberSetting
         name="registerBatchSize"
         label="Registration batch size"
@@ -143,8 +220,10 @@ export default function ProcessingConfigurationForm({
       />
     </div>
 
-    <div className="border-t border-medium pt-3">
-      <div className="pb-1 font-bold text-main">Backend Processors</div>
+    <div className="rounded-lg border border-medium px-3 sm:px-4">
+      <div className="border-b border-medium py-3 text-xs font-semibold uppercase tracking-wide text-dim">
+        Backend Processors
+      </div>
       <NumberSetting
         name="processorPollIntervalMs"
         label="Active polling interval"
@@ -176,12 +255,12 @@ export default function ProcessingConfigurationForm({
 
     <div
       className={clsx(
-        'flex items-center justify-between gap-4 border-t',
-        'border-medium pt-4',
+        'flex flex-col gap-3 border-t border-medium pt-4',
+        'sm:flex-row sm:items-center sm:justify-between',
       )}
     >
       <span className={clsx(
-        'text-sm',
+        'min-h-5 text-sm',
         state.error ? 'text-red-600' : 'text-dim',
       )}>
         {state.error || (state.saved ? 'Configuration saved' : '')}
@@ -190,7 +269,8 @@ export default function ProcessingConfigurationForm({
         type="submit"
         disabled={isPending}
         className={clsx(
-          'rounded-md bg-main px-4 py-2 text-sm font-medium text-inverse',
+          'inline-flex h-9 items-center justify-center rounded-lg bg-main px-4',
+          'text-sm font-medium text-inverse transition-opacity',
           'hover:opacity-85 disabled:cursor-wait disabled:opacity-60',
         )}
       >

@@ -1132,7 +1132,14 @@ const supabaseSqlForEnv = (env: Env): SqlQuery => {
           { cause: error },
         );
       } finally {
-        await client.end().catch(() => undefined);
+        // A terminated Supabase socket can leave pg Client.end() waiting on
+        // the transport forever even after the query timeout has fired. Do
+        // not let cleanup hold the scan lease or the scheduled invocation;
+        // the Worker isolate can reclaim any late socket close safely.
+        const closeClient = async () => {
+          await client.end().catch(() => undefined);
+        };
+        await Promise.race([closeClient(), sleep(1_000)]);
       }
     }
     return [];

@@ -5,6 +5,7 @@ import { PATH_ADMIN_CONFIGURATION } from '@/app/path';
 import { runAuthenticatedAdminServerAction } from '@/auth/server';
 import { parseProcessingSettings } from './settings-schema';
 import { saveProcessingSettings } from './settings';
+import { saveProcessingConnectionSettings } from './connection-settings';
 
 export type ProcessingSettingsActionState = {
   saved?: boolean
@@ -25,6 +26,23 @@ export const saveProcessingSettingsAction = async (
       values.videoProcessingEnabled = formData.has('videoProcessingEnabled');
       const settings = parseProcessingSettings(values);
       await saveProcessingSettings(settings);
+      const orchestratorBaseUrl = formData.get('orchestratorBaseUrl');
+      const orchestratorSharedSecret = formData.get('orchestratorSharedSecret');
+      const processorSharedSecret = formData.get('processorSharedSecret');
+      await saveProcessingConnectionSettings({
+        orchestratorBaseUrl: typeof orchestratorBaseUrl === 'string'
+          ? orchestratorBaseUrl
+          : undefined,
+        // Empty password fields intentionally preserve the current secret.
+        orchestratorSharedSecret: typeof orchestratorSharedSecret === 'string' &&
+          orchestratorSharedSecret.trim()
+          ? orchestratorSharedSecret
+          : undefined,
+        processorSharedSecret: typeof processorSharedSecret === 'string' &&
+          processorSharedSecret.trim()
+          ? processorSharedSecret
+          : undefined,
+      });
       revalidatePath(PATH_ADMIN_CONFIGURATION);
       return { saved: true };
     } catch (error) {

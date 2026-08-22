@@ -1,14 +1,13 @@
-import {
-  BACKEND_ORCHESTRATOR_BASE_URL,
-  BACKEND_ORCHESTRATOR_SHARED_SECRET,
-} from '@/app/config';
 import { getProcessingSettingsSafe } from './settings';
+import { getProcessingConnectionSettingsSafe } from './connection-settings';
 
-export const hasProcessingOrchestrator = () =>
-  Boolean(
-    BACKEND_ORCHESTRATOR_BASE_URL &&
-    BACKEND_ORCHESTRATOR_SHARED_SECRET,
+export const hasProcessingOrchestrator = async () => {
+  const settings = await getProcessingConnectionSettingsSafe();
+  return Boolean(
+    settings.orchestratorBaseUrl &&
+    settings.orchestratorSharedSecret,
   );
+};
 
 export type ProcessingOrchestratorRunResult = {
   triggered: boolean
@@ -16,19 +15,22 @@ export type ProcessingOrchestratorRunResult = {
 };
 
 export const runProcessingOrchestrator = async () => {
-  const settings = await getProcessingSettingsSafe();
+  const [settings, connection] = await Promise.all([
+    getProcessingSettingsSafe(),
+    getProcessingConnectionSettingsSafe(),
+  ]);
   if (!settings.orchestratorEnabled || !settings.registrationEnabled) {
     return { triggered: false } satisfies ProcessingOrchestratorRunResult;
   }
-  if (!hasProcessingOrchestrator()) {
+  if (!connection.orchestratorBaseUrl || !connection.orchestratorSharedSecret) {
     return { triggered: false } satisfies ProcessingOrchestratorRunResult;
   }
 
-  const baseUrl = BACKEND_ORCHESTRATOR_BASE_URL!.replace(/\/+$/, '');
+  const baseUrl = connection.orchestratorBaseUrl.replace(/\/+$/, '');
   const response = await fetch(`${baseUrl}/run`, {
     method: 'POST',
     headers: {
-      Authorization: `Bearer ${BACKEND_ORCHESTRATOR_SHARED_SECRET}`,
+      Authorization: `Bearer ${connection.orchestratorSharedSecret}`,
     },
   });
   if (!response.ok) {
@@ -55,14 +57,15 @@ export const retryWorkerRegistration = async ({
   url: string
   sourceUrl?: string
 }) => {
-  if (!hasProcessingOrchestrator()) {
+  const connection = await getProcessingConnectionSettingsSafe();
+  if (!connection.orchestratorBaseUrl || !connection.orchestratorSharedSecret) {
     return { triggered: false };
   }
-  const baseUrl = BACKEND_ORCHESTRATOR_BASE_URL!.replace(/\/+$/, '');
+  const baseUrl = connection.orchestratorBaseUrl.replace(/\/+$/, '');
   const response = await fetch(`${baseUrl}/registration/retry`, {
     method: 'POST',
     headers: {
-      Authorization: `Bearer ${BACKEND_ORCHESTRATOR_SHARED_SECRET}`,
+      Authorization: `Bearer ${connection.orchestratorSharedSecret}`,
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({ url, sourceUrl }),
@@ -83,12 +86,15 @@ export const triggerProcessingOrchestrator = async () => {
 };
 
 export const triggerDeletionOrchestrator = async () => {
-  if (!hasProcessingOrchestrator()) { return false; }
-  const baseUrl = BACKEND_ORCHESTRATOR_BASE_URL!.replace(/\/+$/, '');
+  const connection = await getProcessingConnectionSettingsSafe();
+  if (!connection.orchestratorBaseUrl || !connection.orchestratorSharedSecret) {
+    return false;
+  }
+  const baseUrl = connection.orchestratorBaseUrl.replace(/\/+$/, '');
   const response = await fetch(`${baseUrl}/deletions/run`, {
     method: 'POST',
     headers: {
-      Authorization: `Bearer ${BACKEND_ORCHESTRATOR_SHARED_SECRET}`,
+      Authorization: `Bearer ${connection.orchestratorSharedSecret}`,
     },
   });
   if (!response.ok) {

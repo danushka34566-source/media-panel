@@ -44,6 +44,7 @@ import {
   ProcessingSettings,
 } from '@/processing/settings-schema';
 import SiteAccessConfigurationForm from './SiteAccessConfigurationForm';
+import PublicPageOptimizationForm from './PublicPageOptimizationForm';
 import {
   SITE_ACCESS_SETTINGS_DEFAULTS,
   type SiteAccessSettings,
@@ -52,13 +53,13 @@ import {
 export default function AdminAppConfigurationClient({
   // Storage
   hasDatabase,
+  postgresProvider,
   isPostgresSslEnabled,
   hasRedisStorage,
   hasDriveStorage,
   hasCloudflareR2Storage,
   currentStorage,
   hasBackendOrchestrator,
-  backendOrchestratorBaseUrl,
   hasBackendProcessorSecret,
   // Auth
   hasAuthSecret,
@@ -158,6 +159,8 @@ export default function AdminAppConfigurationClient({
   simplifiedView,
   isAnalyzingConfiguration,
   processingSettings = PROCESSING_SETTINGS_DEFAULTS,
+  processingConnectionSettings,
+  applicationSettings,
   siteAccessSettings = SITE_ACCESS_SETTINGS_DEFAULTS,
 }: AppConfiguration &
   { secret: string } &
@@ -165,6 +168,14 @@ export default function AdminAppConfigurationClient({
     simplifiedView?: boolean
     isAnalyzingConfiguration?: boolean
     processingSettings?: ProcessingSettings
+    processingConnectionSettings?: {
+      orchestratorBaseUrl?: string
+      hasOrchestratorSecret: boolean
+      hasProcessorSecret: boolean
+    }
+    applicationSettings?: {
+      publicPageBuildOptimizations: boolean
+    }
     siteAccessSettings?: SiteAccessSettings
   }) {
   const [hasScrolled, setHasScrolled] = useState(false);
@@ -296,7 +307,7 @@ export default function AdminAppConfigurationClient({
               ? renderSubStatus(
                 'checked',
                 // eslint-disable-next-line max-len
-                `Postgres: connected${!isPostgresSslEnabled ? ' (SSL disabled)' : ''}`,
+                `${postgresProvider === 'supabase' ? 'Supabase Postgres' : 'Neon Postgres'}: connected${!isPostgresSslEnabled ? ' (SSL disabled)' : ''}`,
               )
               : renderSubStatus('missing', <>
                 Postgres:
@@ -311,6 +322,10 @@ export default function AdminAppConfigurationClient({
                 {' '}
                 and connect to project
               </>)}
+            {renderEnvVars([
+              'POSTGRES_URL',
+              'DISABLE_POSTGRES_SSL',
+            ])}
           </ChecklistRow>
           <ChecklistRow
             title={hasPrimaryStorageProvider && isAnalyzingConfiguration
@@ -333,12 +348,20 @@ export default function AdminAppConfigurationClient({
             })}
             <div>
               {hasDriveStorage
-                ? renderSubStatus(
-                  driveStorageError ? 'missing' : 'checked',
-                  driveStorageError
-                    ? 'Drive: connection failed'
-                    : 'Drive: connected',
-                )
+                ? <>
+                  {renderSubStatus(
+                    driveStorageError ? 'missing' : 'checked',
+                    driveStorageError
+                      ? 'Drive: connection failed'
+                      : 'Drive: connected',
+                  )}
+                  {renderEnvVars([
+                    'DRIVE_STORAGE_BASE_URL',
+                    'DRIVE_STORAGE_API_KEY',
+                    'NEXT_PUBLIC_DRIVE_STORAGE_PROJECT_ID',
+                    'NEXT_PUBLIC_DRIVE_STORAGE_BUCKET',
+                  ])}
+                </>
                 : renderSubStatus('optional', <>
                   <div>
                     <div>Drive: add storage credentials</div>
@@ -353,12 +376,21 @@ export default function AdminAppConfigurationClient({
                 )}
               {hasCloudflareR2Storage
                 ? currentStorage === 'cloudflare-r2'
-                  ? renderSubStatus(
-                    cloudflareR2StorageError ? 'missing' : 'checked',
-                    cloudflareR2StorageError
-                      ? 'Cloudflare R2: connection failed'
-                      : 'Cloudflare R2: connected',
-                  )
+                  ? <>
+                    {renderSubStatus(
+                      cloudflareR2StorageError ? 'missing' : 'checked',
+                      cloudflareR2StorageError
+                        ? 'Cloudflare R2: connection failed'
+                        : 'Cloudflare R2: connected',
+                    )}
+                    {renderEnvVars([
+                      'CLOUDFLARE_R2_ACCESS_KEY',
+                      'CLOUDFLARE_R2_SECRET_ACCESS_KEY',
+                      'NEXT_PUBLIC_CLOUDFLARE_R2_ACCOUNT_ID',
+                      'NEXT_PUBLIC_CLOUDFLARE_R2_BUCKET',
+                      'NEXT_PUBLIC_CLOUDFLARE_R2_PUBLIC_DOMAIN',
+                    ])}
+                  </>
                   : renderSubStatus(
                     'optional',
                     'Cloudflare R2: configured (Drive has priority)',
@@ -403,26 +435,30 @@ export default function AdminAppConfigurationClient({
         return <>
           <ChecklistRow
             title="Backend Orchestrator"
-            status={hasBackendOrchestrator}
+            status={processingConnectionSettings
+              ? Boolean(
+                processingConnectionSettings.orchestratorBaseUrl &&
+                processingConnectionSettings.hasOrchestratorSecret,
+              )
+              : hasBackendOrchestrator}
           >
-            {backendOrchestratorBaseUrl &&
-              renderContent(backendOrchestratorBaseUrl)}
-            Add the deployed Backend Orchestrator URL and its panel key:
-            {renderEnvVars([
-              'BACKEND_ORCHESTRATOR_BASE_URL',
-              'BACKEND_ORCHESTRATOR_SHARED_SECRET',
-            ])}
+            Configure the deployed URL and panel key in the form below.
+            Values are stored securely in the project database.
           </ChecklistRow>
           <ChecklistRow
             title="Backend Processor authentication"
-            status={hasBackendProcessorSecret}
+            status={processingConnectionSettings
+              ? processingConnectionSettings.hasProcessorSecret
+              : hasBackendProcessorSecret}
           >
-            Store the key shared only by the Backend Orchestrator and Backend
-            Processors:
-            {renderEnvVars(['BACKEND_PROCESSOR_SHARED_SECRET'])}
+            Configure the shared processor key in the form below. Leave a
+            secret field blank when editing to keep the current value.
           </ChecklistRow>
           <div className="p-3 sm:p-4">
-            <ProcessingConfigurationForm settings={processingSettings} />
+            <ProcessingConfigurationForm
+              settings={processingSettings}
+              connectionSettings={processingConnectionSettings}
+            />
           </div>
         </>;
       case 'Content':
@@ -597,6 +633,20 @@ export default function AdminAppConfigurationClient({
         </>;
       case 'Performance':
         return <>
+          <ChecklistRow
+            title="Public page build"
+            status={applicationSettings?.publicPageBuildOptimizations ?? false}
+            optional
+          >
+            Choose whether public pages are prebuilt for every media item or
+            generated on demand with revalidation. Configure the preference
+            here; enabling it takes effect on the next production build.
+            <div className="mt-3">
+              <PublicPageOptimizationForm
+                enabled={applicationSettings?.publicPageBuildOptimizations ?? false}
+              />
+            </div>
+          </ChecklistRow>
           <ChecklistRow
             title="Static optimization"
             status={isStaticallyOptimized}

@@ -240,6 +240,9 @@ export const HAS_STATIC_OPTIMIZATION =
   STATICALLY_OPTIMIZED_MEDIA_OG_IMAGES ||
   STATICALLY_OPTIMIZED_MEDIA_CATEGORIES ||
   STATICALLY_OPTIMIZED_MEDIA_CATEGORY_OG_IMAGES;
+export const PUBLIC_PAGE_BUILD_OPTIMIZATIONS =
+  process.env.NEXT_PUBLIC_BUILD_PUBLIC_PAGES === '1' ||
+  process.env.NEXT_PUBLIC_STATICALLY_OPTIMIZE_ALL_PUBLIC_PAGES === '1';
 
 export const PRESERVE_ORIGINAL_UPLOADS =
   process.env.NEXT_PUBLIC_PRESERVE_ORIGINAL_UPLOADS === '1' ||
@@ -419,6 +422,7 @@ export const ADMIN_SQL_DEBUG_ENABLED =
 export const APP_CONFIGURATION = {
   // Storage
   hasDatabase: HAS_DATABASE,
+  postgresProvider: POSTGRES_PROVIDER,
   isPostgresSslEnabled: POSTGRES_SSL_ENABLED,
   hasRedisStorage: HAS_REDIS_STORAGE,
   hasDriveStorage: HAS_DRIVE_STORAGE,
@@ -462,6 +466,7 @@ export const APP_CONFIGURATION = {
   areMediaCategoriesStaticallyOptimized: STATICALLY_OPTIMIZED_MEDIA_CATEGORIES,
   areMediaCategoryOgImagesStaticallyOptimized:
     STATICALLY_OPTIMIZED_MEDIA_CATEGORY_OG_IMAGES,
+  publicPageBuildOptimizations: PUBLIC_PAGE_BUILD_OPTIMIZATIONS,
   areOriginalUploadsPreserved: PRESERVE_ORIGINAL_UPLOADS,
   areUniqueMediaNamesEnabled: UNIQUE_MEDIA_NAMES,
   hasImageQuality: Boolean(process.env.NEXT_PUBLIC_IMAGE_QUALITY),

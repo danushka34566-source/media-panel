@@ -220,6 +220,10 @@ function ProcessingTable({
           ? 'missing'
           : getDisplayTranscodeStatus(photo);
         const statusMessage = getProcessingDiagnosticMessage(photo);
+        const showProcessingDiagnostic = Boolean(
+          statusMessage &&
+          (statusLabel === 'failed' || statusLabel === 'missing'),
+        );
         return (
           <Fragment key={photo.id}>
             <MediaSmall
@@ -274,9 +278,9 @@ function ProcessingTable({
             </div>
             <div
               key={`${photo.id}-actions`}
-              className="flex shrink-0 flex-nowrap gap-2 items-center"
+              className="flex min-h-6 min-w-6 shrink-0 flex-nowrap items-center justify-end gap-2"
             >
-              {statusMessage && <AdminRegistrationErrorButton
+              {showProcessingDiagnostic && statusMessage && <AdminRegistrationErrorButton
                 title={titleForMedia(photo, false) || photo.id}
                 errorMessage={statusMessage}
                 dialogTitle="Processing details"
