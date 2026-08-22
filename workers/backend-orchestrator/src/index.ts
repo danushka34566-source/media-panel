@@ -233,7 +233,7 @@ const GENERATED_MEDIA_SUFFIX_REGEX =
 const STALE_REGISTRATION_ERROR_MESSAGE =
   'Previous registration attempt stalled; queued for retry';
 const MISSING_UPLOAD_ERROR_PREFIX = 'Upload not found in storage';
-const WORKER_BUILD_ID = 'registration-retry-v50';
+const WORKER_BUILD_ID = 'registration-retry-v51';
 // A scheduled Worker must finish promptly. Drive copies can become visible
 // asynchronously, so persist the in-flight state and check again on the next
 // minute instead of polling long enough to lose the registration lease.
@@ -2996,10 +2996,34 @@ const scanAndRegisterWithLease = async (
 ) => {
   await ensureRegisteredUploadFileMapTable(env);
   await ensureRegistrationStatusTable(env);
-  await clearStaleRegistrationStatuses(env);
-  await clearResolvedRegistrationStatuses(env);
-  await clearOldCompletedRegistrationStatuses(env);
-  await retryStaleProcessing(env);
+  // These maintenance passes repair metadata, but they are not allowed to
+  // abort the FIFO registration pass when a transient pooler connection is
+  // dropped. The queue rows remain durable and the next scan can retry the
+  // maintenance work.
+  const runMaintenance = async (
+    name: string,
+    operation: () => Promise<unknown>,
+  ) => {
+    try {
+      await operation();
+    } catch (error) {
+      console.warn(`Registration maintenance ${name} failed; continuing scan`, error);
+      await logBackendActivity(env, {
+        category: 'orchestrator',
+        event: 'registration_maintenance_failed',
+        status: 'warning',
+        message: `Registration maintenance ${name} failed; scan continued`,
+        details: {
+          operation: name,
+          error: error instanceof Error ? error.message : String(error),
+        },
+      }).catch(() => undefined);
+    }
+  };
+  await runMaintenance('clear_stale_statuses', () => clearStaleRegistrationStatuses(env));
+  await runMaintenance('clear_resolved_statuses', () => clearResolvedRegistrationStatuses(env));
+  await runMaintenance('clear_old_statuses', () => clearOldCompletedRegistrationStatuses(env));
+  await runMaintenance('retry_stale_processing', () => retryStaleProcessing(env));
 
   const configuredRegisterBatchSize = getNumber(env.REGISTER_BATCH_SIZE, 2, {
     min: 1,
