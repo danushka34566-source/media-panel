@@ -226,7 +226,7 @@ const GENERATED_MEDIA_SUFFIX_REGEX =
 const STALE_REGISTRATION_ERROR_MESSAGE =
   'Previous registration attempt stalled; queued for retry';
 const MISSING_UPLOAD_ERROR_PREFIX = 'Upload not found in storage';
-const WORKER_BUILD_ID = 'registration-retry-v37-watchdog';
+const WORKER_BUILD_ID = 'registration-retry-v37-lease';
 // A scheduled Worker must finish promptly. Drive copies can become visible
 // asynchronously, so persist the in-flight state and check again on the next
 // minute instead of polling long enough to lose the registration lease.
@@ -4163,8 +4163,14 @@ const startDeletionDrain = (env: Env) => {
   return { started: true, promise };
 };
 
-const startScan = (env: Env) => {
-  if (scanInFlight) {
+const startScan = (
+  env: Env,
+  { shareInFlight = true }: { shareInFlight?: boolean } = {},
+) => {
+  // Scheduled events are independent invocations. The database lease is the
+  // cross-invocation concurrency guard; sharing a promise here could let one
+  // hung isolate suppress every later cron run indefinitely.
+  if (shareInFlight && scanInFlight) {
     return { started: false, promise: scanInFlight };
   }
   const promise = (async () => {
@@ -4208,11 +4214,13 @@ const startScan = (env: Env) => {
       throw error;
     }
   })().finally(() => {
-    if (scanInFlight === promise) {
+    if (shareInFlight && scanInFlight === promise) {
       scanInFlight = undefined;
     }
   });
-  scanInFlight = promise;
+  if (shareInFlight) {
+    scanInFlight = promise;
+  }
   return { started: true, promise };
 };
 
@@ -4256,7 +4264,10 @@ export default {
     if (!settings.orchestratorEnabled || !settings.registrationEnabled) {
       return;
     }
-    const scan = startScan(envWithRuntimeSettings(env, settings));
+    const scan = startScan(
+      envWithRuntimeSettings(env, settings),
+      { shareInFlight: false },
+    );
     if (scan.started) {
       ctx.waitUntil(scan.promise.catch(error => {
         console.warn('Scheduled registration scan failed', error);

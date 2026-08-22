@@ -169,6 +169,11 @@ test('a hung scan cannot pin the shared scheduled scan promise forever', () => {
   assert.match(workerSource, /ctx\.waitUntil\(scan\.promise\.catch/);
 });
 
+test('scheduled scans do not share an in-memory promise across cron events', () => {
+  assert.match(workerSource, /startScan\([\s\S]*?\{ shareInFlight: false \}/);
+  assert.match(workerSource, /if \(shareInFlight && scanInFlight\)/);
+});
+
 test('stalled registration rows are requeued instead of left as permanent errors', () => {
   const staleStart = workerSource.indexOf('const clearStaleRegistrationStatuses');
   const staleEnd = workerSource.indexOf('const clearOldCompletedRegistrationStatuses', staleStart);
@@ -210,7 +215,7 @@ test('a deletion queue drain cannot block the scheduled registration scan', () =
   assert.match(source, /ctx\.waitUntil\(deletionDrain\.promise\.catch/);
   assert.doesNotMatch(source, /await startDeletionDrain/);
   assert.match(source, /continuing scheduled registration scan/);
-  assert.match(source, /startScan\(envWithRuntimeSettings\(env, settings\)\)/);
+  assert.match(source, /startScan\([\s\S]*?envWithRuntimeSettings\(env, settings\)[\s\S]*?shareInFlight: false/);
   assert.match(workerSource, /ctx\.waitUntil\(drain\.promise\.catch/);
   assert.match(workerSource, /continuing registration with cached prefixes/);
 });
