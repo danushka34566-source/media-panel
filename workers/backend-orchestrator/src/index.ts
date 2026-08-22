@@ -228,7 +228,7 @@ const GENERATED_MEDIA_SUFFIX_REGEX =
 const STALE_REGISTRATION_ERROR_MESSAGE =
   'Previous registration attempt stalled; queued for retry';
 const MISSING_UPLOAD_ERROR_PREFIX = 'Upload not found in storage';
-const WORKER_BUILD_ID = 'registration-retry-v43';
+const WORKER_BUILD_ID = 'registration-retry-v44';
 // A scheduled Worker must finish promptly. Drive copies can become visible
 // asynchronously, so persist the in-flight state and check again on the next
 // minute instead of polling long enough to lose the registration lease.
@@ -2219,7 +2219,10 @@ const clearStaleRegistrationStatuses = async (env: Env) => {
     UPDATE worker_registration_status
     SET
       status='detected',
-      error_message=${STALE_REGISTRATION_ERROR_MESSAGE},
+      -- A stale copy is recoverable queue state, not a permanent error. Keep
+      -- the panel free of a misleading error marker while the source is
+      -- requeued for another bounded attempt.
+      error_message=NULL,
       updated_at=now()
     -- A detected row has not started an attempt. Rewriting it as "stalled"
     -- made an idle backlog look like every file had failed. Only recover a

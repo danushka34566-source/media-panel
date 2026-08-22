@@ -227,6 +227,7 @@ test('stalled registration rows are requeued instead of left as permanent errors
   const source = workerSource.slice(staleStart, staleEnd);
 
   assert.match(source, /status='detected'/);
+  assert.match(source, /error_message=NULL/);
   assert.match(workerSource, /Previous registration attempt stalled; queued for retry/);
   assert.doesNotMatch(source, /status='error'/);
 });
