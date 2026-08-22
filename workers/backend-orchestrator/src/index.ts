@@ -258,7 +258,7 @@ const GENERATED_MEDIA_SUFFIX_REGEX =
 const STALE_REGISTRATION_ERROR_MESSAGE =
   'Previous registration attempt stalled; queued for retry';
 const MISSING_UPLOAD_ERROR_PREFIX = 'Upload not found in storage';
-const WORKER_BUILD_ID = 'v65';
+const WORKER_BUILD_ID = 'v66';
 // A scheduled Worker must finish promptly. Drive copies can become visible
 // asynchronously, so persist the in-flight state and check again on the next
 // minute instead of polling long enough to lose the registration lease.
@@ -633,7 +633,7 @@ const workerLandingPage = (metadata: WorkerLandingMetadata) => {
     <style>
       :root{color-scheme:light;font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono","Courier New",monospace;background:#f7f7f7;color:#171717;--page:#f7f7f7;--surface:#fff;--line:#d9d9d9;--muted:#707070;--hover:#f0f0f0}
       @media(prefers-color-scheme:dark){:root{color-scheme:dark;background:#090909;color:#ededed;--page:#090909;--surface:#111;--line:#303030;--muted:#9a9a9a;--hover:#1d1d1d}}
-      *{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;background:var(--page);padding:18px}
+      *{box-sizing:border-box}html,body{width:100%;height:100%;overflow:hidden}body{margin:0;min-height:100dvh;height:100dvh;display:grid;place-items:center;background:var(--page);padding:18px}
       main{width:min(620px,100%);border:1px solid var(--line);border-radius:10px;background:var(--surface);box-shadow:0 10px 30px rgba(0,0,0,.06);overflow:hidden}
       .top{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:14px 16px;border-bottom:1px solid var(--line);font-size:12px;letter-spacing:.08em;text-transform:uppercase}.brand{display:flex;align-items:center;gap:9px}.mark{width:9px;height:9px;border-radius:2px;background:currentColor}.account{color:var(--muted);font-size:11px;letter-spacing:0;text-transform:none}
       .content{padding:clamp(30px,7vw,58px) clamp(24px,7vw,64px) 34px}.kicker{margin:0 0 19px;color:var(--muted);font-size:11px;letter-spacing:.12em;text-transform:uppercase}h1{max-width:480px;margin:0;font-size:clamp(29px,6vw,46px);font-weight:500;line-height:1.1;letter-spacing:-.055em}p{max-width:480px;margin:18px 0 0;color:var(--muted);font-size:14px;line-height:1.75}.rule{height:1px;margin:34px 0 22px;background:var(--line)}.links{display:flex;flex-wrap:wrap;gap:9px}.links a{display:inline-flex;align-items:center;gap:10px;padding:10px 12px;border:1px solid var(--line);border-radius:8px;color:inherit;text-decoration:none;font-size:12px;transition:background-color .16s ease,border-color .16s ease}.links a:hover{background:var(--hover);border-color:var(--muted)}.arrow{color:var(--muted);font-size:14px}.footer{padding:12px 16px;border-top:1px solid var(--line);color:var(--muted);font-size:11px}
