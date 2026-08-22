@@ -258,7 +258,7 @@ const GENERATED_MEDIA_SUFFIX_REGEX =
 const STALE_REGISTRATION_ERROR_MESSAGE =
   'Previous registration attempt stalled; queued for retry';
 const MISSING_UPLOAD_ERROR_PREFIX = 'Upload not found in storage';
-const WORKER_BUILD_ID = 'v67';
+const WORKER_BUILD_ID = 'v68';
 // A scheduled Worker must finish promptly. Drive copies can become visible
 // asynchronously, so persist the in-flight state and check again on the next
 // minute instead of polling long enough to lose the registration lease.
@@ -1959,13 +1959,21 @@ const copyObject = async (
           `Drive copy failed (${response.status})${detail ? `: ${detail}` : ''}`,
         );
       }
-      return;
+      // Drive's copy endpoint only returns 2xx after its own R2 copy has
+      // completed and the destination HEAD matches the source size. A second
+      // immediate HEAD from the Worker can still miss the object at the
+      // gateway edge and incorrectly turn a successful copy into a five
+      // minute queued retry. Preserve the endpoint's verified result.
+      return { verified: true };
     } catch (error) {
       if (
         isDriveTimeoutLikeError(error) &&
         await waitForDriveDestination(env, destinationKey)
       ) {
-        return;
+        // A timeout only proves that the destination exists, not that its
+        // size matches the source. Keep the explicit verification path for
+        // this case.
+        return { verified: false };
       }
       throw error;
     }
@@ -1976,6 +1984,7 @@ const copyObject = async (
         `${env.R2_BUCKET}/${canonicalUriForKey(sourceKey).slice(1)}`,
     },
   });
+  return { verified: false };
 };
 
 const copyAndVerifyObject = async (
@@ -1984,7 +1993,10 @@ const copyAndVerifyObject = async (
   destinationKey: string,
   expectedSize?: number,
 ) => {
-  await copyObject(env, sourceKey, destinationKey);
+  const copyResult = await copyObject(env, sourceKey, destinationKey);
+  if (copyResult.verified) {
+    return;
+  }
 
   const sourceSize = expectedSize === undefined
     ? await storageObjectSize(env, sourceKey)
