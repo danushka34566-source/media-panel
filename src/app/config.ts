@@ -25,7 +25,10 @@ export const TEMPLATE_DESCRIPTION = 'Store photos and videos with EXIF metadata 
 
 export const TEMPLATE_REPO_OWNER  = 'iamnadith';
 export const TEMPLATE_REPO_OWNER1  = '@nadithpro';
-export const TEMPLATE_REPO_NAME   = 'exif-photo-blog';
+// This is the repository that owns the running Media Panel source. The
+// project is inspired by EXIF Photo Blog, but its update/fork checks must use
+// this repository or Admin Insights will inspect the wrong GitHub network.
+export const TEMPLATE_REPO_NAME   = 'media-panel';
 export const TEMPLATE_REPO_BRANCH = 'main';
 export const PORTFOLIO_URL =
   `https://nadith.pro`;
