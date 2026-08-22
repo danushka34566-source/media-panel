@@ -245,6 +245,9 @@ const DELETION_MUTATION_CONCURRENCY = 4;
 // forever. Individual database/storage calls are already bounded; this is a
 // final recovery guard for a provider/runtime promise that never settles.
 export const SCAN_WATCHDOG_TIMEOUT_MS = 120_000;
+// A scheduled invocation can be terminated before finally{} runs. Keep the
+// cross-invocation lease short enough that the next cron can recover it.
+export const SCAN_LEASE_SECONDS = 90;
 
 const encoder = new TextEncoder();
 
@@ -2710,12 +2713,6 @@ const ensureScanLeaseTable = async (env: Env) => {
   }
 };
 
-const getScanLeaseMinutes = (env: Env) => getNumber(
-  env.STALE_REGISTRATION_MINUTES,
-  5,
-  { min: 1, max: 60 },
-);
-
 const acquireScanLease = async (env: Env) => {
   await ensureScanLeaseTable(env);
   const leaseToken = crypto.randomUUID();
@@ -2729,7 +2726,7 @@ const acquireScanLease = async (env: Env) => {
     ) VALUES (
       'registration',
       ${leaseToken},
-      now() + (${String(getScanLeaseMinutes(env))} || ' minutes')::interval,
+      now() + (${String(SCAN_LEASE_SECONDS)} || ' seconds')::interval,
       now()
     )
     ON CONFLICT (lock_name) DO UPDATE SET
@@ -2748,7 +2745,7 @@ const renewScanLease = async (env: Env, leaseToken: string) => {
     UPDATE worker_scan_lease
     SET
       lease_until=now() +
-        (${String(getScanLeaseMinutes(env))} || ' minutes')::interval,
+        (${String(SCAN_LEASE_SECONDS)} || ' seconds')::interval,
       updated_at=now()
     WHERE lock_name='registration'
       AND lease_token=${leaseToken}

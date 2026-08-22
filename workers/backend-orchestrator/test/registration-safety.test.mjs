@@ -6,6 +6,7 @@ import {
   DRIVE_COPY_VISIBILITY_ATTEMPTS,
   DRIVE_COPY_VISIBILITY_DELAY_MS,
   DRIVE_RETRY_TARGET_VISIBILITY_ATTEMPTS,
+  SCAN_LEASE_SECONDS,
   buildDeletionPrefixes,
   deletionKeyMatchesPrefix,
   deleteStorageKeyIfPresent,
@@ -156,6 +157,8 @@ test('Drive registration I/O is deadline-bound so a scan lease cannot stick fore
   assert.match(workerSource, /DRIVE_COPY_VISIBILITY_ATTEMPTS = 3/);
   assert.match(workerSource, /DRIVE_RETRY_TARGET_VISIBILITY_ATTEMPTS = 3/);
   assert.match(workerSource, /DRIVE_COPY_VISIBILITY_DELAY_MS = 2000/);
+  assert.equal(SCAN_LEASE_SECONDS, 90);
+  assert.match(workerSource, /String\(SCAN_LEASE_SECONDS\)\} \|\| ' seconds'/);
 
   const listStart = workerSource.indexOf('const listAllObjects');
   const listEnd = workerSource.indexOf('const putObject', listStart);
