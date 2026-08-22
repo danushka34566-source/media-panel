@@ -258,7 +258,7 @@ const GENERATED_MEDIA_SUFFIX_REGEX =
 const STALE_REGISTRATION_ERROR_MESSAGE =
   'Previous registration attempt stalled; queued for retry';
 const MISSING_UPLOAD_ERROR_PREFIX = 'Upload not found in storage';
-const WORKER_BUILD_ID = 'v83';
+const WORKER_BUILD_ID = 'v82';
 // A scheduled Worker must finish promptly. Drive copies can become visible
 // asynchronously, so persist the in-flight state and check again on the next
 // minute instead of polling long enough to lose the registration lease.
@@ -285,13 +285,8 @@ const DELETION_MUTATION_CONCURRENCY = 4;
 const PROCESSING_SOURCE_RECONCILIATION_TIMEOUT_MS = 5_000;
 const PROCESSING_SOURCE_RECONCILIATION_LIMIT = 8;
 const PROCESSING_SOURCE_RECONCILIATION_CONCURRENCY = 4;
-// The first authenticated Drive HEAD after a cold isolate can take just over
-// five seconds while project auth, bucket lookup, and the R2 connection warm.
-// A five-second cutoff strands a complete copy in `registering`; keep this
-// probe bounded but cold-start safe.
-const REGISTRATION_READY_CHECK_TIMEOUT_MS = 10_000;
+const REGISTRATION_READY_CHECK_TIMEOUT_MS = 5_000;
 const REGISTRATION_READY_CHECK_LIMIT = 8;
-const REGISTRATION_READY_CHECK_CONCURRENCY = 2;
 // Source cleanup is housekeeping only. Never let a slow Drive delete hold the
 // registration lease or block the next FIFO claim.
 const REGISTERED_SOURCE_CLEANUP_LIMIT = 4;
@@ -2353,11 +2348,11 @@ const findReadyRegistrationKeys = async (
     .slice(0, REGISTRATION_READY_CHECK_LIMIT);
   if (activeRows.length === 0) { return new Set<string>(); }
   const readyKeys = new Set<string>();
-  const checkRow = async (row: RegistrationStatusRow) => {
+  await Promise.all(activeRows.map(async row => {
     const sourceUrl = trimToUndefined(row.source_url) || trimToUndefined(row.url);
     if (!sourceUrl) { return; }
     const sourceKey = keyFromStorageUrl(env, sourceUrl);
-    if (!sourceKey) { return; }
+    if (!sourceKey || !objectsByKey.has(sourceKey)) { return; }
     const expectedUrl = await getExpectedRegistrationUrlForStatusRow(env, row)
       .catch(() => undefined);
     const expectedKey = expectedUrl
@@ -2377,16 +2372,7 @@ const findReadyRegistrationKeys = async (
     if (isExactVerifiedStorageCopy(sourceSize, destinationSize)) {
       readyKeys.add(sourceKey);
     }
-  };
-  // Keep Drive authorization/R2 probes bounded. A wide Promise.all causes a
-  // cold request stampede and turns valid, slow HEADs into false negatives.
-  for (let index = 0; index < activeRows.length; index += REGISTRATION_READY_CHECK_CONCURRENCY) {
-    await Promise.all(
-      activeRows
-        .slice(index, index + REGISTRATION_READY_CHECK_CONCURRENCY)
-        .map(checkRow),
-    );
-  }
+  }));
   return readyKeys;
 };
 
