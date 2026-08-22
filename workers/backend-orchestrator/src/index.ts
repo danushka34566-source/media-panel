@@ -258,7 +258,7 @@ const GENERATED_MEDIA_SUFFIX_REGEX =
 const STALE_REGISTRATION_ERROR_MESSAGE =
   'Previous registration attempt stalled; queued for retry';
 const MISSING_UPLOAD_ERROR_PREFIX = 'Upload not found in storage';
-const WORKER_BUILD_ID = 'v63';
+const WORKER_BUILD_ID = 'v64';
 // A scheduled Worker must finish promptly. Drive copies can become visible
 // asynchronously, so persist the in-flight state and check again on the next
 // minute instead of polling long enough to lose the registration lease.
@@ -605,7 +605,19 @@ const workerLandingPage = (metadata: WorkerLandingMetadata) => {
   const title = escapeLandingHtml(metadata.title);
   const kicker = escapeLandingHtml(metadata.kicker);
   const description = escapeLandingHtml(metadata.description);
-  const ownerName = escapeLandingHtml(metadata.ownerName || '');
+  const configuredOwner = metadata.ownerName || (() => {
+    for (const value of [metadata.githubUrl, metadata.repoUrl]) {
+      if (!value) { continue; }
+      try {
+        const segment = new URL(value).pathname.split('/').filter(Boolean)[0];
+        if (segment) { return segment; }
+      } catch {
+        // The metadata URL has already been validated; keep the fallback safe.
+      }
+    }
+    return '';
+  })();
+  const ownerName = escapeLandingHtml(configuredOwner);
   const links = [
     metadata.githubUrl && `<a href="${escapeLandingHtml(metadata.githubUrl)}" rel="noopener noreferrer">GitHub <span class="arrow">-&gt;</span></a>`,
     metadata.repoUrl && `<a href="${escapeLandingHtml(metadata.repoUrl)}" rel="noopener noreferrer">${escapeLandingHtml(metadata.repoName || 'Source')} <span class="arrow">-&gt;</span></a>`,

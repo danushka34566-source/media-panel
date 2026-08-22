@@ -7,7 +7,6 @@ import {
   TEMPLATE_DESCRIPTION,
   TEMPLATE_REPO_NAME,
   TEMPLATE_REPO_OWNER,
-  TEMPLATE_REPO_OWNER1,
   TEMPLATE_REPO_URL,
   TEMPLATE_TITLE,
 } from '@/app/config';
@@ -35,7 +34,7 @@ export async function GET() {
     title: NAV_TITLE || TEMPLATE_TITLE,
     kicker: NAV_CAPTION || 'Personal media library',
     description: META_DESCRIPTION || TEMPLATE_DESCRIPTION,
-    ownerName: TEMPLATE_REPO_OWNER1 || TEMPLATE_REPO_OWNER,
+    ownerName: TEMPLATE_REPO_OWNER,
     repoName: TEMPLATE_REPO_NAME,
     repoUrl,
     githubUrl,
