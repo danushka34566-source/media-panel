@@ -130,7 +130,7 @@ export default function MediaMedium({
             ? <div
               className={clsx(
                 'relative w-full h-full overflow-hidden',
-                'bg-black',
+                'bg-dim',
               )}
               style={{ aspectRatio: getMediaAspectRatio(photo) }}
             >
@@ -147,7 +147,7 @@ export default function MediaMedium({
                   showLoadingIndicator
                 />
                 : shouldLoadPreviewImage &&
-                  <div className="absolute inset-0 bg-black" />}
+                  <div className="absolute inset-0 bg-dim" />}
               {shouldRenderPreview && previewSrc && !hasVideoFailed && (
                 <InlineVideoPreview
                   src={previewSrc}

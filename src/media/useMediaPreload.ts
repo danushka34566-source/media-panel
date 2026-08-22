@@ -47,7 +47,12 @@ const retainEntry = (entry: Entry) => {
   retainedEntries.set(entry.id, ++retentionSequence);
   entry.setRetained(true);
   while (retainedEntries.size > MAX_RETAINED_IMAGES) {
-    const oldestId = retainedEntries.keys().next().value as string | undefined;
+    // Never evict a card that is still in the viewport/preload range. Doing
+    // so makes its poster disappear for a frame while a new row is entering,
+    // which is the black flash seen during fast grid scrolling.
+    const oldestId = [...retainedEntries.keys()].find(id =>
+      !entries.get(id)?.isInRange,
+    );
     if (!oldestId) { break; }
     retainedEntries.delete(oldestId);
     entries.get(oldestId)?.setRetained(false);
