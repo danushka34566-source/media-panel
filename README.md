@@ -347,3 +347,4 @@ Media Panel began as a customized foundation from
 [EXIF Photo Blog by Sam Becker](https://github.com/sambecker/exif-photo-blog).
 The current repository has its own media workflow, deployment model, storage
 integration, authentication, and worker services.
+
