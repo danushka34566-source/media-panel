@@ -233,7 +233,7 @@ const GENERATED_MEDIA_SUFFIX_REGEX =
 const STALE_REGISTRATION_ERROR_MESSAGE =
   'Previous registration attempt stalled; queued for retry';
 const MISSING_UPLOAD_ERROR_PREFIX = 'Upload not found in storage';
-const WORKER_BUILD_ID = 'registration-retry-v47';
+const WORKER_BUILD_ID = 'registration-retry-v48';
 // A scheduled Worker must finish promptly. Drive copies can become visible
 // asynchronously, so persist the in-flight state and check again on the next
 // minute instead of polling long enough to lose the registration lease.
@@ -247,7 +247,12 @@ const REGISTRATION_STORAGE_TIMEOUT_MS = 30_000;
 // Keep each inventory request small enough for the Workers free resource
 // budget. The database status table is the durable FIFO queue; the storage
 // cursor only discovers a bounded slice of new objects on each scan.
-export const REGISTRATION_SCAN_PAGE_SIZE = 250;
+export const REGISTRATION_SCAN_PAGE_SIZE = 100;
+// A Drive copy can legitimately consume most of a free Worker invocation
+// while its destination becomes visible. One attempt per scan keeps the
+// lease/retry boundary below the platform execution limit; the DB queue keeps
+// the remaining files durable for the next cron tick.
+export const REGISTRATION_ATTEMPTS_PER_SCAN = 1;
 const DELETION_STORAGE_TIMEOUT_MS = 15_000;
 const DELETION_MUTATION_TIMEOUT_MS = 45_000;
 const DELETION_MUTATION_CONCURRENCY = 4;
@@ -2957,14 +2962,24 @@ const scanAndRegisterWithLease = async (
   await clearOldCompletedRegistrationStatuses(env);
   await retryStaleProcessing(env);
 
-  const registerBatchSize = getNumber(env.REGISTER_BATCH_SIZE, 2, {
+  const configuredRegisterBatchSize = getNumber(env.REGISTER_BATCH_SIZE, 2, {
     min: 1,
     max: 10,
   });
-  const maxRegisterPasses = getNumber(env.MAX_REGISTER_PASSES, 2, {
+  const configuredMaxRegisterPasses = getNumber(env.MAX_REGISTER_PASSES, 2, {
     min: 1,
     max: 10,
   });
+  // Keep the configured values visible to the panel, but enforce a bounded
+  // per-invocation budget for the actual Drive registration work.
+  const registerBatchSize = Math.min(
+    configuredRegisterBatchSize,
+    REGISTRATION_ATTEMPTS_PER_SCAN,
+  );
+  const maxRegisterPasses = Math.min(
+    configuredMaxRegisterPasses,
+    REGISTRATION_ATTEMPTS_PER_SCAN,
+  );
   const staleRegistrationMinutes = getNumber(env.STALE_REGISTRATION_MINUTES, 15, {
     min: 1,
     max: 24 * 60,
