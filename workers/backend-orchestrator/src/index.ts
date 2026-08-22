@@ -258,7 +258,7 @@ const GENERATED_MEDIA_SUFFIX_REGEX =
 const STALE_REGISTRATION_ERROR_MESSAGE =
   'Previous registration attempt stalled; queued for retry';
 const MISSING_UPLOAD_ERROR_PREFIX = 'Upload not found in storage';
-const WORKER_BUILD_ID = 'v70';
+const WORKER_BUILD_ID = 'v71';
 // A scheduled Worker must finish promptly. Drive copies can become visible
 // asynchronously, so persist the in-flight state and check again on the next
 // minute instead of polling long enough to lose the registration lease.
@@ -2526,7 +2526,7 @@ const clearStaleRegistrationStatuses = async (env: Env) => {
     WHERE status='detected'
       AND error_message=${STALE_REGISTRATION_ERROR_MESSAGE}
   `;
-  await sql`
+  const recoveredRows = await sql`
     UPDATE worker_registration_status
     SET
       status='detected',
@@ -2543,7 +2543,9 @@ const clearStaleRegistrationStatuses = async (env: Env) => {
         media_id IS NULL
         OR updated_at < now() - (${String(minutes)} || ' minutes')::interval
       )
-  `;
+    RETURNING url
+  ` as unknown as Array<{ url: string }>;
+  return recoveredRows.length;
 };
 
 const clearOldCompletedRegistrationStatuses = async (env: Env) => {
@@ -5012,6 +5014,50 @@ export default {
         });
       } catch (error: any) {
         return json(500, { error: error?.message || 'Unable to retry registration' });
+      }
+    }
+
+    if (url.pathname === '/recovery' && request.method === 'POST') {
+      if (!isAuthorized(request, env.BACKEND_ORCHESTRATOR_SHARED_SECRET)) {
+        return json(401, { error: 'Unauthorized' });
+      }
+      if (!settings.orchestratorEnabled || !settings.registrationEnabled) {
+        return json(200, {
+          triggered: false,
+          disabled: true,
+          statusMessage: 'Registration is disabled in processing settings',
+        });
+      }
+      try {
+        // Recovery is deliberately separate from the normal scan caller. It
+        // requeues only genuinely stale/incomplete claims; active Drive copies
+        // remain protected from duplicate work. The scheduled path runs this
+        // same stale-row maintenance automatically on every cron tick.
+        const requeued = await clearStaleRegistrationStatuses(runtimeEnv);
+        const scanQueued = scheduleScan(runtimeEnv, ctx);
+        ctx.waitUntil(logBackendActivity(runtimeEnv, {
+          category: 'orchestrator',
+          event: 'registration_recovery_requested',
+          status: 'info',
+          message: scanQueued
+            ? 'Registration recovery scan requested'
+            : 'Registration recovery scan joined an existing run',
+          details: { requeued, scanQueued },
+        }).catch(error => {
+          console.warn('Unable to log registration recovery request', error);
+        }));
+        return json(scanQueued ? 202 : 200, {
+          triggered: true,
+          scanStarted: scanQueued,
+          requeued,
+          statusMessage: requeued > 0
+            ? `Requeued ${requeued} stale registration${requeued === 1 ? '' : 's'}; worker scan requested`
+            : scanQueued
+              ? 'No stale claims found; worker scan requested'
+              : 'A worker scan is already running',
+        });
+      } catch (error: any) {
+        return json(500, { error: error?.message || 'Registration recovery failed' });
       }
     }
 
