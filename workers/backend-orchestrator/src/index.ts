@@ -258,7 +258,7 @@ const GENERATED_MEDIA_SUFFIX_REGEX =
 const STALE_REGISTRATION_ERROR_MESSAGE =
   'Previous registration attempt stalled; queued for retry';
 const MISSING_UPLOAD_ERROR_PREFIX = 'Upload not found in storage';
-const WORKER_BUILD_ID = 'v64';
+const WORKER_BUILD_ID = 'v65';
 // A scheduled Worker must finish promptly. Drive copies can become visible
 // asynchronously, so persist the in-flight state and check again on the next
 // minute instead of polling long enough to lose the registration lease.
@@ -620,8 +620,8 @@ const workerLandingPage = (metadata: WorkerLandingMetadata) => {
   const ownerName = escapeLandingHtml(configuredOwner);
   const links = [
     metadata.githubUrl && `<a href="${escapeLandingHtml(metadata.githubUrl)}" rel="noopener noreferrer">GitHub <span class="arrow">-&gt;</span></a>`,
-    metadata.repoUrl && `<a href="${escapeLandingHtml(metadata.repoUrl)}" rel="noopener noreferrer">${escapeLandingHtml(metadata.repoName || 'Source')} <span class="arrow">-&gt;</span></a>`,
-    metadata.portfolioUrl && `<a href="${escapeLandingHtml(metadata.portfolioUrl)}" rel="noopener noreferrer">Website <span class="arrow">-&gt;</span></a>`,
+    metadata.repoUrl && `<a href="${escapeLandingHtml(metadata.repoUrl)}" rel="noopener noreferrer">Media Panel <span class="arrow">-&gt;</span></a>`,
+    metadata.portfolioUrl && `<a href="${escapeLandingHtml(metadata.portfolioUrl)}" rel="noopener noreferrer">Portfolio <span class="arrow">-&gt;</span></a>`,
   ].filter(Boolean).join('');
   return `<!doctype html>
 <html lang="en">
