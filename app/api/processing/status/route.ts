@@ -1,4 +1,4 @@
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import { isSessionAuthorized } from '@/auth/api';
 import {
   BACKEND_ORCHESTRATOR_BASE_URL,
@@ -17,7 +17,7 @@ const isTimeoutError = (error: unknown) =>
     /timed? out|timeout|aborted/i.test(error.message)
   );
 
-export async function GET() {
+export async function GET(request: NextRequest) {
   if (!await isSessionAuthorized('edit')) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
@@ -26,8 +26,16 @@ export async function GET() {
     return NextResponse.json({ configured: false });
   }
   try {
-    const response = await fetch(
+    const rawQueueLimit = Number(request.nextUrl.searchParams.get('queueLimit'));
+    const queueLimit = Number.isFinite(rawQueueLimit)
+      ? Math.min(Math.max(Math.round(rawQueueLimit), 1), 5_000)
+      : undefined;
+    const statusUrl = new URL(
       `${BACKEND_ORCHESTRATOR_BASE_URL.replace(/\/+$/, '')}/status`,
+    );
+    if (queueLimit) { statusUrl.searchParams.set('queueLimit', String(queueLimit)); }
+    const response = await fetch(
+      statusUrl,
       {
         headers: {
           Authorization: `Bearer ${BACKEND_ORCHESTRATOR_SHARED_SECRET}`,

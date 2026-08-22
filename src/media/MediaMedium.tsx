@@ -81,10 +81,10 @@ export default function MediaMedium({
     preloadUrl: previewSrc,
   });
   const shouldRenderPreview = shouldMountPreview || isPreviewExiting;
-  const isInPreloadRange = useMediaPreload({ ref });
+  const { shouldLoad: shouldLoadMediaImage } = useMediaPreload({ ref });
   const shouldLoadPreviewImage = Boolean(priority) ||
     initiallyLoadPreviewImage ||
-    isInPreloadRange;
+    shouldLoadMediaImage;
 
   useVisibility({
     ref,

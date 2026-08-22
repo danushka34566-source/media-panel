@@ -258,7 +258,7 @@ const GENERATED_MEDIA_SUFFIX_REGEX =
 const STALE_REGISTRATION_ERROR_MESSAGE =
   'Previous registration attempt stalled; queued for retry';
 const MISSING_UPLOAD_ERROR_PREFIX = 'Upload not found in storage';
-const WORKER_BUILD_ID = 'registration-retry-v55';
+const WORKER_BUILD_ID = 'registration-retry-v56';
 // A scheduled Worker must finish promptly. Drive copies can become visible
 // asynchronously, so persist the in-flight state and check again on the next
 // minute instead of polling long enough to lose the registration lease.
@@ -3021,9 +3021,25 @@ const upsertMediaRow = async (
 const scanAndRegisterWithLease = async (
   env: Env,
   leaseToken: string,
+  {
+    waitUntil,
+  }: {
+    waitUntil?: (promise: Promise<unknown>) => void
+  } = {},
 ) => {
   await ensureRegisteredUploadFileMapTable(env);
   await ensureRegistrationStatusTable(env);
+  // Activity records are valuable diagnostics, but a dropped observability
+  // connection must never hold the durable registration queue hostage. When
+  // the scheduled runtime provides waitUntil, keep each write alive there;
+  // otherwise let the promise settle in the background for direct callers.
+  const observe = (operation: Promise<unknown>) => {
+    if (waitUntil) {
+      waitUntil(operation);
+    } else {
+      void operation;
+    }
+  };
   // These maintenance passes repair metadata, but they are not allowed to
   // abort the FIFO registration pass when a transient pooler connection is
   // dropped. The queue rows remain durable and the next scan can retry the
@@ -3036,7 +3052,7 @@ const scanAndRegisterWithLease = async (
       await operation();
     } catch (error) {
       console.warn(`Registration maintenance ${name} failed; continuing scan`, error);
-      await logBackendActivity(env, {
+      observe(logBackendActivity(env, {
         category: 'orchestrator',
         event: 'registration_maintenance_failed',
         status: 'warning',
@@ -3045,7 +3061,7 @@ const scanAndRegisterWithLease = async (
           operation: name,
           error: error instanceof Error ? error.message : String(error),
         },
-      }).catch(() => undefined);
+      }).catch(() => undefined));
     }
   };
   await runMaintenance('clear_stale_statuses', () => clearStaleRegistrationStatuses(env));
@@ -3510,7 +3526,7 @@ const scanAndRegisterWithLease = async (
           sourceUrl: persistedSourceUrl,
           mediaId,
         });
-        await logBackendActivity(env, {
+        observe(logBackendActivity(env, {
           category: 'registration',
           event: 'registration_started',
           status: 'info',
@@ -3526,7 +3542,9 @@ const scanAndRegisterWithLease = async (
             sourceSize,
             storageProvider: detectStorageProvider(env),
           },
-        });
+        }).catch(error => {
+          console.warn('Unable to log registration start', error);
+        }));
         registrationPhase = 'preparing';
         await runSafeRegistrationCommit({
           // Keep the original object until the generated-name destination is
@@ -3598,7 +3616,7 @@ const scanAndRegisterWithLease = async (
           sourceUrl,
           persistedSourceUrl,
         ].filter((url): url is string => Boolean(url))).catch(() => undefined);
-        await logBackendActivity(env, {
+        observe(logBackendActivity(env, {
           category: 'registration',
           event: 'media_registered',
           status: 'success',
@@ -3613,7 +3631,9 @@ const scanAndRegisterWithLease = async (
             storedUrl: registrationUrl,
             storageProvider: detectStorageProvider(env),
           },
-        });
+        }).catch(error => {
+          console.warn('Unable to log registration completion', error);
+        }));
         await revalidateMediaPanel(env, mediaId).catch(error => {
           console.error('Media panel revalidation failed after registration', {
             mediaId,
@@ -3655,7 +3675,7 @@ const scanAndRegisterWithLease = async (
               : String(error ?? 'Registration failed'),
           touchUpdatedAt: isRecoverableCopyDelay ? false : undefined,
         }).catch(() => undefined);
-        await logBackendActivity(env, {
+        observe(logBackendActivity(env, {
           category: 'registration',
           event: isRecoverableCopyDelay
             ? 'registration_waiting_for_storage'
@@ -3676,7 +3696,9 @@ const scanAndRegisterWithLease = async (
             targetUrl: registrationUrl,
             error: error instanceof Error ? error.message : String(error),
           },
-        });
+        }).catch(logError => {
+          console.warn('Unable to log registration failure', logError);
+        }));
         continue;
       }
     }
@@ -3695,7 +3717,10 @@ const scanAndRegisterWithLease = async (
   };
 };
 
-const scanAndRegister = async (env: Env) => {
+const scanAndRegister = async (
+  env: Env,
+  { waitUntil }: { waitUntil?: (promise: Promise<unknown>) => void } = {},
+) => {
   const leaseToken = await acquireScanLease(env);
   if (!leaseToken) {
     return {
@@ -3709,7 +3734,7 @@ const scanAndRegister = async (env: Env) => {
   }
   const stopLeaseHeartbeat = startScanLeaseHeartbeat(env, leaseToken);
   try {
-    return await scanAndRegisterWithLease(env, leaseToken);
+    return await scanAndRegisterWithLease(env, leaseToken, { waitUntil });
   } finally {
     await stopLeaseHeartbeat().catch(error => {
       console.warn('Failed to stop worker scan lease heartbeat', error);
@@ -4348,7 +4373,15 @@ const heartbeatProcessor = async (
   return json(200, { ok: true });
 };
 
-const status = async (env: Env) => {
+const status = async (
+  env: Env,
+  { jobLimit = 20 }: { jobLimit?: number } = {},
+) => {
+  const processingJobLimit = Math.min(Math.max(Math.round(jobLimit), 1), 5_000);
+  const registrationJobLimit = Math.min(
+    Math.max(Math.round(jobLimit * 2.5), 1),
+    5_000,
+  );
   const sql = sqlForEnv(env);
   const [
     rows,
@@ -4376,8 +4409,10 @@ const status = async (env: Env) => {
       SELECT id, title, transcode_status, transcode_error, updated_at
       FROM media
       WHERE transcode_status IN ('pending', 'processing', 'failed')
-      ORDER BY updated_at DESC
-      LIMIT 20
+      ORDER BY
+        CASE WHEN transcode_status='processing' THEN 0 ELSE 1 END,
+        updated_at DESC
+      LIMIT ${processingJobLimit}
     ` as unknown as Promise<Record<string, unknown>[]>,
     getDeletionQueueCounts(env),
     sql`
@@ -4405,8 +4440,12 @@ const status = async (env: Env) => {
               updated_at
             FROM worker_registration_status
             WHERE status IN ('detected', 'registering', 'error')
-            ORDER BY uploaded_at ASC NULLS LAST, updated_at ASC, url ASC
-            LIMIT 50
+            ORDER BY
+              CASE WHEN job.status='registering' THEN 0 ELSE 1 END,
+              job.uploaded_at ASC NULLS LAST,
+              job.updated_at ASC,
+              job.url ASC
+            LIMIT ${registrationJobLimit}
           ) job
         ), '[]'::jsonb) AS jobs
       FROM worker_registration_status
@@ -4466,7 +4505,13 @@ const startDeletionDrain = (env: Env) => {
 
 const startScan = (
   env: Env,
-  { shareInFlight = true }: { shareInFlight?: boolean } = {},
+  {
+    shareInFlight = true,
+    waitUntil,
+  }: {
+    shareInFlight?: boolean
+    waitUntil?: (promise: Promise<unknown>) => void
+  } = {},
 ) => {
   // Scheduled events are independent invocations. The database lease is the
   // cross-invocation concurrency guard; sharing a promise here could let one
@@ -4474,11 +4519,18 @@ const startScan = (
   if (shareInFlight && scanInFlight) {
     return { started: false, promise: scanInFlight };
   }
+  const observe = (operation: Promise<unknown>) => {
+    if (waitUntil) {
+      waitUntil(operation);
+    } else {
+      void operation;
+    }
+  };
   const promise = (async () => {
     try {
       // Activity logging is observability only. A transient database failure
       // here must never prevent the actual FIFO scan from starting.
-      void logBackendActivity(env, {
+      observe(logBackendActivity(env, {
         category: 'orchestrator',
         event: 'scan_started',
         status: 'info',
@@ -4486,13 +4538,13 @@ const startScan = (
         details: { storageProvider: detectStorageProvider(env) },
       }).catch(error => {
         console.warn('Unable to log registration scan start', error);
-      });
+      }));
       // Every database, storage, and Drive operation in the scan has its own
       // bounded timeout. Do not race the whole queue against a wall-clock
       // watchdog: that creates a false timeout while the underlying scan keeps
       // running and still owns the lease, making later cron runs look stalled.
-      const result = await scanAndRegister(env);
-      void logBackendActivity(env, {
+      const result = await scanAndRegister(env, { waitUntil });
+      observe(logBackendActivity(env, {
         category: 'orchestrator',
         event: 'scan_completed',
         status: 'success',
@@ -4500,17 +4552,17 @@ const startScan = (
         details: result,
       }).catch(error => {
         console.warn('Unable to log registration scan completion', error);
-      });
+      }));
       return result;
     } catch (error) {
-      void logBackendActivity(env, {
+      observe(logBackendActivity(env, {
         category: 'orchestrator',
         event: 'scan_failed',
         status: 'error',
         message: error instanceof Error ? error.message : 'Storage scan failed',
       }).catch(logError => {
         console.warn('Unable to log registration scan failure', logError);
-      });
+      }));
       throw error;
     }
   })().finally(() => {
@@ -4525,7 +4577,7 @@ const startScan = (
 };
 
 const scheduleScan = (env: Env, ctx: ExecutionContext) => {
-  const scan = startScan(env);
+  const scan = startScan(env, { waitUntil: promise => ctx.waitUntil(promise) });
   if (scan.started) {
     ctx.waitUntil(scan.promise);
   }
@@ -4570,7 +4622,10 @@ export default {
     }
     const scan = startScan(
       envWithRuntimeSettings(env, settings),
-      { shareInFlight: false },
+      {
+        ...{ shareInFlight: false },
+        waitUntil: promise => ctx.waitUntil(promise),
+      },
     );
     if (scan.started) {
       ctx.waitUntil(scan.promise.catch(error => {
@@ -4591,9 +4646,13 @@ export default {
         return json(401, { error: 'Unauthorized' });
       }
       try {
+        const rawQueueLimit = Number(url.searchParams.get('queueLimit'));
+        const queueLimit = Number.isFinite(rawQueueLimit)
+          ? Math.min(Math.max(Math.round(rawQueueLimit), 1), 5_000)
+          : undefined;
         const [settings, snapshot] = await Promise.all([
           getRuntimeProcessingSettings(env),
-          status(env),
+          status(env, queueLimit ? { jobLimit: queueLimit } : undefined),
         ]);
         return json(200, { ...snapshot, settings });
       } catch (error: any) {
@@ -4678,7 +4737,9 @@ export default {
         const activeRegistrations = trackedRegistrations
           .filter(({ status }) => status === 'registering');
         if (url.pathname === '/scan') {
-          const scan = startScan(runtimeEnv);
+          const scan = startScan(runtimeEnv, {
+            waitUntil: promise => ctx.waitUntil(promise),
+          });
           const result = await scan.promise;
           return json(200, {
             triggered: true,

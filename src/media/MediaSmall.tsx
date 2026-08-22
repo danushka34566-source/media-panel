@@ -74,10 +74,10 @@ export default function MediaSmall({
     src: previewSrc,
     onFatalError: () => setVideoFailedMediaId(photo.id),
   });
-  const isInPreloadRange = useMediaPreload({ ref });
+  const { shouldLoad: shouldLoadMediaImage } = useMediaPreload({ ref });
   const isVideoReady = videoReadyMediaId === photo.id;
   const hasPosterFailed = posterFailedMediaId === photo.id;
-  const shouldShowPoster = isInPreloadRange &&
+  const shouldShowPoster = shouldLoadMediaImage &&
     (!isPreviewActive || !isVideoReady);
 
   return (
@@ -154,7 +154,7 @@ export default function MediaSmall({
               width: IMAGE_WIDTH_SMALL,
             }}
           >
-            {isInPreloadRange && <ImageWithFallback
+            {shouldLoadMediaImage && <ImageWithFallback
               src={photo.url}
               width={IMAGE_WIDTH_SMALL}
               height={Math.round(IMAGE_WIDTH_SMALL / aspectRatio)}
@@ -170,7 +170,7 @@ export default function MediaSmall({
               showLoadingIndicator
             />}
           </div>
-          : isInPreloadRange
+          : shouldLoadMediaImage
             ? <ImageSmall
             src={photo.url}
             aspectRatio={photo.aspectRatio}

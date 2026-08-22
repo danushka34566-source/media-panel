@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { clsx } from 'clsx/lite';
 import { FiRefreshCw, FiX } from 'react-icons/fi';
 import Modal from '@/components/Modal';
@@ -42,13 +42,17 @@ export default function BackendLogsModal({
   const [logs, setLogs] = useState<BackendActivityLog[]>([]);
   const [error, setError] = useState<string>();
   const [isLoading, setIsLoading] = useState(true);
+  const [lastRefreshAt, setLastRefreshAt] = useState<string>();
+  const inFlightRef = useRef(false);
 
   const refresh = useCallback(async () => {
+    if (inFlightRef.current) { return; }
+    inFlightRef.current = true;
     setIsLoading(true);
     setError(undefined);
     try {
       const response = await fetch(
-        '/api/processing/logs?limit=250',
+        '/api/processing/logs?limit=500',
         { cache: 'no-store' },
       );
       const data = await response.json().catch(() => ({}));
@@ -56,18 +60,24 @@ export default function BackendLogsModal({
         throw new Error(data.error || 'Unable to load backend activity');
       }
       setLogs(Array.isArray(data.logs) ? data.logs : []);
+      setLastRefreshAt(new Date().toISOString());
     } catch (refreshError) {
       setError(refreshError instanceof Error
         ? refreshError.message
         : 'Unable to load backend activity');
     } finally {
       setIsLoading(false);
+      inFlightRef.current = false;
     }
   }, []);
 
   useEffect(() => {
     const timeout = window.setTimeout(() => void refresh(), 0);
-    return () => window.clearTimeout(timeout);
+    const interval = window.setInterval(() => void refresh(), 5_000);
+    return () => {
+      window.clearTimeout(timeout);
+      window.clearInterval(interval);
+    };
   }, [refresh]);
 
   return <Modal
@@ -85,7 +95,12 @@ export default function BackendLogsModal({
         <div className="min-w-0 grow">
           <h2 className="font-medium text-main">Backend activity logs</h2>
           <p className="text-sm text-dim">
-            Registration, scans, processing jobs, and processor activity
+            Registration, scans, processing, processors, and storage activity
+            <span className="ml-2 text-xs">
+              {lastRefreshAt
+                ? `Live · updated ${formatDate(lastRefreshAt)}`
+                : 'Syncing…'}
+            </span>
           </p>
         </div>
         <button

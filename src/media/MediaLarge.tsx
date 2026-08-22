@@ -543,13 +543,16 @@ export default function MediaLarge({
   const fullImagePreloadDistance = typeof window === 'undefined'
     ? 0
     : window.innerHeight * FULL_IMAGE_LOAD_AHEAD_VIEWPORTS;
-  const isInPreloadRange = useMediaPreload({
+  const {
+    isInRange: isInPreloadRange,
+    shouldLoad: shouldLoadMediaImage,
+  } = useMediaPreload({
     ref,
     preloadAheadPx: fullImagePreloadDistance,
   });
   const shouldLoadPreviewImage = Boolean(priority) ||
     initiallyLoadPreviewImage ||
-    isInPreloadRange;
+    shouldLoadMediaImage;
   // Do not prewarm every original video when a long full page mounts. That
   // creates one signed-download request per card (including cards hundreds of
   // rows below the viewport), exhausting browser/network memory and causing
