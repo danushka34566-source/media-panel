@@ -1,8 +1,8 @@
 import { NextResponse } from 'next/server';
 import {
+  BASE_URL,
   META_DESCRIPTION,
   NAV_CAPTION,
-  NAV_TITLE,
   PORTFOLIO_URL,
   TEMPLATE_DESCRIPTION,
   TEMPLATE_REPO_NAME,
@@ -26,12 +26,17 @@ const publicUrl = (value?: string) => {
 };
 
 export async function GET() {
-  const repoUrl = publicUrl(TEMPLATE_REPO_URL);
+  // The landing page has separate destinations for the source repository and
+  // the running panel: GitHub opens the repository, while Media Panel opens
+  // this deployment's public URL.
+  const repoUrl = publicUrl(BASE_URL);
   const portfolioUrl = publicUrl(PORTFOLIO_URL);
-  const githubUrl = publicUrl(`https://github.com/${TEMPLATE_REPO_OWNER}`);
+  const githubUrl = publicUrl(TEMPLATE_REPO_URL);
 
   return NextResponse.json({
-    title: NAV_TITLE || TEMPLATE_TITLE,
+    // The worker landing page title identifies the template/application. The
+    // deployed site's domain is separate metadata and must not replace it.
+    title: TEMPLATE_TITLE,
     kicker: NAV_CAPTION || 'Personal media library',
     description: META_DESCRIPTION || TEMPLATE_DESCRIPTION,
     ownerName: TEMPLATE_REPO_OWNER,
