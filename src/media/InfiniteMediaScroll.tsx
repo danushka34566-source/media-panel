@@ -171,8 +171,8 @@ export default function InfiniteMediaScroll({
   const retryFailedPage = useCallback(() => {
     loadingPageRef.current = true;
     Promise.resolve(mutate(undefined, {
-      revalidate: (_page: Media[] | undefined, key: [string, number]) =>
-        key[1] === pages.length,
+      revalidate: (_page: Media[] | undefined, key: string) =>
+        getSizeFromKey(String(key)) === pages.length - 1,
     } as any)).catch(() => undefined);
   }, [mutate, pages.length]);
 
@@ -180,9 +180,10 @@ export default function InfiniteMediaScroll({
     photoId: string,
     revalidateRemainingMedia?: boolean,
   ) => mutate(data, {
-    revalidate: (_data: Media[], [_, size]:[string, number]) => {
+    revalidate: (_data: Media[], key: string) => {
       const i = (data ?? []).findIndex(photos =>
         photos.some(photo => photo.id === photoId));
+      const size = getSizeFromKey(String(key));
       return revalidateRemainingMedia ? size >= i : size === i;
     },
   } as any), [data, mutate]);
