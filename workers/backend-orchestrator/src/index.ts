@@ -137,20 +137,7 @@ const getRuntimeProcessingSettings = async (env: Env) => {
   if (runtimeSettingsCache && runtimeSettingsCache.expiresAt > Date.now()) {
     return runtimeSettingsCache.settings;
   }
-  const defaults: RuntimeProcessingSettings = {
-    orchestratorEnabled: true,
-    registrationEnabled: true,
-    videoProcessingEnabled: true,
-    registerBatchSize: getNumber(env.REGISTER_BATCH_SIZE, 2, { min: 1, max: 100 }),
-    maxRegisterPasses: getNumber(env.MAX_REGISTER_PASSES, 2, { min: 1, max: 20 }),
-    staleProcessingMinutes: getNumber(env.STALE_PROCESSING_MINUTES, 2, { min: 1, max: 1440 }),
-    staleRegistrationMinutes: getNumber(env.STALE_REGISTRATION_MINUTES, 5, { min: 1, max: 1440 }),
-    registrationHistoryDays: getNumber(env.REGISTRATION_HISTORY_DAYS, 14, { min: 1, max: 365 }),
-    processorPollIntervalMs: getNumber(env.BACKEND_PROCESSOR_POLL_INTERVAL_MS, 5000, { min: 1000, max: 300000 }),
-    processorIdleIntervalMs: getNumber(env.BACKEND_PROCESSOR_IDLE_INTERVAL_MS, 5000, { min: 1000, max: 300000 }),
-    processorHeartbeatIntervalMs: getNumber(env.BACKEND_PROCESSOR_HEARTBEAT_INTERVAL_MS, 5000, { min: 1000, max: 60000 }),
-    processorClaimLimit: getNumber(env.BACKEND_PROCESSOR_CLAIM_LIMIT, 1, { min: 1, max: 3 }),
-  };
+  const defaults = getDefaultRuntimeProcessingSettings(env);
   try {
     const sql = sqlForEnv(env);
     await sql`
@@ -189,6 +176,44 @@ const getRuntimeProcessingSettings = async (env: Env) => {
   }
   runtimeSettingsCache = { expiresAt: Date.now() + 30_000, settings: defaults };
   return defaults;
+};
+
+const getDefaultRuntimeProcessingSettings = (env: Env): RuntimeProcessingSettings => ({
+    orchestratorEnabled: true,
+    registrationEnabled: true,
+    videoProcessingEnabled: true,
+    registerBatchSize: getNumber(env.REGISTER_BATCH_SIZE, 2, { min: 1, max: 100 }),
+    maxRegisterPasses: getNumber(env.MAX_REGISTER_PASSES, 2, { min: 1, max: 20 }),
+    staleProcessingMinutes: getNumber(env.STALE_PROCESSING_MINUTES, 2, { min: 1, max: 1440 }),
+    staleRegistrationMinutes: getNumber(env.STALE_REGISTRATION_MINUTES, 5, { min: 1, max: 1440 }),
+    registrationHistoryDays: getNumber(env.REGISTRATION_HISTORY_DAYS, 14, { min: 1, max: 365 }),
+    processorPollIntervalMs: getNumber(env.BACKEND_PROCESSOR_POLL_INTERVAL_MS, 5000, { min: 1000, max: 300000 }),
+    processorIdleIntervalMs: getNumber(env.BACKEND_PROCESSOR_IDLE_INTERVAL_MS, 5000, { min: 1000, max: 300000 }),
+    processorHeartbeatIntervalMs: getNumber(env.BACKEND_PROCESSOR_HEARTBEAT_INTERVAL_MS, 5000, { min: 1000, max: 60000 }),
+    processorClaimLimit: getNumber(env.BACKEND_PROCESSOR_CLAIM_LIMIT, 1, { min: 1, max: 3 }),
+});
+
+const RUNTIME_SETTINGS_LOOKUP_TIMEOUT_MS = 2_500;
+
+const getRuntimeProcessingSettingsForTrigger = async (env: Env) => {
+  const fallback = runtimeSettingsCache?.settings ?? getDefaultRuntimeProcessingSettings(env);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      getRuntimeProcessingSettings(env),
+      new Promise<RuntimeProcessingSettings>(resolve => {
+        timer = setTimeout(() => {
+          console.warn('Runtime processing settings lookup exceeded trigger budget; using cached/default settings');
+          resolve(fallback);
+        }, RUNTIME_SETTINGS_LOOKUP_TIMEOUT_MS);
+      }),
+    ]);
+  } catch (error) {
+    console.warn('Runtime processing settings lookup failed; using cached/default settings', error);
+    return fallback;
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 };
 
 const envWithRuntimeSettings = (
@@ -233,7 +258,7 @@ const GENERATED_MEDIA_SUFFIX_REGEX =
 const STALE_REGISTRATION_ERROR_MESSAGE =
   'Previous registration attempt stalled; queued for retry';
 const MISSING_UPLOAD_ERROR_PREFIX = 'Upload not found in storage';
-const WORKER_BUILD_ID = 'registration-retry-v53';
+const WORKER_BUILD_ID = 'registration-retry-v54';
 // A scheduled Worker must finish promptly. Drive copies can become visible
 // asynchronously, so persist the in-flight state and check again on the next
 // minute instead of polling long enough to lose the registration lease.
@@ -450,13 +475,16 @@ export const shouldWaitForTrackedRegistrationDestination = ({
   shouldVerifyExistingTarget,
   registrationStatus,
   targetAlreadyRegistered,
+  retryStale = false,
 }: {
   shouldVerifyExistingTarget: boolean
   registrationStatus: string | undefined
   targetAlreadyRegistered: boolean
+  retryStale?: boolean
 }) => shouldVerifyExistingTarget &&
   registrationStatus === 'registering' &&
-  !targetAlreadyRegistered;
+  !targetAlreadyRegistered &&
+  !retryStale;
 
 export const waitForVerifiedStorageCopy = async ({
   sourceSize,
@@ -3189,14 +3217,18 @@ const scanAndRegisterWithLease = async (
     });
 
     const now = Date.now();
+    const isStaleRegistration = (row?: RegistrationStatusRow) => {
+      if (row?.status !== 'registering') { return false; }
+      const updatedAt = parseDateValue(row.updated_at);
+      return !updatedAt ||
+        now - updatedAt.getTime() >= staleRegistrationMinutes * 60 * 1000;
+    };
     const deferredRegistrationKeys = new Set(
       pending
         .filter(object => {
           const row = registrationRowsByUrl.get(urlForKey(env, object.key));
-          const updatedAt = parseDateValue(row?.updated_at);
           return row?.status === 'registering' &&
-            Boolean(updatedAt) &&
-            now - (updatedAt as Date).getTime() < staleRegistrationMinutes * 60 * 1000;
+            !isStaleRegistration(row);
         })
         .map(object => object.key),
     );
@@ -3455,6 +3487,10 @@ const scanAndRegisterWithLease = async (
           shouldVerifyExistingTarget,
           registrationStatus: existingRegistration?.status,
           targetAlreadyRegistered,
+          // A fresh row may still represent a Drive copy in progress. Once
+          // its status is stale, retry the idempotent copy instead of waiting
+          // forever for a destination that may never exist.
+          retryStale: isStaleRegistration(existingRegistration),
         })) {
           throw new Error(
             `Copied destination is not readable in storage: ${registrationKey}`,
@@ -4502,7 +4538,7 @@ export default {
     env: Env,
     ctx: ExecutionContext,
   ) {
-    await logBackendActivity(env, {
+    ctx.waitUntil(logBackendActivity(env, {
       category: 'orchestrator',
       event: 'scheduled_triggered',
       status: 'info',
@@ -4515,8 +4551,8 @@ export default {
       // The trigger log is useful, but never let a transient database failure
       // disable the scheduled registration run.
       console.warn('Unable to log scheduled registration trigger', error);
-    });
-    const settings = await getRuntimeProcessingSettings(env);
+    }));
+    const settings = await getRuntimeProcessingSettingsForTrigger(env);
     // Cleanup is independent of registration. It can hit a slow database or
     // storage operation, so it must never hold the scheduled registration
     // path hostage. Keep it alive separately and start the FIFO scan now.

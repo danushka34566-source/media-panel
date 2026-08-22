@@ -522,6 +522,12 @@ test('an in-flight tracked Drive copy is not started a second time', () => {
     registrationStatus: 'error',
     targetAlreadyRegistered: false,
   }), false);
+  assert.equal(shouldWaitForTrackedRegistrationDestination({
+    shouldVerifyExistingTarget: true,
+    registrationStatus: 'registering',
+    targetAlreadyRegistered: false,
+    retryStale: true,
+  }), false);
 });
 
 test('delayed Drive copy visibility remains recoverable', () => {
