@@ -17,6 +17,21 @@ const isTimeoutError = (error: unknown) =>
     /timed? out|timeout|aborted/i.test(error.message)
   );
 
+const conciseStatusError = (value: unknown) => {
+  const message = typeof value === 'string' ? value : '';
+  if (/missing from-clause|syntax error|postgres query failed/i.test(message)) {
+    return 'Database status query failed; retrying';
+  }
+  if (/connection terminated|connection reset|pooler|econnreset/i.test(message)) {
+    return 'Database connection dropped; retrying';
+  }
+  if (/timed? out|timeout|aborted/i.test(message)) {
+    return 'Database status check timed out; retrying';
+  }
+  if (!message) { return 'Backend status is temporarily unavailable; retrying'; }
+  return message.length > 180 ? `${message.slice(0, 177)}…` : message;
+};
+
 export async function GET(request: NextRequest) {
   if (!await isSessionAuthorized('edit')) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
@@ -58,7 +73,9 @@ export async function GET(request: NextRequest) {
           connected: false,
           checkedAt: new Date().toISOString(),
           errorCode: 'upstream',
-          error: data.error || `Backend Orchestrator returned ${response.status}`,
+          error: conciseStatusError(
+            data.error || `Backend Orchestrator returned ${response.status}`,
+          ),
         },
       { status: response.ok ? 200 : 502 },
     );
@@ -71,7 +88,9 @@ export async function GET(request: NextRequest) {
       errorCode: timedOut ? 'timeout' : 'connection',
       error: timedOut
         ? 'Status check timed out'
-        : error instanceof Error ? error.message : 'Connection failed',
+        : conciseStatusError(error instanceof Error
+          ? error.message
+          : 'Connection failed'),
     }, { status: 502 });
   }
 }
