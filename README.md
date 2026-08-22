@@ -154,8 +154,8 @@ and the `ETag` response header when using browser multipart uploads.
 | `R2_PUBLIC_BASE_URL`, `R2_ACCOUNT_ID`, `R2_BUCKET` | Worker-side R2 settings. |
 | `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` | Worker-side R2 S3 credentials. |
 | `UNIQUE_MEDIA_NAMES` | Use generated unique media object names (`1` or `0`). |
-| `REGISTER_BATCH_SIZE` | Files attempted per registration pass; default `1`. |
-| `MAX_REGISTER_PASSES` | Registration passes per scheduled run; default `1`. |
+| `REGISTER_BATCH_SIZE` | Files attempted per registration pass; default `2`. |
+| `MAX_REGISTER_PASSES` | Registration passes per scheduled run; default `2`. |
 | `STALE_PROCESSING_MINUTES`, `STALE_REGISTRATION_MINUTES` | Lease recovery ages. |
 | `REGISTRATION_HISTORY_DAYS` | Completed/error status retention. |
 | `BACKEND_PROCESSOR_POLL_INTERVAL_MS` | Processor polling interval. |
@@ -164,9 +164,10 @@ and the `ETag` response header when using browser multipart uploads.
 | `BACKEND_PROCESSOR_CLAIM_LIMIT` | Processor jobs claimed per cycle. |
 | `RUN_ONCE` | Processor mode: process one batch and exit when `1`. |
 
-The conservative defaults are intentional. `REGISTER_BATCH_SIZE=1` is not a
-queue limit: thousands of files remain queued and are processed FIFO across
-scheduled runs.
+The registration worker uses a bounded FIFO slice on every scheduled run.
+Waiting for one Drive copy does not block later files in the same slice, and
+thousands of files remain resumable across scheduled runs without opening an
+unbounded number of database connections.
 
 ### Authentication and notifications
 

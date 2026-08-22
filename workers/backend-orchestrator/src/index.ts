@@ -87,6 +87,7 @@ export interface Env {
   BACKEND_PROCESSOR_IDLE_INTERVAL_MS?: string
   BACKEND_PROCESSOR_HEARTBEAT_INTERVAL_MS?: string
   BACKEND_PROCESSOR_CLAIM_LIMIT?: string
+  REGISTRATION_HINT_LOOKUPS_ENABLED?: string
 }
 
 type RuntimeProcessingSettings = {
@@ -134,8 +135,8 @@ const getRuntimeProcessingSettings = async (env: Env) => {
     orchestratorEnabled: true,
     registrationEnabled: true,
     videoProcessingEnabled: true,
-    registerBatchSize: getNumber(env.REGISTER_BATCH_SIZE, 1, { min: 1, max: 100 }),
-    maxRegisterPasses: getNumber(env.MAX_REGISTER_PASSES, 1, { min: 1, max: 20 }),
+    registerBatchSize: getNumber(env.REGISTER_BATCH_SIZE, 2, { min: 1, max: 100 }),
+    maxRegisterPasses: getNumber(env.MAX_REGISTER_PASSES, 2, { min: 1, max: 20 }),
     staleProcessingMinutes: getNumber(env.STALE_PROCESSING_MINUTES, 2, { min: 1, max: 1440 }),
     staleRegistrationMinutes: getNumber(env.STALE_REGISTRATION_MINUTES, 5, { min: 1, max: 1440 }),
     registrationHistoryDays: getNumber(env.REGISTRATION_HISTORY_DAYS, 14, { min: 1, max: 365 }),
@@ -226,7 +227,7 @@ const GENERATED_MEDIA_SUFFIX_REGEX =
 const STALE_REGISTRATION_ERROR_MESSAGE =
   'Previous registration attempt stalled; queued for retry';
 const MISSING_UPLOAD_ERROR_PREFIX = 'Upload not found in storage';
-const WORKER_BUILD_ID = 'registration-retry-v37-lease';
+const WORKER_BUILD_ID = 'registration-retry-v39';
 // A scheduled Worker must finish promptly. Drive copies can become visible
 // asynchronously, so persist the in-flight state and check again on the next
 // minute instead of polling long enough to lose the registration lease.
@@ -1998,8 +1999,18 @@ const getUploadRegistrationHints = async (env: Env, urls: string[]) => {
   if (urls.length === 0) {
     return new Map<string, UploadRegistrationHintRow>();
   }
-  await ensureUploadRegistrationHintsTable(env);
-  await ensureUploadRegistrationHintsColumnTypes(env);
+  // Hints are optional metadata. Never let a Supabase pooler drop block the
+  // registration queue; storage keys are a complete fallback for filenames.
+  if (env.REGISTRATION_HINT_LOOKUPS_ENABLED !== '1') {
+    return new Map<string, UploadRegistrationHintRow>();
+  }
+  try {
+    await ensureUploadRegistrationHintsTable(env);
+    await ensureUploadRegistrationHintsColumnTypes(env);
+  } catch (error) {
+    console.warn('Upload registration hints unavailable; continuing without hints', error);
+    return new Map<string, UploadRegistrationHintRow>();
+  }
   const sql = sqlForEnv(env);
   const requestedUrls = new Map(urls.map(url => [url, {
     canonical: canonicalizeStorageUrl(url),
@@ -2011,11 +2022,23 @@ const getUploadRegistrationHints = async (env: Env, urls: string[]) => {
       decoded,
     ]),
   ));
-  const rows = (await sql`
-    SELECT url, original_file_name, title
-    FROM upload_registration_hints
-    WHERE url = ANY(${lookupUrls})
-  `) as unknown as UploadRegistrationHintRow[];
+  const rows: UploadRegistrationHintRow[] = [];
+  for (let offset = 0; offset < lookupUrls.length; offset += 200) {
+    const chunk = lookupUrls.slice(offset, offset + 200);
+    try {
+      const chunkRows = (await sql`
+        SELECT url, original_file_name, title
+        FROM upload_registration_hints
+        WHERE url = ANY(${chunk})
+      `) as unknown as UploadRegistrationHintRow[];
+      rows.push(...chunkRows);
+    } catch (error) {
+      console.warn('Upload registration hint chunk unavailable; continuing without it', {
+        offset,
+        error,
+      });
+    }
+  }
   const rowsByUrl = new Map(rows.map(row => [row.url, row]));
   const rowsByCanonicalUrl = new Map(
     rows.map(row => [canonicalizeStorageUrl(row.url), row]),
@@ -2042,14 +2065,22 @@ const getUploadRegistrationHints = async (env: Env, urls: string[]) => {
 };
 
 const getPendingUploadRegistrationHints = async (env: Env) => {
-  await ensureUploadRegistrationHintsTable(env);
-  await ensureUploadRegistrationHintsColumnTypes(env);
-  const sql = sqlForEnv(env);
-  return (await sql`
-    SELECT url, original_file_name, title, updated_at, created_at
-    FROM upload_registration_hints
-    ORDER BY updated_at DESC
-  `) as unknown as UploadRegistrationHintRow[];
+  if (env.REGISTRATION_HINT_LOOKUPS_ENABLED !== '1') {
+    return [];
+  }
+  try {
+    await ensureUploadRegistrationHintsTable(env);
+    await ensureUploadRegistrationHintsColumnTypes(env);
+    const sql = sqlForEnv(env);
+    return (await sql`
+      SELECT url, original_file_name, title, updated_at, created_at
+      FROM upload_registration_hints
+      ORDER BY updated_at DESC
+    `) as unknown as UploadRegistrationHintRow[];
+  } catch (error) {
+    console.warn('Pending upload registration hints unavailable; continuing without hints', error);
+    return [];
+  }
 };
 
 const replaceUploadRegistrationHintUrl = async (
@@ -2821,11 +2852,11 @@ const scanAndRegisterWithLease = async (
   await clearOldCompletedRegistrationStatuses(env);
   await retryStaleProcessing(env);
 
-  const registerBatchSize = getNumber(env.REGISTER_BATCH_SIZE, 1, {
+  const registerBatchSize = getNumber(env.REGISTER_BATCH_SIZE, 2, {
     min: 1,
     max: 10,
   });
-  const maxRegisterPasses = getNumber(env.MAX_REGISTER_PASSES, 1, {
+  const maxRegisterPasses = getNumber(env.MAX_REGISTER_PASSES, 2, {
     min: 1,
     max: 10,
   });

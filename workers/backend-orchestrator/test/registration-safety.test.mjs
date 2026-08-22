@@ -79,6 +79,22 @@ test('large registration backlogs are selected one FIFO batch at a time', () => 
   );
 });
 
+test('registration scans process a bounded slice instead of one file per cron', () => {
+  assert.match(workerSource, /registerBatchSize: getNumber\(env\.REGISTER_BATCH_SIZE, 2/);
+  assert.match(workerSource, /maxRegisterPasses: getNumber\(env\.MAX_REGISTER_PASSES, 2/);
+  assert.match(workerSource, /getNumber\(env\.REGISTER_BATCH_SIZE, 2, \{[\s\S]*?min: 1/);
+  assert.match(workerSource, /getNumber\(env\.MAX_REGISTER_PASSES, 2, \{[\s\S]*?min: 1/);
+});
+
+test('optional upload hint database work cannot stop the registration queue', () => {
+  const hintStart = workerSource.indexOf('const getUploadRegistrationHints');
+  const hintEnd = workerSource.indexOf('const replaceUploadRegistrationHintUrl', hintStart);
+  const hintSource = workerSource.slice(hintStart, hintEnd);
+  assert.match(hintSource, /REGISTRATION_HINT_LOOKUPS_ENABLED !== '1'/);
+  assert.match(hintSource, /continuing without hints/);
+  assert.match(workerSource, /const getPendingUploadRegistrationHints[\s\S]*?return \[\];/);
+});
+
 test('video processing claims the oldest pending upload first', () => {
   const claimStart = workerSource.indexOf('const claimVideoJobs');
   const claimEnd = workerSource.indexOf('const getProcessorJobs', claimStart);
