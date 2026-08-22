@@ -258,7 +258,7 @@ const GENERATED_MEDIA_SUFFIX_REGEX =
 const STALE_REGISTRATION_ERROR_MESSAGE =
   'Previous registration attempt stalled; queued for retry';
 const MISSING_UPLOAD_ERROR_PREFIX = 'Upload not found in storage';
-const WORKER_BUILD_ID = 'v58';
+const WORKER_BUILD_ID = 'v59';
 // A scheduled Worker must finish promptly. Drive copies can become visible
 // asynchronously, so persist the in-flight state and check again on the next
 // minute instead of polling long enough to lose the registration lease.
@@ -4309,7 +4309,7 @@ const failVideoJob = async (
 };
 
 export const shouldRetryInterruptedJob = (errorMessage: string) =>
-    /source download stalled|fetch failed|processor interrupted/i
+    /source download stalled|fetch failed|processor interrupted|(?:drive|storage) (?:put|upload|finalize) failed \(5\d{2}\)|connection terminated|connection reset|econnreset|timed? out|timeout/i
       .test(errorMessage);
 
 const heartbeatProcessor = async (

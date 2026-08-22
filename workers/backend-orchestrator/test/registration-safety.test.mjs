@@ -355,6 +355,14 @@ test('processor termination returns the claimed job to the retry queue', () => {
     shouldRetryInterruptedJob('Processor interrupted by SIGTERM'),
     true,
   );
+  assert.equal(
+    shouldRetryInterruptedJob('Drive put failed (524): upstream timeout'),
+    true,
+  );
+  assert.equal(
+    shouldRetryInterruptedJob('Drive put failed (403): permission denied'),
+    false,
+  );
   assert.equal(shouldRetryInterruptedJob('Unsupported video codec'), false);
 });
 
