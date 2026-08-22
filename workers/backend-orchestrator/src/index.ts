@@ -258,7 +258,7 @@ const GENERATED_MEDIA_SUFFIX_REGEX =
 const STALE_REGISTRATION_ERROR_MESSAGE =
   'Previous registration attempt stalled; queued for retry';
 const MISSING_UPLOAD_ERROR_PREFIX = 'Upload not found in storage';
-const WORKER_BUILD_ID = 'v60';
+const WORKER_BUILD_ID = 'v62';
 // A scheduled Worker must finish promptly. Drive copies can become visible
 // asynchronously, so persist the in-flight state and check again on the next
 // minute instead of polling long enough to lose the registration lease.
@@ -520,42 +520,130 @@ const json = (status: number, body: unknown) =>
     },
   });
 
-const workerLandingPage = () => `<!doctype html>
+type WorkerLandingMetadata = {
+  title: string
+  kicker: string
+  description: string
+  repoName?: string
+  repoUrl?: string
+  githubUrl?: string
+  portfolioUrl?: string
+};
+
+const DEFAULT_LANDING_METADATA: WorkerLandingMetadata = {
+  title: 'Media Panel',
+  kicker: 'Personal media library',
+  description: 'A quiet, focused space to organize and view your collection.',
+};
+
+let landingMetadataCache: {
+  expiresAt: number
+  metadata: WorkerLandingMetadata
+} | undefined;
+
+const safeLandingUrl = (value: unknown) => {
+  if (typeof value !== 'string' || !value.trim()) { return undefined; }
+  try {
+    const url = new URL(value.trim());
+    return url.protocol === 'http:' || url.protocol === 'https:'
+      ? url.toString()
+      : undefined;
+  } catch {
+    return undefined;
+  }
+};
+
+const escapeLandingHtml = (value: unknown) => String(value ?? '')
+  .replace(/&/g, '&amp;')
+  .replace(/</g, '&lt;')
+  .replace(/>/g, '&gt;')
+  .replace(/"/g, '&quot;')
+  .replace(/'/g, '&#39;');
+
+const getWorkerLandingMetadata = async (env: Env) => {
+  if (landingMetadataCache && landingMetadataCache.expiresAt > Date.now()) {
+    return landingMetadataCache.metadata;
+  }
+  const baseUrl = env.MEDIA_PANEL_BASE_URL?.trim().replace(/\/+$/, '');
+  if (!baseUrl) { return DEFAULT_LANDING_METADATA; }
+  try {
+    const response = await fetch(`${baseUrl}/api/site-info`, {
+      headers: { Accept: 'application/json' },
+      cache: 'no-store',
+      signal: AbortSignal.timeout(2_000),
+    });
+    if (!response.ok) { throw new Error(`Panel metadata returned ${response.status}`); }
+    const value = await response.json() as Partial<WorkerLandingMetadata>;
+    const metadata: WorkerLandingMetadata = {
+      title: typeof value.title === 'string' && value.title.trim()
+        ? value.title.trim()
+        : DEFAULT_LANDING_METADATA.title,
+      kicker: typeof value.kicker === 'string' && value.kicker.trim()
+        ? value.kicker.trim()
+        : DEFAULT_LANDING_METADATA.kicker,
+      description: typeof value.description === 'string' && value.description.trim()
+        ? value.description.trim()
+        : DEFAULT_LANDING_METADATA.description,
+      repoName: typeof value.repoName === 'string' ? value.repoName.trim() : undefined,
+      repoUrl: safeLandingUrl(value.repoUrl),
+      githubUrl: safeLandingUrl(value.githubUrl),
+      portfolioUrl: safeLandingUrl(value.portfolioUrl),
+    };
+    landingMetadataCache = { expiresAt: Date.now() + 60_000, metadata };
+    return metadata;
+  } catch (error) {
+    console.warn('Unable to load panel landing metadata; using defaults', error);
+    return DEFAULT_LANDING_METADATA;
+  }
+};
+
+const workerLandingPage = (metadata: WorkerLandingMetadata) => {
+  const title = escapeLandingHtml(metadata.title);
+  const kicker = escapeLandingHtml(metadata.kicker);
+  const description = escapeLandingHtml(metadata.description);
+  const links = [
+    metadata.githubUrl && `<a href="${escapeLandingHtml(metadata.githubUrl)}" rel="noopener noreferrer">GitHub <span class="arrow">-&gt;</span></a>`,
+    metadata.repoUrl && `<a href="${escapeLandingHtml(metadata.repoUrl)}" rel="noopener noreferrer">${escapeLandingHtml(metadata.repoName || 'Source')} <span class="arrow">-&gt;</span></a>`,
+    metadata.portfolioUrl && `<a href="${escapeLandingHtml(metadata.portfolioUrl)}" rel="noopener noreferrer">Website <span class="arrow">-&gt;</span></a>`,
+  ].filter(Boolean).join('');
+  return `<!doctype html>
 <html lang="en">
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width,initial-scale=1">
-    <meta name="color-scheme" content="dark">
-    <title>Media Panel</title>
+    <meta name="color-scheme" content="light dark">
+    <title>${title}</title>
     <style>
-      :root{color-scheme:dark;font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:#07111f;color:#e6edf7}
-      *{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;overflow-x:hidden;background:radial-gradient(circle at 12% 12%,#4f46e555,transparent 34%),radial-gradient(circle at 88% 88%,#06b6d455,transparent 36%),#07111f}
-      body:before{content:"";position:fixed;inset:0;pointer-events:none;opacity:.2;background-image:linear-gradient(#94a3b81a 1px,transparent 1px),linear-gradient(90deg,#94a3b81a 1px,transparent 1px);background-size:44px 44px;mask-image:linear-gradient(to bottom,black,transparent 78%)}
-      main{position:relative;width:min(690px,calc(100% - 28px));padding:clamp(30px,7vw,68px);border:1px solid #ffffff1c;border-radius:30px;background:linear-gradient(145deg,#10243de8,#0a1729e8);box-shadow:0 28px 90px #0008,inset 0 1px #ffffff18;backdrop-filter:blur(18px)}
-      .eyebrow{display:flex;align-items:center;gap:10px;color:#a8baff;font-size:12px;font-weight:750;letter-spacing:.17em;text-transform:uppercase}.orb{width:11px;height:11px;border-radius:50%;background:#67e8f9;box-shadow:0 0 0 7px #67e8f922,0 0 26px #67e8f9}
-      h1{margin:24px 0 14px;font-size:clamp(42px,8vw,72px);line-height:.98;letter-spacing:-.065em}p{max-width:520px;margin:0;color:#a9b9cf;font-size:17px;line-height:1.65}.rule{width:72px;height:3px;margin:30px 0 24px;border-radius:3px;background:linear-gradient(90deg,#67e8f9,#818cf8)}
-      .links{display:flex;flex-wrap:wrap;gap:11px}.links a{display:inline-flex;align-items:center;gap:9px;padding:11px 15px;border:1px solid #ffffff1c;border-radius:13px;color:#d9e6f6;text-decoration:none;background:#ffffff09;font-size:14px;transition:.2s ease}.links a:hover{transform:translateY(-2px);border-color:#67e8f988;background:#67e8f914}.arrow{color:#67e8f9;font-size:16px}.footer{margin-top:36px;color:#6f829d;font-size:12px;line-height:1.6}
-      @media (max-width:520px){main{width:calc(100% - 18px);padding:31px 23px;border-radius:23px}p{font-size:15px}.links{display:grid}.links a{width:100%}}
+      :root{color-scheme:light;font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono","Courier New",monospace;background:#f7f7f7;color:#171717;--page:#f7f7f7;--surface:#fff;--line:#d9d9d9;--muted:#707070;--hover:#f0f0f0}
+      @media(prefers-color-scheme:dark){:root{color-scheme:dark;background:#090909;color:#ededed;--page:#090909;--surface:#111;--line:#303030;--muted:#9a9a9a;--hover:#1d1d1d}}
+      *{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;background:var(--page);padding:18px}
+      main{width:min(620px,100%);border:1px solid var(--line);border-radius:10px;background:var(--surface);box-shadow:0 10px 30px rgba(0,0,0,.06);overflow:hidden}
+      .top{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:14px 16px;border-bottom:1px solid var(--line);font-size:12px;letter-spacing:.08em;text-transform:uppercase}.brand{display:flex;align-items:center;gap:9px}.mark{width:9px;height:9px;border-radius:2px;background:currentColor}.account{color:var(--muted);font-size:11px;letter-spacing:0;text-transform:none}
+      .content{padding:clamp(30px,7vw,58px) clamp(24px,7vw,64px) 34px}.kicker{margin:0 0 19px;color:var(--muted);font-size:11px;letter-spacing:.12em;text-transform:uppercase}h1{max-width:480px;margin:0;font-size:clamp(29px,6vw,46px);font-weight:500;line-height:1.1;letter-spacing:-.055em}p{max-width:480px;margin:18px 0 0;color:var(--muted);font-size:14px;line-height:1.75}.rule{height:1px;margin:34px 0 22px;background:var(--line)}.links{display:flex;flex-wrap:wrap;gap:9px}.links a{display:inline-flex;align-items:center;gap:10px;padding:10px 12px;border:1px solid var(--line);border-radius:8px;color:inherit;text-decoration:none;font-size:12px;transition:background-color .16s ease,border-color .16s ease}.links a:hover{background:var(--hover);border-color:var(--muted)}.arrow{color:var(--muted);font-size:14px}.footer{padding:12px 16px;border-top:1px solid var(--line);color:var(--muted);font-size:11px}
+      @media(max-width:520px){body{padding:10px}.content{padding:30px 22px 28px}.links{display:grid}.links a{width:100%;justify-content:space-between}}
     </style>
   </head>
   <body>
     <main>
-      <div class="eyebrow"><span class="orb"></span> iamnadith · media panel</div>
-      <h1>Make every memory count.</h1>
-      <p>A thoughtful media workspace for collecting, organizing, and enjoying the moments that matter.</p>
-      <div class="rule"></div>
-      <div class="links">
-        <a href="https://github.com/iamnadith" rel="noopener noreferrer">GitHub <span class="arrow">↗</span></a>
-        <a href="https://github.com/iamnadith/media-panel" rel="noopener noreferrer">Media Panel source <span class="arrow">↗</span></a>
-        <a href="https://www.nadith.pro" rel="noopener noreferrer">nadith.pro <span class="arrow">↗</span></a>
-      </div>
-      <div class="footer">Built with care by Nadith Dhanula.</div>
+      <header class="top"><div class="brand"><span class="mark"></span><span>${title}</span></div><span class="account">media library</span></header>
+      <section class="content">
+        <p class="kicker">${kicker}</p>
+        <h1>${title}</h1>
+        <p>${description}</p>
+        <div class="rule"></div>
+        <nav class="links" aria-label="External links">${links}</nav>
+      </section>
+      <footer class="footer">Powered by ${title}</footer>
     </main>
   </body>
 </html>`;
+};
 
-const landingResponse = (request: Request) => new Response(
-  request.method === 'HEAD' ? null : workerLandingPage(),
+const landingResponse = (
+  request: Request,
+  metadata: WorkerLandingMetadata,
+) => new Response(
+  request.method === 'HEAD' ? null : workerLandingPage(metadata),
   {
     status: 200,
     headers: {
@@ -4727,7 +4815,7 @@ export default {
     const url = new URL(request.url);
 
     if (url.pathname === '/' && (request.method === 'GET' || request.method === 'HEAD')) {
-      return landingResponse(request);
+      return landingResponse(request, await getWorkerLandingMetadata(env));
     }
 
     if (url.pathname === '/health') {
