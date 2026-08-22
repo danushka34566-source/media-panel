@@ -258,7 +258,7 @@ const GENERATED_MEDIA_SUFFIX_REGEX =
 const STALE_REGISTRATION_ERROR_MESSAGE =
   'Previous registration attempt stalled; queued for retry';
 const MISSING_UPLOAD_ERROR_PREFIX = 'Upload not found in storage';
-const WORKER_BUILD_ID = 'v62';
+const WORKER_BUILD_ID = 'v63';
 // A scheduled Worker must finish promptly. Drive copies can become visible
 // asynchronously, so persist the in-flight state and check again on the next
 // minute instead of polling long enough to lose the registration lease.
@@ -524,6 +524,7 @@ type WorkerLandingMetadata = {
   title: string
   kicker: string
   description: string
+  ownerName?: string
   repoName?: string
   repoUrl?: string
   githubUrl?: string
@@ -584,6 +585,9 @@ const getWorkerLandingMetadata = async (env: Env) => {
       description: typeof value.description === 'string' && value.description.trim()
         ? value.description.trim()
         : DEFAULT_LANDING_METADATA.description,
+      ownerName: typeof value.ownerName === 'string' && value.ownerName.trim()
+        ? value.ownerName.trim()
+        : undefined,
       repoName: typeof value.repoName === 'string' ? value.repoName.trim() : undefined,
       repoUrl: safeLandingUrl(value.repoUrl),
       githubUrl: safeLandingUrl(value.githubUrl),
@@ -601,6 +605,7 @@ const workerLandingPage = (metadata: WorkerLandingMetadata) => {
   const title = escapeLandingHtml(metadata.title);
   const kicker = escapeLandingHtml(metadata.kicker);
   const description = escapeLandingHtml(metadata.description);
+  const ownerName = escapeLandingHtml(metadata.ownerName || '');
   const links = [
     metadata.githubUrl && `<a href="${escapeLandingHtml(metadata.githubUrl)}" rel="noopener noreferrer">GitHub <span class="arrow">-&gt;</span></a>`,
     metadata.repoUrl && `<a href="${escapeLandingHtml(metadata.repoUrl)}" rel="noopener noreferrer">${escapeLandingHtml(metadata.repoName || 'Source')} <span class="arrow">-&gt;</span></a>`,
@@ -625,7 +630,7 @@ const workerLandingPage = (metadata: WorkerLandingMetadata) => {
   </head>
   <body>
     <main>
-      <header class="top"><div class="brand"><span class="mark"></span><span>${title}</span></div><span class="account">media library</span></header>
+      <header class="top"><div class="brand"><span class="mark"></span><span>${title}</span></div><span class="account">${ownerName}</span></header>
       <section class="content">
         <p class="kicker">${kicker}</p>
         <h1>${title}</h1>
@@ -633,7 +638,7 @@ const workerLandingPage = (metadata: WorkerLandingMetadata) => {
         <div class="rule"></div>
         <nav class="links" aria-label="External links">${links}</nav>
       </section>
-      <footer class="footer">Powered by ${title}</footer>
+      <footer class="footer">Powered by ${ownerName || title}</footer>
     </main>
   </body>
 </html>`;
