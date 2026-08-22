@@ -4,27 +4,34 @@ import { Metadata } from 'next/types';
 import { cache } from 'react';
 import MediaFullPage from '@/media/MediaFullPage';
 import { getMediaCached, getMediaMetaCached } from '@/media/cache';
-import { USER_DEFAULT_SORT_OPTIONS } from '@/app/config';
 import { FEED_META_QUERY_OPTIONS, getFeedQueryOptions } from '@/feed';
+import { getEffectiveMediaSortOptions } from '@/media/sort/preference';
 
 export const maxDuration = 60;
 
-const getFeedMediaCached = cache(() => getMediaCached(getFeedQueryOptions({
-  isGrid: false,
-})));
+const getFeedMediaCached = cache((sortOptions: ReturnType<typeof getFeedQueryOptions>) =>
+  getMediaCached(sortOptions));
 
 export async function generateMetadata(): Promise<Metadata> {
-  const photos = await getFeedMediaCached()
+  const sortOptions = await getEffectiveMediaSortOptions();
+  const photos = await getFeedMediaCached(getFeedQueryOptions({
+    isGrid: false,
+    ...sortOptions,
+  }))
     .catch(() => []);
   return generateOgImageMetaForMedia(photos);
 }
 
 export default async function FullPage() {
+  const sortOptions = await getEffectiveMediaSortOptions();
   const [
     photos,
     photosCount,
   ] = await Promise.all([
-    getFeedMediaCached()
+    getFeedMediaCached(getFeedQueryOptions({
+      isGrid: false,
+      ...sortOptions,
+    }))
       .catch(() => []),
     getMediaMetaCached(FEED_META_QUERY_OPTIONS)
       .then(({ count }) => count)
@@ -36,7 +43,7 @@ export default async function FullPage() {
       ? <MediaFullPage {...{
         photos,
         photosCount,
-        ...USER_DEFAULT_SORT_OPTIONS,
+        ...sortOptions,
       }} />
       : <MediaEmptyState />
   );

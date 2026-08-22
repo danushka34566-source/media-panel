@@ -233,7 +233,7 @@ const GENERATED_MEDIA_SUFFIX_REGEX =
 const STALE_REGISTRATION_ERROR_MESSAGE =
   'Previous registration attempt stalled; queued for retry';
 const MISSING_UPLOAD_ERROR_PREFIX = 'Upload not found in storage';
-const WORKER_BUILD_ID = 'registration-retry-v51';
+const WORKER_BUILD_ID = 'registration-retry-v52';
 // A scheduled Worker must finish promptly. Drive copies can become visible
 // asynchronously, so persist the in-flight state and check again on the next
 // minute instead of polling long enough to lose the registration lease.
@@ -3405,6 +3405,11 @@ const scanAndRegisterWithLease = async (
           mediaId,
           extension,
         );
+        // Rows rehydrated from the durable queue may be outside the current
+        // inventory page and therefore have no listed size. Fetch the source
+        // size once before validating an existing generated destination;
+        // comparing against undefined falsely kept retries waiting forever.
+        const sourceSize = object.size ?? await storageObjectSize(env, object.key);
         const targetRegistrationUrl = urlForKey(env, registrationKey);
         const existingMediaForId = rows.find(row => row.id === mediaId);
         const targetRecordedAsRegistered =
@@ -3423,10 +3428,10 @@ const scanAndRegisterWithLease = async (
           });
         const listedTargetSize = objectsByKey.get(registrationKey)?.size;
         const recordedTargetSize = shouldVerifyExistingTarget
-          ? isVerifiedStorageCopy(object.size, listedTargetSize)
+          ? isVerifiedStorageCopy(sourceSize, listedTargetSize)
             ? listedTargetSize
             : await waitForVerifiedStorageCopy({
-              sourceSize: object.size,
+              sourceSize,
               readDestinationSize: () => storageObjectSize(env, registrationKey),
               attempts: isDriveStorageEnabled(env)
                 ? DRIVE_RETRY_TARGET_VISIBILITY_ATTEMPTS
@@ -3437,7 +3442,7 @@ const scanAndRegisterWithLease = async (
             })
           : undefined;
         const targetAlreadyRegistered = shouldVerifyExistingTarget &&
-          isVerifiedStorageCopy(object.size, recordedTargetSize);
+          isVerifiedStorageCopy(sourceSize, recordedTargetSize);
         if (shouldWaitForTrackedRegistrationDestination({
           shouldVerifyExistingTarget,
           registrationStatus: existingRegistration?.status,
@@ -3474,7 +3479,7 @@ const scanAndRegisterWithLease = async (
             uploadedAt: sourceUploadedAt,
             sourceUrl,
             targetUrl: registrationUrl,
-            sourceSize: object.size,
+            sourceSize,
             storageProvider: detectStorageProvider(env),
           },
         });
@@ -3488,7 +3493,7 @@ const scanAndRegisterWithLease = async (
                 env,
                 object.key,
                 registrationKey,
-                object.size,
+                sourceSize,
               );
             }
           },
