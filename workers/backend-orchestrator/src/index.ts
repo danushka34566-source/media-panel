@@ -226,7 +226,7 @@ const GENERATED_MEDIA_SUFFIX_REGEX =
 const STALE_REGISTRATION_ERROR_MESSAGE =
   'Previous registration attempt stalled; queued for retry';
 const MISSING_UPLOAD_ERROR_PREFIX = 'Upload not found in storage';
-const WORKER_BUILD_ID = 'registration-retry-v37';
+const WORKER_BUILD_ID = 'registration-retry-v37-watchdog';
 // A scheduled Worker must finish promptly. Drive copies can become visible
 // asynchronously, so persist the in-flight state and check again on the next
 // minute instead of polling long enough to lose the registration lease.
@@ -240,6 +240,10 @@ const REGISTRATION_STORAGE_TIMEOUT_MS = 30_000;
 const DELETION_STORAGE_TIMEOUT_MS = 15_000;
 const DELETION_MUTATION_TIMEOUT_MS = 45_000;
 const DELETION_MUTATION_CONCURRENCY = 4;
+// A single scheduled scan must not pin the isolate's shared in-flight promise
+// forever. Individual database/storage calls are already bounded; this is a
+// final recovery guard for a provider/runtime promise that never settles.
+export const SCAN_WATCHDOG_TIMEOUT_MS = 120_000;
 
 const encoder = new TextEncoder();
 
@@ -4172,7 +4176,20 @@ const startScan = (env: Env) => {
       details: { storageProvider: detectStorageProvider(env) },
     });
     try {
-      const result = await scanAndRegister(env);
+      let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+      const watchdog = new Promise<never>((_, reject) => {
+        timeoutHandle = setTimeout(() => {
+          reject(new Error(
+            `Registration scan watchdog exceeded ${SCAN_WATCHDOG_TIMEOUT_MS}ms`,
+          ));
+        }, SCAN_WATCHDOG_TIMEOUT_MS);
+      });
+      let result: Awaited<ReturnType<typeof scanAndRegister>>;
+      try {
+        result = await Promise.race([scanAndRegister(env), watchdog]);
+      } finally {
+        if (timeoutHandle) { clearTimeout(timeoutHandle); }
+      }
       await logBackendActivity(env, {
         category: 'orchestrator',
         event: 'scan_completed',
@@ -4239,7 +4256,12 @@ export default {
     if (!settings.orchestratorEnabled || !settings.registrationEnabled) {
       return;
     }
-    await startScan(envWithRuntimeSettings(env, settings)).promise;
+    const scan = startScan(envWithRuntimeSettings(env, settings));
+    if (scan.started) {
+      ctx.waitUntil(scan.promise.catch(error => {
+        console.warn('Scheduled registration scan failed', error);
+      }));
+    }
   },
 
   async fetch(request: Request, env: Env, ctx: ExecutionContext) {

@@ -136,6 +136,7 @@ test('registration status and logs expose file-level queue progress', () => {
 
 test('Drive registration I/O is deadline-bound so a scan lease cannot stick forever', () => {
   assert.match(workerSource, /const REGISTRATION_STORAGE_TIMEOUT_MS = 30_000/);
+  assert.match(workerSource, /SCAN_WATCHDOG_TIMEOUT_MS = 120_000/);
   assert.match(workerSource, /DRIVE_COPY_VISIBILITY_ATTEMPTS = 3/);
   assert.match(workerSource, /DRIVE_RETRY_TARGET_VISIBILITY_ATTEMPTS = 3/);
   assert.match(workerSource, /DRIVE_COPY_VISIBILITY_DELAY_MS = 2000/);
@@ -160,6 +161,12 @@ test('Drive registration I/O is deadline-bound so a scan lease cannot stick fore
     workerSource.slice(objectSizeStart, objectSizeEnd),
     /signal: AbortSignal\.timeout\(REGISTRATION_STORAGE_TIMEOUT_MS\)/,
   );
+});
+
+test('a hung scan cannot pin the shared scheduled scan promise forever', () => {
+  assert.match(workerSource, /Promise\.race\(\[scanAndRegister\(env\), watchdog\]\)/);
+  assert.match(workerSource, /Registration scan watchdog exceeded/);
+  assert.match(workerSource, /ctx\.waitUntil\(scan\.promise\.catch/);
 });
 
 test('stalled registration rows are requeued instead of left as permanent errors', () => {
