@@ -9,12 +9,14 @@ export default function MediaListLarge({
   prefetchFirstMediaLinks,
   onLastMediaVisible,
   revalidateMedia,
+  optimizeLongList = false,
 }: {
   photos: Media[]
   animate?: boolean
   prefetchFirstMediaLinks?: boolean
   onLastMediaVisible?: () => void
   revalidateMedia?: RevalidateMedia
+  optimizeLongList?: boolean
 }) {
   return (
     <AnimateItems
@@ -24,6 +26,9 @@ export default function MediaListLarge({
       staggerDelay={0.15}
       distanceOffset={0}
       staggerOnFirstLoadOnly
+      classNameItem={optimizeLongList
+        ? '[content-visibility:auto] [contain-intrinsic-size:900px]'
+        : undefined}
       items={photos.map((photo, index) =>
         <MediaLarge
           key={photo.id}

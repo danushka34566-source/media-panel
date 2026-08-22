@@ -20,6 +20,7 @@ export default function MediaFullPage({
       <MediaListLarge
         photos={photos}
         animate={false}
+        optimizeLongList
       />
       {photosCount > photos.length &&
         <MediaListLargeInfinite

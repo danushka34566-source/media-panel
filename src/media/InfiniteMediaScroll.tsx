@@ -8,7 +8,6 @@ import { getMediaCachedAction, getMediaAction } from '@/media/actions';
 import { Media } from '.';
 import { MediaSetCategory } from '../category';
 import { clsx } from 'clsx/lite';
-import { useAppState } from '@/app/AppState';
 import useVisibility from '@/utility/useVisibility';
 import { SortBy } from './sort';
 import { SWR_KEYS } from '@/swr';
@@ -63,7 +62,6 @@ export default function InfiniteMediaScroll({
     revalidateMedia?: RevalidateMedia
   }) => ReactNode
 } & MediaSetCategory) {
-  const { isUserSignedIn } = useAppState();
   const [hasStartedLoading, setHasStartedLoading] = useState(false);
   
   const { utility } = useAppText();
@@ -119,8 +117,16 @@ export default function InfiniteMediaScroll({
       {
         initialSize: 1,
         revalidateFirstPage: false,
-        revalidateOnFocus: Boolean(isUserSignedIn),
-        revalidateOnReconnect: Boolean(isUserSignedIn),
+        // A long full-page feed may contain hundreds of already-rendered
+        // pages. Revalidating every page on focus/reconnect creates a burst
+        // of server actions when a mobile browser resumes and can take down
+        // the route. New pages are fetched FIFO; an explicit retry handles a
+        // failed page without refetching the whole feed.
+        revalidateOnFocus: false,
+        revalidateOnReconnect: false,
+        shouldRetryOnError: false,
+        dedupingInterval: 30_000,
+        keepPreviousData: true,
       },
     );
 
