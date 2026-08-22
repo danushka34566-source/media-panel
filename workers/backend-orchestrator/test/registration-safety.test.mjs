@@ -235,6 +235,27 @@ test('observability database failures cannot disable scheduled registration', ()
 test('scheduled scans do not share an in-memory promise across cron events', () => {
   assert.match(workerSource, /startScan\([\s\S]*?\{ shareInFlight: false \}/);
   assert.match(workerSource, /if \(shareInFlight && scanInFlight\)/);
+  assert.match(workerSource, /scheduled_scan_dispatch/);
+  assert.match(workerSource, /scheduled_scan_queued/);
+});
+
+test('registration commit keeps media and source map in one SQL statement', () => {
+  assert.match(workerSource, /const commitRegisteredMedia = async/);
+  assert.match(workerSource, /WITH map_upsert AS/);
+  assert.match(workerSource, /media_upsert AS/);
+  assert.match(workerSource, /FROM map_upsert/);
+});
+
+test('source cleanup is bounded and deferred outside the registration claim', () => {
+  assert.match(workerSource, /REGISTERED_SOURCE_CLEANUP_LIMIT = 4/);
+  assert.match(workerSource, /cleanupRegisteredSourceFiles/);
+  assert.match(workerSource, /waitUntil\(cleanup\)/);
+  assert.match(workerSource, /registeredSourceUrls/);
+});
+
+test('tracked destinations require a verified size before commit', () => {
+  assert.doesNotMatch(workerSource, /targetReadableWithoutSize/);
+  assert.match(workerSource, /targetAlreadyRegistered = shouldVerifyExistingTarget &&/);
 });
 
 test('stalled registration rows are requeued instead of left as permanent errors', () => {

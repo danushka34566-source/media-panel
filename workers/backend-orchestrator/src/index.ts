@@ -258,7 +258,7 @@ const GENERATED_MEDIA_SUFFIX_REGEX =
 const STALE_REGISTRATION_ERROR_MESSAGE =
   'Previous registration attempt stalled; queued for retry';
 const MISSING_UPLOAD_ERROR_PREFIX = 'Upload not found in storage';
-const WORKER_BUILD_ID = 'v75';
+const WORKER_BUILD_ID = 'v76';
 // A scheduled Worker must finish promptly. Drive copies can become visible
 // asynchronously, so persist the in-flight state and check again on the next
 // minute instead of polling long enough to lose the registration lease.
@@ -288,6 +288,9 @@ const PROCESSING_SOURCE_RECONCILIATION_LIMIT = 8;
 const PROCESSING_SOURCE_RECONCILIATION_CONCURRENCY = 4;
 const REGISTRATION_READY_CHECK_TIMEOUT_MS = 5_000;
 const REGISTRATION_READY_CHECK_LIMIT = 8;
+// Source cleanup is housekeeping only. Never let a slow Drive delete hold the
+// registration lease or block the next FIFO claim.
+const REGISTERED_SOURCE_CLEANUP_LIMIT = 4;
 // A scheduled invocation can be terminated before finally{} runs. Keep the
 // cross-invocation lease short enough that the next cron can recover it.
 export const SCAN_LEASE_SECONDS = 90;
@@ -2628,15 +2631,24 @@ const clearResolvedRegistrationStatuses = async (env: Env) => {
       WHERE m.url=s.url
         OR (s.source_url IS NOT NULL AND m.url=s.source_url)
     )
-      OR EXISTS (
-        SELECT 1
-        FROM registered_upload_file_map f
-        WHERE (s.media_id IS NOT NULL AND f.media_id=s.media_id)
-          OR f.stored_url=s.url
-          OR (
-            s.source_url IS NOT NULL
-            AND (f.source_url=s.source_url OR f.stored_url=s.source_url)
-          )
+      AND (
+        -- A media row without a tracking map is safe to clear (for example,
+        -- unique names are disabled), but a map alone is not proof that the
+        -- media commit succeeded. Require the map's media row to match before
+        -- clearing a tracked registration or allowing cleanup to proceed.
+        NOT EXISTS (
+          SELECT 1
+          FROM registered_upload_file_map f
+          WHERE s.media_id IS NOT NULL AND f.media_id=s.media_id
+        )
+        OR EXISTS (
+          SELECT 1
+          FROM registered_upload_file_map f
+          JOIN media mapped_media ON mapped_media.id=f.media_id
+          WHERE s.media_id IS NOT NULL
+            AND f.media_id=s.media_id
+            AND mapped_media.url=f.stored_url
+        )
       )
   `;
 };
@@ -3187,6 +3199,47 @@ const releaseScanLease = async (env: Env, leaseToken: string) => {
   `;
 };
 
+const cleanupRegisteredSourceFiles = async (
+  env: Env,
+  fileMaps: Array<{
+    media_id: string
+    stored_url: string
+    source_url: string
+    updated_at: Date | string
+  }>,
+  objectsByKey: Map<string, R2ObjectLike>,
+) => {
+  let cleaned = 0;
+  for (const fileMap of fileMaps.slice(0, REGISTERED_SOURCE_CLEANUP_LIMIT)) {
+    const sourceKey = keyFromStorageUrl(env, fileMap.source_url);
+    const storedKey = keyFromStorageUrl(env, fileMap.stored_url);
+    if (!sourceKey || !storedKey || sourceKey === storedKey) continue;
+    const sourceObject = objectsByKey.get(sourceKey);
+    const storedObject = objectsByKey.get(storedKey);
+    if (
+      !sourceObject ||
+      !storedObject ||
+      !isDeferredSourceCleanupSafe(
+        sourceObject.uploaded,
+        parseDateValue(fileMap.updated_at),
+      ) ||
+      !isVerifiedStorageCopy(sourceObject.size, storedObject.size)
+    ) continue;
+    try {
+      await deleteObject(env, sourceKey);
+      cleaned += 1;
+    } catch (error) {
+      console.warn('Deferred registered source cleanup failed', {
+        mediaId: fileMap.media_id,
+        sourceKey,
+        storedKey,
+        error,
+      });
+    }
+  }
+  return cleaned;
+};
+
 const startScanLeaseHeartbeat = (env: Env, leaseToken: string) => {
   let stopped = false;
   let heartbeatInFlight: Promise<unknown> | undefined;
@@ -3347,6 +3400,125 @@ const upsertMediaRow = async (
   `;
 };
 
+// The map and media row are the same registration commit. Keep them in one
+// SQL statement so a dropped connection cannot leave a map-only orphan that
+// later looks safe to clean up.
+const commitRegisteredMedia = async (
+  env: Env,
+  {
+    id,
+    url,
+    extension,
+    mediaType,
+    title,
+    transcodeStatus,
+    transcodeError,
+    aspectRatio,
+    takenAt,
+    takenAtNaive,
+    originalFileName,
+    storedFileName,
+    sourceUrl,
+  }: {
+    id: string
+    url: string
+    extension: string
+    mediaType: 'video' | 'photo'
+    title?: string
+    transcodeStatus?: string
+    transcodeError?: string
+    aspectRatio?: number
+    takenAt: string
+    takenAtNaive: string
+    originalFileName: string
+    storedFileName: string
+    sourceUrl: string
+  },
+) => {
+  await ensureRegisteredUploadFileMapTable(env);
+  const sql = sqlForEnv(env);
+  await sql`
+    WITH map_upsert AS (
+      INSERT INTO registered_upload_file_map (
+        media_id,
+        original_file_name,
+        stored_file_name,
+        stored_url,
+        source_url
+      ) VALUES (
+        ${id},
+        ${originalFileName},
+        ${storedFileName},
+        ${url},
+        ${sourceUrl}
+      )
+      ON CONFLICT (media_id) DO UPDATE SET
+        original_file_name=EXCLUDED.original_file_name,
+        stored_file_name=EXCLUDED.stored_file_name,
+        stored_url=EXCLUDED.stored_url,
+        source_url=CASE
+          WHEN registered_upload_file_map.source_url<>
+            registered_upload_file_map.stored_url
+            THEN registered_upload_file_map.source_url
+          ELSE EXCLUDED.source_url
+        END,
+        updated_at=now()
+      RETURNING media_id
+    ),
+    media_upsert AS (
+      INSERT INTO media (
+        id,
+        url,
+        extension,
+        media_type,
+        title,
+        tags,
+        transcode_status,
+        transcode_error,
+        aspect_ratio,
+        exclude_from_feeds,
+        hidden,
+        taken_at,
+        taken_at_naive
+      )
+      SELECT
+        ${id},
+        ${url},
+        ${extension},
+        ${mediaType},
+        ${title ?? null},
+        ${[]},
+        ${transcodeStatus ?? null},
+        ${transcodeError ?? null},
+        ${aspectRatio ?? (mediaType === 'video' ? 16 / 9 : 1.5)},
+        ${false},
+        ${false},
+        ${takenAt},
+        ${takenAtNaive}
+      FROM map_upsert
+      ON CONFLICT (id) DO UPDATE SET
+        url=EXCLUDED.url,
+        extension=EXCLUDED.extension,
+        media_type=EXCLUDED.media_type,
+        title=CASE
+          WHEN NULLIF(media.title, '') IS NOT NULL
+            AND media.title !~ '^[0-9]{12}(?:[-_].*)?$'
+            THEN media.title
+          ELSE EXCLUDED.title
+        END,
+        transcode_status=EXCLUDED.transcode_status,
+        transcode_error=EXCLUDED.transcode_error,
+        aspect_ratio=EXCLUDED.aspect_ratio,
+        updated_at=now()
+      RETURNING id
+    )
+    SELECT id FROM media_upsert
+  `;
+  // URL cleanup is deliberately after the atomic commit. If this maintenance
+  // query fails, the committed source remains protected and can be retried.
+  await sql`DELETE FROM media WHERE url=${url} AND id<>${id}`;
+};
+
 const scanAndRegisterWithLease = async (
   env: Env,
   leaseToken: string,
@@ -3429,6 +3601,13 @@ const scanAndRegisterWithLease = async (
   const inventoryCursor = await getRegistrationScanCursor(env);
   const listedObjectsPagePromise = listStoragePage(env, inventoryCursor);
   let inventoryCursorPersisted = false;
+  let deferredFileMaps: Array<{
+    media_id: string
+    stored_url: string
+    source_url: string
+    updated_at: Date | string
+  }> = [];
+  let deferredObjectsByKey = new Map<string, R2ObjectLike>();
 
   for (let pass = 0; pass < maxRegisterPasses; pass += 1) {
     // Do not fan out direct Postgres connections here.  A large backlog used
@@ -3440,6 +3619,7 @@ const scanAndRegisterWithLease = async (
     const hintRows = await getPendingUploadRegistrationHints(env);
     const registrationRows = await getRegistrationStatusRows(env);
     const registeredFileMaps = await getRegisteredUploadFileMapRows(env);
+    deferredFileMaps = registeredFileMaps;
     const queuedDeletionPrefixes = await getQueuedDeletionPrefixes(env);
     const storagePage = await listedObjectsPagePromise;
     const listedObjects = storagePage.objects.filter(object =>
@@ -3448,6 +3628,7 @@ const scanAndRegisterWithLease = async (
     const objectsByKey = new Map(
       listedObjects.map(object => [object.key, object]),
     );
+    deferredObjectsByKey = objectsByKey;
     // The status table is the durable FIFO queue. Rehydrate queued source
     // objects that are outside this inventory page without listing the whole
     // bucket again; their size is fetched only if they are actually claimed.
@@ -3482,36 +3663,12 @@ const scanAndRegisterWithLease = async (
         );
       }
     }
-    const safelyCleanedSourceKeys = new Set<string>();
-    for (const fileMap of registeredFileMaps) {
-      const sourceKey = keyFromStorageUrl(env, fileMap.source_url);
-      const storedKey = keyFromStorageUrl(env, fileMap.stored_url);
-      if (!sourceKey || !storedKey || sourceKey === storedKey) { continue; }
-      const sourceObject = objectsByKey.get(sourceKey);
-      const storedObject = objectsByKey.get(storedKey);
-      if (
-        !sourceObject ||
-        !storedObject ||
-        !isDeferredSourceCleanupSafe(
-          sourceObject.uploaded,
-          parseDateValue(fileMap.updated_at),
-        ) ||
-        !isVerifiedStorageCopy(sourceObject.size, storedObject.size)
-      ) {
-        continue;
-      }
-      try {
-        await deleteObject(env, sourceKey);
-        safelyCleanedSourceKeys.add(sourceKey);
-      } catch (error) {
-        console.warn('Deferred registered source cleanup failed', {
-          mediaId: fileMap.media_id,
-          sourceKey,
-          storedKey,
-          error,
-        });
-      }
-    }
+    // Source deletion is housekeeping, not part of the registration lease.
+    // Keep these source URLs protected from re-registration while cleanup is
+    // deferred to a small, bounded waitUntil task below.
+    const registeredSourceUrls = new Set(
+      registeredFileMaps.map(fileMap => fileMap.source_url),
+    );
     const registrationRowsByUrl = await buildRegistrationStatusLookup(
       env,
       registrationRows,
@@ -3543,12 +3700,13 @@ const scanAndRegisterWithLease = async (
     });
 
     const pending = objects.filter(object => {
-      if (safelyCleanedSourceKeys.has(object.key)) { return false; }
       const { fileNameBase, extension } = getFileParts(object.key);
       if (!MEDIA_EXTENSIONS.has(extension)) { return false; }
       if (GENERATED_MEDIA_SUFFIX_REGEX.test(fileNameBase)) { return false; }
       const objectUrl = urlForKey(env, object.key);
-      if (knownUrls.has(objectUrl)) { return false; }
+      if (knownUrls.has(objectUrl) || registeredSourceUrls.has(objectUrl)) {
+        return false;
+      }
       // A failed or not-yet-visible copy may already exist under the generated
       // name. While its original source still exists, only retry the source;
       // never register that generated destination as a second upload.
@@ -3835,16 +3993,8 @@ const scanAndRegisterWithLease = async (
                 : 0,
             })
           : undefined;
-        const targetReadableWithoutSize =
-          shouldVerifyExistingTarget &&
-          recordedTargetSize === undefined
-          ? await storageObjectExists(env, registrationKey).catch(() => false)
-          : false;
         const targetAlreadyRegistered = shouldVerifyExistingTarget &&
-          (
-            isVerifiedStorageCopy(sourceSize, recordedTargetSize) ||
-            targetReadableWithoutSize
-          );
+          isVerifiedStorageCopy(sourceSize, recordedTargetSize);
         if (shouldWaitForTrackedRegistrationDestination({
           shouldVerifyExistingTarget,
           registrationStatus: existingRegistration?.status,
@@ -3907,20 +4057,10 @@ const scanAndRegisterWithLease = async (
           },
           commitRegistration: async () => {
             registrationPhase = 'committing';
-            // Persist the source-to-destination identity first. If the
-            // database connection drops afterward, the next scan can reuse
-            // this media ID instead of creating a second media row.
-            await upsertRegisteredUploadFileMap(env, {
-              mediaId,
-              originalFileName,
-              storedFileName: registeredFileName,
-              storedUrl: registrationUrl,
-              sourceUrl,
-            });
             if (shouldUpsertMediaRow) {
               const mediaType = VIDEO_EXTENSIONS.has(extension) ? 'video' : 'photo';
               const uploadedAt = object.uploaded?.toISOString() || new Date().toISOString();
-              await upsertMediaRow(env, {
+              await commitRegisteredMedia(env, {
                 id: mediaId,
                 url: registrationUrl,
                 extension,
@@ -3933,6 +4073,17 @@ const scanAndRegisterWithLease = async (
                 aspectRatio: mediaType === 'video' ? 16 / 9 : 1.5,
                 takenAt: uploadedAt,
                 takenAtNaive: toNaivePostgresString(uploadedAt),
+                originalFileName,
+                storedFileName: registeredFileName,
+                sourceUrl,
+              });
+            } else {
+              await upsertRegisteredUploadFileMap(env, {
+                mediaId,
+                originalFileName,
+                storedFileName: registeredFileName,
+                storedUrl: registrationUrl,
+                sourceUrl,
               });
             }
           },
@@ -4071,6 +4222,21 @@ const scanAndRegisterWithLease = async (
 
     registrationRemaining = Math.max(pendingUploads.length - batch.length, 0);
     if (batch.length === 0) { break; }
+  }
+
+  if (deferredFileMaps.length > 0) {
+    const cleanup = cleanupRegisteredSourceFiles(
+      env,
+      deferredFileMaps,
+      deferredObjectsByKey,
+    ).catch(error => {
+      console.warn('Deferred source cleanup task failed', error);
+    });
+    if (waitUntil) {
+      waitUntil(cleanup);
+    } else {
+      void cleanup;
+    }
   }
 
   return {
@@ -4987,6 +5153,20 @@ export default {
       console.warn('Unable to log scheduled registration trigger', error);
     }));
     const settings = await getRuntimeProcessingSettingsForTrigger(env);
+    ctx.waitUntil(logBackendActivity(env, {
+      category: 'orchestrator',
+      event: 'scheduled_scan_dispatch',
+      status: 'info',
+      message: 'Scheduled registration dispatch evaluated',
+      details: {
+        orchestratorEnabled: settings.orchestratorEnabled,
+        registrationEnabled: settings.registrationEnabled,
+        registerBatchSize: settings.registerBatchSize,
+        maxRegisterPasses: settings.maxRegisterPasses,
+      },
+    }).catch(error => {
+      console.warn('Unable to log scheduled scan dispatch', error);
+    }));
     // Cleanup is independent of registration. It can hit a slow database or
     // storage operation, so it must never hold the scheduled registration
     // path hostage. Keep it alive separately and start the FIFO scan now.
@@ -5000,6 +5180,14 @@ export default {
       }));
     }
     if (!settings.orchestratorEnabled || !settings.registrationEnabled) {
+      ctx.waitUntil(logBackendActivity(env, {
+        category: 'orchestrator',
+        event: 'scheduled_scan_skipped',
+        status: 'warning',
+        message: 'Scheduled registration skipped because it is disabled',
+      }).catch(error => {
+        console.warn('Unable to log scheduled scan skip', error);
+      }));
       return;
     }
     const scan = startScan(
@@ -5009,6 +5197,17 @@ export default {
         waitUntil: promise => ctx.waitUntil(promise),
       },
     );
+    ctx.waitUntil(logBackendActivity(env, {
+      category: 'orchestrator',
+      event: 'scheduled_scan_queued',
+      status: 'info',
+      message: scan.started
+        ? 'Scheduled registration scan queued'
+        : 'Scheduled registration scan joined an existing run',
+      details: { scanStarted: scan.started },
+    }).catch(error => {
+      console.warn('Unable to log scheduled scan queue state', error);
+    }));
     if (scan.started) {
       ctx.waitUntil(scan.promise.catch(error => {
         console.warn('Scheduled registration scan failed', error);
