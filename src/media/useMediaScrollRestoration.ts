@@ -46,8 +46,15 @@ const writePosition = (key: string, position: SavedScrollPosition) => {
   }
 };
 
-const saveCurrentScrollPosition = (key: string) => writePosition(key, {
+const saveCurrentScrollPosition = (
+  key: string,
+  previous?: SavedScrollPosition,
+) => writePosition(key, {
   top: Math.max(0, Math.round(window.scrollY)),
+  ...(previous?.anchorId && { anchorId: previous.anchorId }),
+  ...(previous?.anchorOffset !== undefined && {
+    anchorOffset: previous.anchorOffset,
+  }),
 });
 
 export const rememberMediaScrollPosition = (
@@ -149,7 +156,17 @@ export default function useMediaScrollRestoration(enabled = true) {
       }
       if (!restoring) { saveCurrentScrollPosition(key); }
     };
-    const onPageHide = () => saveCurrentScrollPosition(key);
+    const onPageHide = () => {
+      // A media click records the precise anchor immediately before the
+      // route starts unloading. Do not overwrite that richer record with a
+      // pagehide callback that still has the previous hook snapshot.
+      let latest: SavedScrollPosition | undefined;
+      try {
+        latest = parseSavedPosition(window.sessionStorage.getItem(key));
+      } catch { /* continue with the in-memory position */ }
+      if (latest?.anchorId) { return; }
+      saveCurrentScrollPosition(key, saved);
+    };
 
     const timeoutTimer = window.setTimeout(stopRestoring, RESTORE_TIMEOUT_MS);
     window.addEventListener('scroll', onScroll, { passive: true });
