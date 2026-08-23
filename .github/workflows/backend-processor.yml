@@ -21,8 +21,12 @@ on:
         required: false
         default: '55'
 
+# Do not put every workflow_dispatch run in one shared concurrency group. Each
+# processor process has its own generated identity and claims jobs atomically,
+# so independent dispatches must be allowed to run in parallel. GitHub still
+# applies the repository/account runner-concurrency quota.
 concurrency:
-  group: backend-processor-${{ github.event_name }}
+  group: backend-processor-${{ github.run_id }}
   cancel-in-progress: false
 
 jobs:
