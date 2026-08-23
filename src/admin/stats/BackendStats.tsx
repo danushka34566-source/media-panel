@@ -163,18 +163,24 @@ export default function BackendStats() {
   const queuedRegistrationJobs = registrationJobs.filter(
     job => job.status !== 'registering',
   );
-  const registrationPreviewJobs = activeRegistrationJobs.length > 0
+  const registrationPreviewJobs = activeRegistrationJobs.length >= 3
     ? activeRegistrationJobs
-    : queuedRegistrationJobs.slice(0, 3);
+    : [
+      ...activeRegistrationJobs,
+      ...queuedRegistrationJobs.slice(0, Math.max(3 - activeRegistrationJobs.length, 0)),
+    ];
   const activeProcessingJobs = jobs.filter(
     job => job.transcode_status === 'processing',
   );
   const queuedProcessingJobs = jobs.filter(
     job => job.transcode_status !== 'processing',
   );
-  const processingPreviewJobs = activeProcessingJobs.length > 0
+  const processingPreviewJobs = activeProcessingJobs.length >= 3
     ? activeProcessingJobs
-    : queuedProcessingJobs.slice(0, 3);
+    : [
+      ...activeProcessingJobs,
+      ...queuedProcessingJobs.slice(0, Math.max(3 - activeProcessingJobs.length, 0)),
+    ];
   const hasRegistrationQueue = Boolean(
     registrationJobs.length || registrationQueue.total,
   );
