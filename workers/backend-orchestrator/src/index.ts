@@ -258,7 +258,7 @@ const GENERATED_MEDIA_SUFFIX_REGEX =
 const STALE_REGISTRATION_ERROR_MESSAGE =
   'Previous registration attempt stalled; queued for retry';
 const MISSING_UPLOAD_ERROR_PREFIX = 'Upload not found in storage';
-const WORKER_BUILD_ID = 'v87';
+const WORKER_BUILD_ID = 'v88';
 // A scheduled Worker must finish promptly. Drive copies can become visible
 // asynchronously, so persist the in-flight state and check again on the next
 // minute instead of polling long enough to lose the registration lease.
@@ -5260,7 +5260,7 @@ const keepScheduledScanBounded = (
     watchdog,
   ]).then(outcome => {
     if (!outcome.timedOut) { return; }
-    return logBackendActivity(env, {
+    const breakerLog = logBackendActivity(env, {
       category: 'orchestrator',
       event: 'scheduled_scan_circuit_breaker',
       status: 'warning',
@@ -5269,6 +5269,9 @@ const keepScheduledScanBounded = (
     }).catch(error => {
       console.warn('Unable to log scheduled scan circuit breaker', error);
     });
+    // Observability must not hold the circuit breaker open. Keep the log
+    // attempt alive only briefly, then let the scheduled invocation finish.
+    ctx.waitUntil(Promise.race([breakerLog, sleep(1_000)]));
   }).catch(error => {
     console.warn('Scheduled registration scan failed', error);
   }).finally(() => {
