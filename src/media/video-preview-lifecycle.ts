@@ -39,7 +39,7 @@ let activePreviewUpdateFrame: number | undefined;
 let isFullVideoPlaybackActive = false;
 // Mount the real card video shortly before it enters the viewport. Reusing the
 // same element avoids a second request/decoder startup when it becomes visible.
-const PREVIEW_PRELOAD_AHEAD_PX = 1200;
+const PREVIEW_PRELOAD_AHEAD_PX = 2400;
 const MAX_WARM_DESKTOP_PREVIEWS = 6;
 const MAX_WARM_MOBILE_PREVIEWS = 2;
 

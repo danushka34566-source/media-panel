@@ -33,6 +33,14 @@ export default async function AdminAppConfigurationServer({
   return (
     <AdminAppConfigurationClient {...{
       ...APP_CONFIGURATION,
+      isStaticallyOptimized: Object.values(applicationSettings).some(Boolean),
+      areMediaStaticallyOptimized: applicationSettings.staticMediaPages,
+      areMediaOGImagesStaticallyOptimized:
+        applicationSettings.staticMediaOgImages,
+      areMediaCategoriesStaticallyOptimized:
+        applicationSettings.staticMediaCategories,
+      areMediaCategoryOgImagesStaticallyOptimized:
+        applicationSettings.staticMediaCategoryOgImages,
       ...connectionErrors,
       secret,
       processingSettings,

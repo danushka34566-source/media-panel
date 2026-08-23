@@ -10,6 +10,7 @@ import { clsx } from 'clsx/lite';
 import LinkWithStatus from '@/components/LinkWithStatus';
 import Spinner from '@/components/Spinner';
 import LinkWithLoaderBackground from '@/components/LinkWithLoaderBackground';
+import { rememberMediaScrollPosition } from './useMediaScrollRestoration';
 
 export default function MediaLink({
   ref,
@@ -41,6 +42,7 @@ export default function MediaLink({
         className,
         href: pathForMedia({ photo, ...categories }),
         onClick: () => {
+          rememberMediaScrollPosition();
           if (nextMediaAnimation) {
             setNextMediaAnimation?.(nextMediaAnimation);
           }

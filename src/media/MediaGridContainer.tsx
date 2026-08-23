@@ -8,6 +8,7 @@ import AnimateItems from '@/components/AnimateItems';
 import { ComponentProps, useCallback, useState, ReactNode } from 'react';
 import { GRID_SPACE_CLASSNAME } from '@/components';
 import { SortBy } from './sort';
+import useMediaScrollRestoration from './useMediaScrollRestoration';
 
 export default function MediaGridContainer({
   cacheKey,
@@ -33,6 +34,7 @@ export default function MediaGridContainer({
   sidebar?: ReactNode
   className?: string
 } & ComponentProps<typeof MediaGrid>) {
+  useMediaScrollRestoration();
   const [
     shouldAnimateDynamicItems,
     setShouldAnimateDynamicItems,

@@ -21,14 +21,16 @@ export const saveApplicationSettingsAction = async (
   runAuthenticatedAdminServerAction(async () => {
     try {
       const settings: Partial<ApplicationSettings> = {
-        publicPageBuildOptimizations: formData.has(
-          'publicPageBuildOptimizations',
+        staticMediaPages: formData.has('staticMediaPages'),
+        staticMediaOgImages: formData.has('staticMediaOgImages'),
+        staticMediaCategories: formData.has('staticMediaCategories'),
+        staticMediaCategoryOgImages: formData.has(
+          'staticMediaCategoryOgImages',
         ),
       };
       await saveApplicationSettings(settings);
-      // Existing ISR entries should reflect the preference immediately. A
-      // production build will additionally pre-render every public item when
-      // the option is enabled at build time.
+      // Existing ISR entries should reflect the preference immediately. The
+      // selected page types are picked up by the next production build.
       revalidateAllKeysAndPaths();
       revalidatePath(PATH_ADMIN_CONFIGURATION);
       return { saved: true };
@@ -36,7 +38,7 @@ export const saveApplicationSettingsAction = async (
       return {
         error: error instanceof Error
           ? error.message
-          : 'Unable to save public page settings',
+          : 'Unable to save static optimization settings',
       };
     }
   }, 'manage-configuration');

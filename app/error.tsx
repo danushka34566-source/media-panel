@@ -1,6 +1,7 @@
 'use client';
 
 import HttpStatusPage from '@/components/HttpStatusPage';
+import { useRouter } from 'next/navigation';
 import { useEffect, useRef } from 'react';
 
 const isStaleClientError = (error: Error) =>
@@ -15,15 +16,17 @@ export default function Error({
   reset: () => void
 }) {
   const recoveredRef = useRef(false);
+  const router = useRouter();
 
   useEffect(() => {
     if (recoveredRef.current || !isStaleClientError(error)) { return; }
     recoveredRef.current = true;
-    // A tab resumed after a deployment can hold old route chunks. A document
-    // reload obtains one consistent build instead of leaving the user at a
-    // dead error screen. Only do this once; real errors remain retryable.
-    window.location.reload();
-  }, [error]);
+    // Refresh the App Router tree in place. A document reload loses the
+    // user's scroll position and made transient RSC/chunk errors look like a
+    // grid refresh loop. The explicit Reload button remains available when a
+    // deployment really requires a new document.
+    router.refresh();
+  }, [error, router]);
 
   return (
     <HttpStatusPage status={500}>

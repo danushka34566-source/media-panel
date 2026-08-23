@@ -8,7 +8,7 @@ import AnimateItems from '@/components/AnimateItems';
 import { GRID_ASPECT_RATIO } from '@/app/config';
 import { useAppState } from '@/app/AppState';
 import SelectTileOverlay from '@/components/SelectTileOverlay';
-import { ReactNode, useEffect, useState } from 'react';
+import { ReactNode, useEffect, useRef, useState } from 'react';
 import { GRID_GAP_CLASSNAME } from '@/components';
 import { useSelectMediaState } from '@/admin/select/SelectMediaState';
 import { DATA_KEY_MEDIA_GRID } from '@/admin/select/SelectMediaProvider';
@@ -85,6 +85,9 @@ export default function MediaGrid({
   } = useAppState();
   const [smartPreviewIds, setSmartPreviewIds] = useState<Set<string>>(new Set());
   const [isMainVideoPlaying, setIsMainVideoPlaying] = useState(false);
+  const smartActivationFrameRef = useRef<number | undefined>(undefined);
+  const pendingSmartCardIdRef = useRef<string | undefined>(undefined);
+  const activeSmartCardIdRef = useRef<string | undefined>(undefined);
   useEffect(() => {
     if (!suspendSmartPreviewsOnMainPlayback) { return; }
     const syncMainVideoPlayback = (event: Event) => {
@@ -138,20 +141,33 @@ export default function MediaGrid({
     }
     const card = (target as HTMLElement | null)?.closest<HTMLElement>('[data-preview-id]');
     if (!card || !grid.contains(card)) { return; }
-    const cards = Array.from(document.querySelectorAll<HTMLElement>(
-      '[data-media-smart-preview-card]',
-    ));
-    // Framer Motion transforms each wrapper during entrance animations, so
-    // viewport coordinates can temporarily split one visual row. offsetTop on
-    // the direct grid child is stable because transforms do not affect layout.
-    const activeIds = [...getSmartPreviewIds(cards.flatMap(item => {
-      const id = item.dataset.previewId;
-      return id ? [{ id, layoutTop: getDocumentLayoutTop(item) }] : [];
-    }), card.dataset.previewId!, !supportsHover)];
-    window.dispatchEvent(new CustomEvent<SmartPreviewActivationDetail>(
-      SMART_PREVIEW_ACTIVATION_EVENT,
-      { detail: { activeIds } },
-    ));
+    const cardId = card.dataset.previewId;
+    if (!cardId || activeSmartCardIdRef.current === cardId) { return; }
+    pendingSmartCardIdRef.current = cardId;
+    if (smartActivationFrameRef.current !== undefined) { return; }
+    smartActivationFrameRef.current = requestAnimationFrame(() => {
+      smartActivationFrameRef.current = undefined;
+      const activeId = pendingSmartCardIdRef.current;
+      pendingSmartCardIdRef.current = undefined;
+      if (!activeId || activeSmartCardIdRef.current === activeId) { return; }
+      activeSmartCardIdRef.current = activeId;
+      const cards = Array.from(grid.querySelectorAll<HTMLElement>(
+        '[data-media-smart-preview-card]',
+      ));
+      // Framer Motion transforms each wrapper during entrance animations, so
+      // viewport coordinates can temporarily split one visual row. offsetTop
+      // on the direct grid child is stable because transforms do not affect
+      // layout. Scope the scan to this grid to avoid remeasuring every loaded
+      // infinite-scroll page on each touch move.
+      const activeIds = [...getSmartPreviewIds(cards.flatMap(item => {
+        const id = item.dataset.previewId;
+        return id ? [{ id, layoutTop: getDocumentLayoutTop(item) }] : [];
+      }), activeId, !supportsHover)];
+      window.dispatchEvent(new CustomEvent<SmartPreviewActivationDetail>(
+        SMART_PREVIEW_ACTIVATION_EVENT,
+        { detail: { activeIds } },
+      ));
+    });
   };
 
   const {
@@ -159,6 +175,9 @@ export default function MediaGrid({
     selectedMediaIds,
     setSelectedMediaIds,
   } = useSelectMediaState();
+  // Animate the first visible batch only. Replaying a 48-card entrance on
+  // every infinite-scroll append is a major source of scroll jank.
+  const animateFirstLoadOnly = animateOnFirstLoadOnly ?? true;
 
   return (
     <div
@@ -182,6 +201,12 @@ export default function MediaGrid({
         )}
         onPointerLeave={event => {
           if (supportsHover && event.pointerType === 'mouse') {
+            activeSmartCardIdRef.current = undefined;
+            pendingSmartCardIdRef.current = undefined;
+            if (smartActivationFrameRef.current !== undefined) {
+              cancelAnimationFrame(smartActivationFrameRef.current);
+              smartActivationFrameRef.current = undefined;
+            }
             window.dispatchEvent(new CustomEvent<SmartPreviewActivationDetail>(
               SMART_PREVIEW_ACTIVATION_EVENT,
               { detail: { activeIds: [] } },
@@ -202,10 +227,10 @@ export default function MediaGrid({
         )}
         type={animate === false ? 'none' : undefined}
         canStart={canStart}
-        duration={0.7}
-        staggerDelay={0.04}
+        duration={0.45}
+        staggerDelay={0.015}
         distanceOffset={40}
-        animateOnFirstLoadOnly={animateOnFirstLoadOnly}
+        animateOnFirstLoadOnly={animateFirstLoadOnly}
         staggerOnFirstLoadOnly={staggerOnFirstLoadOnly}
         onAnimationComplete={onAnimationComplete}
         items={photos.map((photo, index) => {

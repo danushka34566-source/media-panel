@@ -196,13 +196,14 @@ Google's callback URL is `https://YOUR_DOMAIN/api/auth/callback/google`.
 
 ### Media, sorting, display, and diagnostics
 
-In **Admin → Configuration → Performance**, enable **Prebuild public pages**
-to generate every public media and category page during the next production
-build. It is disabled by default. When prebuilding is disabled, public pages
-are generated
-on first visit and served through the normal revalidation/cache paths. Saving
-the setting revalidates existing public cache entries immediately; the full
-prebuild takes effect on the next build.
+In **Admin → Configuration → Performance**, use the four **Static
+optimization** switches to choose which public artifacts are generated during
+the next production build: media pages, media social images, category pages,
+and category social images. Disabled types are generated on first visit and
+served through the normal revalidation/cache paths. The setting is stored in
+the project database, so no environment-variable edit is required. The
+matching `NEXT_PUBLIC_STATICALLY_*` variables remain supported as defaults for
+existing deployments until an administrator saves the panel settings.
 
 These remaining supported variables are also available in `.env.example`:
 

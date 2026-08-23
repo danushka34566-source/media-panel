@@ -15,9 +15,10 @@ export const maxDuration = 60;
 
 const getFeedMediaCached = cache((sortOptions: ReturnType<typeof getFeedQueryOptions>) =>
   getMediaCached(sortOptions));
+const getEffectiveMediaSortOptionsCached = cache(getEffectiveMediaSortOptions);
 
 export async function generateMetadata(): Promise<Metadata> {
-  const sortOptions = await getEffectiveMediaSortOptions();
+  const sortOptions = await getEffectiveMediaSortOptionsCached();
   const photos = await getFeedMediaCached(getFeedQueryOptions({
     isGrid: true,
     ...sortOptions,
@@ -27,7 +28,7 @@ export async function generateMetadata(): Promise<Metadata> {
 }
 
 export default async function GridPage() {
-  const sortOptions = await getEffectiveMediaSortOptions();
+  const sortOptions = await getEffectiveMediaSortOptionsCached();
   // Resolve the account preference before rendering any grid markup. The
   // client used to render the default URL first and redirect a few moments
   // later, causing a visible order flash and a second data load.

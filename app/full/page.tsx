@@ -14,9 +14,10 @@ export const maxDuration = 60;
 
 const getFeedMediaCached = cache((sortOptions: ReturnType<typeof getFeedQueryOptions>) =>
   getMediaCached(sortOptions));
+const getEffectiveMediaSortOptionsCached = cache(getEffectiveMediaSortOptions);
 
 export async function generateMetadata(): Promise<Metadata> {
-  const sortOptions = await getEffectiveMediaSortOptions();
+  const sortOptions = await getEffectiveMediaSortOptionsCached();
   const photos = await getFeedMediaCached(getFeedQueryOptions({
     isGrid: false,
     ...sortOptions,
@@ -26,7 +27,7 @@ export async function generateMetadata(): Promise<Metadata> {
 }
 
 export default async function FullPage() {
-  const sortOptions = await getEffectiveMediaSortOptions();
+  const sortOptions = await getEffectiveMediaSortOptionsCached();
   if (sortOptions.sortBy !== USER_DEFAULT_SORT_BY) {
     redirect(getPathForSortBy('/full', sortOptions.sortBy));
   }

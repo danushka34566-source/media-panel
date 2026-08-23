@@ -44,7 +44,7 @@ import {
   ProcessingSettings,
 } from '@/processing/settings-schema';
 import SiteAccessConfigurationForm from './SiteAccessConfigurationForm';
-import PublicPageOptimizationForm from './PublicPageOptimizationForm';
+import StaticOptimizationForm from './StaticOptimizationForm';
 import {
   SITE_ACCESS_SETTINGS_DEFAULTS,
   type SiteAccessSettings,
@@ -177,7 +177,10 @@ export default function AdminAppConfigurationClient({
       usingEnvironmentFallback: boolean
     }
     applicationSettings?: {
-      publicPageBuildOptimizations: boolean
+      staticMediaPages: boolean
+      staticMediaOgImages: boolean
+      staticMediaCategories: boolean
+      staticMediaCategoryOgImages: boolean
     }
     siteAccessSettings?: SiteAccessSettings
   }) {
@@ -650,45 +653,32 @@ export default function AdminAppConfigurationClient({
       case 'Performance':
         return <>
           <ChecklistRow
-            title="Public page build"
-            status={applicationSettings?.publicPageBuildOptimizations ?? false}
-            optional
-          >
-            Choose whether public pages are prebuilt for every media item or
-            generated on demand with revalidation. Configure the preference
-            here; enabling it takes effect on the next production build.
-            <div className="mt-3">
-              <PublicPageOptimizationForm
-                enabled={applicationSettings?.publicPageBuildOptimizations ?? false}
-              />
-            </div>
-          </ChecklistRow>
-          <ChecklistRow
             title="Static optimization"
             status={isStaticallyOptimized}
             optional
           >
-            Set environment variable to {'"1"'} to make site more responsive
-            by enabling static optimization
-            (i.e., rendering pages and images at build time):
-            <div>
-              {renderSubStatusWithEnvVar(
-                areMediaStaticallyOptimized ? 'checked' : 'optional',
-                'NEXT_PUBLIC_STATICALLY_OPTIMIZE_MEDIA',
-              )}
-              {renderSubStatusWithEnvVar(
-                areMediaOGImagesStaticallyOptimized ? 'checked' : 'optional',
-                'NEXT_PUBLIC_STATICALLY_OPTIMIZE_MEDIA_OG_IMAGES',
-              )}
-              {renderSubStatusWithEnvVar(
-                areMediaCategoriesStaticallyOptimized ? 'checked' : 'optional',
-                'NEXT_PUBLIC_STATICALLY_OPTIMIZE_MEDIA_CATEGORIES',
-              )}
-              {renderSubStatusWithEnvVar(
-              // eslint-disable-next-line max-len
-                areMediaCategoryOgImagesStaticallyOptimized ? 'checked' : 'optional',
-                'NEXT_PUBLIC_STATICALLY_OPTIMIZE_MEDIA_CATEGORY_OG_IMAGES',
-              )}
+            <p>
+              Choose the public page and social-image types that should be
+              generated at build time. Disabled types are generated on demand
+              and revalidated normally.
+            </p>
+            <div className="mt-4">
+              <StaticOptimizationForm
+                key={Object.values(applicationSettings ?? {
+                  staticMediaPages: areMediaStaticallyOptimized,
+                  staticMediaOgImages: areMediaOGImagesStaticallyOptimized,
+                  staticMediaCategories: areMediaCategoriesStaticallyOptimized,
+                  staticMediaCategoryOgImages:
+                    areMediaCategoryOgImagesStaticallyOptimized,
+                }).join('-')}
+                settings={applicationSettings ?? {
+                  staticMediaPages: areMediaStaticallyOptimized,
+                  staticMediaOgImages: areMediaOGImagesStaticallyOptimized,
+                  staticMediaCategories: areMediaCategoriesStaticallyOptimized,
+                  staticMediaCategoryOgImages:
+                    areMediaCategoryOgImagesStaticallyOptimized,
+                }}
+              />
             </div>
           </ChecklistRow>
           <ChecklistRow

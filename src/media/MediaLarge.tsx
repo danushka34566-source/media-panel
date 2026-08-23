@@ -260,6 +260,7 @@ export default function MediaLarge({
   const [isVideoZoomOpen, setIsVideoZoomOpen] = useState(false);
   const videoRef = useRef<HTMLVideoElement>(null);
   const { videoPreviewMode = 'smart' } = useAppState();
+  const [isPageResuming, setIsPageResuming] = useState(false);
   const [isFullVideoPlaying, setIsFullVideoPlaying] = useState(false);
   const [isPreparingFullVideo, setIsPreparingFullVideo] = useState(false);
   const [fullVideoDeliveryUrl, setFullVideoDeliveryUrl] = useState<string>();
@@ -334,6 +335,15 @@ export default function MediaLarge({
     setReadyPreviewActivationId(undefined);
     setShouldUseCompatibilityPlayback(false);
   }, [photo.id]);
+
+  // Warm the adjacent route payloads while the current media is visible. The
+  // browser can then apply the directional transition immediately instead of
+  // waiting for the next server component response after a click or swipe.
+  useEffect(() => {
+    [swipePreviousPath, swipeNextPath].forEach(path => {
+      if (path) { router.prefetch(path); }
+    });
+  }, [router, swipeNextPath, swipePreviousPath]);
 
   useEffect(() => {
     if (!shouldSuspendVideoPreviews({
@@ -445,8 +455,12 @@ export default function MediaLarge({
   // The browser uses byte ranges to keep buffering ahead while it plays.
   const fullVideoManifestUrl = undefined;
   const preparedFullVideoDownload = preparedFullVideoDownloads[currentVideoUrl];
+  const playbackClockRef = useRef(0);
+  useEffect(() => {
+    playbackClockRef.current = Date.now();
+  }, [currentVideoUrl, isFullVideoPlaying, photo.id]);
   const preparedFullVideoUrl = preparedFullVideoDownload &&
-    preparedFullVideoDownload.expiresAt > Date.now() + 10_000
+    preparedFullVideoDownload.expiresAt > playbackClockRef.current + 10_000
     ? preparedFullVideoDownload.url
     : undefined;
   const fullVideoSourceUrl = isFullVideoPlaying
@@ -528,6 +542,48 @@ export default function MediaLarge({
   const isAutomaticPreviewReady =
     readyPreviewSrc === automaticPreviewSrc &&
     readyPreviewActivationId === previewActivationId;
+
+  // Mobile browsers can suspend the compositor and media decoder while the
+  // device is locked. Re-assert the visible image/video state on resume so a
+  // stale black video layer never hides the poster while the decoder wakes.
+  useEffect(() => {
+    if (!isVideo) { return; }
+    let resetTimer: number | undefined;
+    const recoverMedia = () => {
+      if (document.hidden) { return; }
+      setIsPageResuming(true);
+      window.requestAnimationFrame(() => {
+        const video = videoRef.current;
+        if (video) {
+          try {
+            if (video.error || video.networkState === HTMLMediaElement.NETWORK_NO_SOURCE) {
+              video.load();
+            }
+            if (isMainVideoActuallyPlaying || (!isFullVideoPlaying && isPreviewActive)) {
+              void video.play().catch(() => undefined);
+            }
+          } catch { /* browser may still be restoring the document */ }
+        }
+        if (resetTimer !== undefined) { window.clearTimeout(resetTimer); }
+        resetTimer = window.setTimeout(() => setIsPageResuming(false), 900);
+      });
+    };
+    const onVisibilityChange = () => {
+      if (!document.hidden) { recoverMedia(); }
+    };
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    document.addEventListener('resume', recoverMedia);
+    window.addEventListener('pageshow', recoverMedia);
+    window.addEventListener('focus', recoverMedia);
+    return () => {
+      document.removeEventListener('visibilitychange', onVisibilityChange);
+      document.removeEventListener('resume', recoverMedia);
+      window.removeEventListener('pageshow', recoverMedia);
+      window.removeEventListener('focus', recoverMedia);
+      if (resetTimer !== undefined) { window.clearTimeout(resetTimer); }
+    };
+  }, [isFullVideoPlaying, isMainVideoActuallyPlaying, isPreviewActive, isVideo]);
+
   const previewRecovery = useVideoPreviewRecovery({
     videoRef,
     active: Boolean(isVideo && !isFullVideoPlaying && isPreviewActive),
@@ -545,14 +601,17 @@ export default function MediaLarge({
     : window.innerHeight * FULL_IMAGE_LOAD_AHEAD_VIEWPORTS;
   const {
     isInRange: isInPreloadRange,
-    shouldLoad: shouldLoadMediaImage,
   } = useMediaPreload({
     ref,
     preloadAheadPx: fullImagePreloadDistance,
   });
-  const shouldLoadPreviewImage = Boolean(priority) ||
-    initiallyLoadPreviewImage ||
-    shouldLoadMediaImage;
+  // Keep the poster/image element mounted for every public full-page item.
+  // Its native lazy policy controls bytes, while the preload hook continues
+  // to warm adjacent full-video delivery. This removes the blank-frame race
+  // when someone scrolls quickly past a row.
+  const shouldLoadPreviewImage = true;
+  const eagerMediaImage = Boolean(priority) || initiallyLoadPreviewImage ||
+    isPageResuming;
   // Do not prewarm every original video when a long full page mounts. That
   // creates one signed-download request per card (including cards hundreds of
   // rows below the viewport), exhausting browser/network memory and causing
@@ -1101,8 +1160,8 @@ export default function MediaLarge({
               blurDataURL={photo.blurData}
               blurCompatibilityMode={doesMediaNeedBlurCompatibility(photo)}
               priority={priority}
-              loading={priority ? 'eager' : 'lazy'}
-              fetchPriority={priority ? 'high' : 'low'}
+              loading={eagerMediaImage ? 'eager' : 'lazy'}
+              fetchPriority={eagerMediaImage ? 'high' : 'low'}
               showLoadingIndicator
             />
             : <div
@@ -1134,8 +1193,8 @@ export default function MediaLarge({
                         src={posterSrc}
                         aspectRatio={mediaAspectRatio}
                         alt={altTextForMedia(photo)}
-                        loading={priority ? 'eager' : 'lazy'}
-                        fetchPriority={priority ? 'high' : 'low'}
+                        loading={eagerMediaImage ? 'eager' : 'lazy'}
+                        fetchPriority={eagerMediaImage ? 'high' : 'low'}
                         onError={() => setPosterFailedMediaId(photo.id)}
                         showLoadingIndicator
                       />
@@ -1304,8 +1363,8 @@ export default function MediaLarge({
               blurDataURL={photo.blurData}
               blurCompatibilityMode={doesMediaNeedBlurCompatibility(photo)}
               priority={priority}
-              loading={priority ? 'eager' : 'lazy'}
-              fetchPriority={priority ? 'high' : 'low'}
+              loading={eagerMediaImage ? 'eager' : 'lazy'}
+              fetchPriority={eagerMediaImage ? 'high' : 'low'}
               showLoadingIndicator
             />
               : <div

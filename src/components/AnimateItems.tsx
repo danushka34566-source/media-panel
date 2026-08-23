@@ -24,6 +24,10 @@ interface Props extends AnimationConfig {
   itemKeys?: string[]
   canStart?: boolean
   animateFromAppState?: boolean
+  // Keep route content visible while its media asset loads. This preserves a
+  // directional transition without the full-page black veil caused by a
+  // zero-opacity entrance state.
+  fade?: boolean
   animateOnFirstLoadOnly?: boolean
   staggerOnFirstLoadOnly?: boolean
   onAnimationComplete?: () => void
@@ -44,6 +48,7 @@ function AnimateItems({
   scaleOffset = 0.9,
   distanceOffset = 20,
   animateFromAppState,
+  fade = true,
   animateOnFirstLoadOnly,
   staggerOnFirstLoadOnly,
   onAnimationComplete,
@@ -82,19 +87,19 @@ function AnimateItems({
     (() => {
       switch (typeResolved) {
         case 'left': return {
-          opacity: 0,
+          opacity: fade ? 0 : 1,
           transform: `translateX(${distanceOffset}px)`,
         };
         case 'right': return {
-          opacity: 0,
+          opacity: fade ? 0 : 1,
           transform: `translateX(${-distanceOffset}px)`,
         };
         case 'bottom': return {
-          opacity: 0,
+          opacity: fade ? 0 : 1,
           transform: `translateY(${distanceOffset}px)`,
         };
         default: return {
-          opacity: 0,
+          opacity: fade ? 0 : 1,
           transform: `translateY(${distanceOffset}px) scale(${scaleOffset})`,
         };
       }})();

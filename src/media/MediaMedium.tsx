@@ -21,6 +21,7 @@ import MediaColors from './color/MediaColors';
 import useVideoPreviewLifecycle from './video-preview-lifecycle';
 import useMediaPreload from './useMediaPreload';
 import InlineVideoPreview from './InlineVideoPreview';
+import { rememberMediaScrollPosition } from './useMediaScrollRestoration';
 
 export default function MediaMedium({
   photo,
@@ -81,8 +82,16 @@ export default function MediaMedium({
     preloadUrl: previewSrc,
   });
   const shouldRenderPreview = shouldMountPreview || isPreviewExiting;
-  const { shouldLoad: shouldLoadMediaImage } = useMediaPreload({ ref });
-  const shouldLoadPreviewImage = Boolean(priority) ||
+  const { shouldLoad: shouldLoadMediaImage } = useMediaPreload({
+    ref,
+    // Prepare several rows ahead so fast scrolls do not outrun image fetches.
+    preloadAheadPx: 2400,
+    releaseBehindPx: 1000,
+  });
+  // Keep image/poster elements mounted from the first render. Native lazy
+  // loading still bounds network work; once a card enters the preload range,
+  // promote it to eager so returning upward is immediate as well.
+  const eagerPreviewImage = Boolean(priority) ||
     initiallyLoadPreviewImage ||
     shouldLoadMediaImage;
 
@@ -102,6 +111,7 @@ export default function MediaMedium({
         className,
       )}
       prefetch={prefetch}
+      onClick={rememberMediaScrollPosition}
       onPointerEnter={event => event.pointerType === 'mouse' && setIsHovered(true)}
       onPointerLeave={() => setIsHovered(false)}
     >
@@ -134,20 +144,19 @@ export default function MediaMedium({
               )}
               style={{ aspectRatio: getMediaAspectRatio(photo) }}
             >
-              {posterSrc && !hasPosterFailed && shouldLoadPreviewImage
+              {posterSrc && !hasPosterFailed
                 ? <ImageMedium
                   src={posterSrc}
                   aspectRatio={getMediaAspectRatio(photo)}
                   alt={altTextForMedia(photo)}
                   className="absolute inset-0 w-full h-full"
                   classNameImage="w-full h-full object-cover"
-                  loading={priority ? 'eager' : 'lazy'}
-                  fetchPriority={priority ? 'high' : 'low'}
+                  loading={eagerPreviewImage ? 'eager' : 'lazy'}
+                  fetchPriority={eagerPreviewImage ? 'high' : 'low'}
                   onError={() => setPosterFailedMediaId(photo.id)}
                   showLoadingIndicator
                 />
-                : shouldLoadPreviewImage &&
-                  <div className="absolute inset-0 bg-dim" />}
+                : <div className="absolute inset-0 bg-dim" />}
               {shouldRenderPreview && previewSrc && !hasVideoFailed && (
                 <InlineVideoPreview
                   src={previewSrc}
@@ -166,8 +175,7 @@ export default function MediaMedium({
                 )}
               />
             </div>
-            : shouldLoadPreviewImage
-              ? <ImageMedium
+            : <ImageMedium
                 src={photo.url}
                 aspectRatio={photo.aspectRatio}
                 blurDataURL={photo.blurData}
@@ -176,11 +184,10 @@ export default function MediaMedium({
                 classNameImage="object-cover w-full h-full"
                 alt={altTextForMedia(photo)}
                 priority={priority}
-                loading={priority ? 'eager' : 'lazy'}
-                fetchPriority={priority ? 'high' : 'low'}
+                loading={eagerPreviewImage ? 'eager' : 'lazy'}
+                fetchPriority={eagerPreviewImage ? 'high' : 'low'}
                 showLoadingIndicator
-              />
-              : <div className="w-full h-full bg-black/5" />}
+              />}
         </div>}
     </LinkWithStatus>
   );

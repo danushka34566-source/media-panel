@@ -34,6 +34,9 @@ export default function MediaListLarge({
           key={photo.id}
           photo={photo}
           priority={index === 0}
+          // Full-page rows mount every poster immediately; only the first two
+          // are eager network requests. The rest use native lazy loading and
+          // are already in the DOM before the reader reaches them.
           initiallyLoadPreviewImage={index < 2}
           prefetch={index < 3}
           prefetchRelatedLinks={prefetchFirstMediaLinks && index === 0}

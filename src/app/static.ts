@@ -2,15 +2,10 @@ import { CategoryKey } from '../category';
 import {
   CATEGORY_VISIBILITY,
   IS_BUILDING,
-  STATICALLY_OPTIMIZED_MEDIA_CATEGORIES,
-  STATICALLY_OPTIMIZED_MEDIA_CATEGORY_OG_IMAGES,
-  STATICALLY_OPTIMIZED_MEDIA_OG_IMAGES,
-  STATICALLY_OPTIMIZED_MEDIA,
 } from '@/app/config';
-import { GENERATE_STATIC_PARAMS_LIMIT } from '@/db';
 import { getPublicMediaIds } from '@/media/query';
 import { depluralize, pluralize } from '@/utility/string';
-import { getPublicPageBuildOptimizations } from './application-settings';
+import { getApplicationSettingsSafe } from './application-settings';
 
 type StaticOutput = 'page' | 'image';
 
@@ -22,17 +17,13 @@ const logStaticGenerationDetails = (count: number, content: string) => {
 };
 
 export const staticallyGenerateMediaIfConfigured = (type: StaticOutput) =>
-  type === 'page' || (type === 'image' && STATICALLY_OPTIMIZED_MEDIA_OG_IMAGES)
-  ? async () => {
-    const buildAllPublicPages = type === 'page' &&
-      await getPublicPageBuildOptimizations();
+  async () => {
+    const settings = await getApplicationSettingsSafe();
     const enabled = type === 'page'
-      ? buildAllPublicPages || STATICALLY_OPTIMIZED_MEDIA
-      : STATICALLY_OPTIMIZED_MEDIA_OG_IMAGES;
+      ? settings.staticMediaPages
+      : settings.staticMediaOgImages;
     if (!enabled) { return []; }
-    const photoIds = await getPublicMediaIds({
-      limit: buildAllPublicPages ? undefined : GENERATE_STATIC_PARAMS_LIMIT,
-    })
+    const photoIds = await getPublicMediaIds({})
       .catch(e => {
         console.error(`Error fetching static photo data: ${e}`);
         return [];
@@ -41,8 +32,7 @@ export const staticallyGenerateMediaIfConfigured = (type: StaticOutput) =>
       logStaticGenerationDetails(photoIds.length, `photo ${type}`);
     }
     return photoIds.map(photoId => ({ photoId }));
-  }
-  : undefined;
+  };
 
 export const staticallyGenerateCategoryIfConfigured = <T, K>(
   key: CategoryKey,
@@ -50,25 +40,18 @@ export const staticallyGenerateCategoryIfConfigured = <T, K>(
   getData: () => Promise<T[]>,
   formatData: (data: T[]) => K[],
 ): (() => Promise<K[]>) | undefined =>
-  CATEGORY_VISIBILITY.includes(key) && (
-    type === 'page' ||
-    (type === 'image' && STATICALLY_OPTIMIZED_MEDIA_CATEGORY_OG_IMAGES)
-  )
+  CATEGORY_VISIBILITY.includes(key)
     ? async () => {
-      const buildAllPublicPages = type === 'page' &&
-        await getPublicPageBuildOptimizations();
+      const settings = await getApplicationSettingsSafe();
       const enabled = type === 'page'
-        ? buildAllPublicPages || STATICALLY_OPTIMIZED_MEDIA_CATEGORIES
-        : STATICALLY_OPTIMIZED_MEDIA_CATEGORY_OG_IMAGES;
+        ? settings.staticMediaCategories
+        : settings.staticMediaCategoryOgImages;
       if (!enabled) { return []; }
-      const data = (await getData()
+      const data = await getData()
         .catch(e => {
           console.error(`Error fetching static ${key} data: ${e}`);
           return [];
-        }))
-        .slice(0, buildAllPublicPages
-          ? undefined
-          : GENERATE_STATIC_PARAMS_LIMIT);
+        });
       if (IS_BUILDING) {
         logStaticGenerationDetails(
           data.length,

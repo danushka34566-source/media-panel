@@ -1,10 +1,10 @@
-import AnimateItems from '@/components/AnimateItems';
 import {
   Media,
   MediaDateRangePostgres,
   getNextMedia,
   getPreviousMedia,
 } from '.';
+import AnimateItems from '@/components/AnimateItems';
 import { MediaSetCategory } from '../category';
 import MediaLarge from './MediaLarge';
 import AppGrid from '@/components/AppGrid';
@@ -188,42 +188,44 @@ export default function MediaDetailPage({
         />}
       />
       <AnimateItems
-        className="md:mb-8"
+        className="md:mb-8 transform-gpu will-change-transform"
         animateFromAppState
-        items={[
-          <MediaLarge
-            key={photo.id}
-            photo={photo}
-            album={album}
-            primaryTag={tag}
-            priority
-            preloadSubtitleManifest
-            broadcastDetailVideoPlayback
-            prefetchRelatedLinks
-            recent={recent}
-            year={year}
-            showTitle={Boolean(customHeader)}
-            showTitleAsH1
-            showCamera={!camera}
-            showLens={!lens}
-            showFilm={!film}
-            showRecipe={!recipe}
-            shouldShare={shouldShare}
-            shouldShareRecents={recent !== undefined}
-            shouldShareYear={year !== undefined}
-            shouldShareCamera={camera !== undefined}
-            shouldShareLens={lens !== undefined}
-            shouldShareAlbum={album !== undefined}
-            shouldShareTag={tag !== undefined}
-            shouldShareFilm={film !== undefined}
-            shouldShareRecipe={recipe !== undefined}
-            shouldShareFocalLength={focal !== undefined}
-            includeFavoriteInAdminMenu={includeFavoriteInAdminMenu}
-            showAdminKeyCommands
-            swipePreviousPath={swipePreviousPath}
-            swipeNextPath={swipeNextPath}
-          />,
-        ]}
+        fade={false}
+        duration={0.22}
+        distanceOffset={12}
+        staggerDelay={0}
+        items={[<MediaLarge
+          key={photo.id}
+          photo={photo}
+          album={album}
+          primaryTag={tag}
+          priority
+          preloadSubtitleManifest
+          broadcastDetailVideoPlayback
+          prefetchRelatedLinks
+          recent={recent}
+          year={year}
+          showTitle={Boolean(customHeader)}
+          showTitleAsH1
+          showCamera={!camera}
+          showLens={!lens}
+          showFilm={!film}
+          showRecipe={!recipe}
+          shouldShare={shouldShare}
+          shouldShareRecents={recent !== undefined}
+          shouldShareYear={year !== undefined}
+          shouldShareCamera={camera !== undefined}
+          shouldShareLens={lens !== undefined}
+          shouldShareAlbum={album !== undefined}
+          shouldShareTag={tag !== undefined}
+          shouldShareFilm={film !== undefined}
+          shouldShareRecipe={recipe !== undefined}
+          shouldShareFocalLength={focal !== undefined}
+          includeFavoriteInAdminMenu={includeFavoriteInAdminMenu}
+          showAdminKeyCommands
+          swipePreviousPath={swipePreviousPath}
+          swipeNextPath={swipeNextPath}
+        />]}
       />
       <AppGrid
         contentMain={<MediaGrid
