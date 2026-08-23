@@ -211,6 +211,13 @@ export default function BackendStats() {
           : isTransient
             ? 'No processors in the last successful status check'
             : 'No active processors';
+  const registrationOwnerLabel = latest?.registrationOwner === 'processor'
+    ? 'Backend processor'
+    : latest?.registrationOwner === 'processor-waiting'
+      ? 'Processor-only mode · waiting for processor'
+      : latest?.registrationOwner === 'worker'
+        ? 'Worker fallback'
+        : 'Checking registration owner…';
 
   const runRecoveryScan = async () => {
     if (isRecoveryRunning) { return; }
@@ -341,6 +348,16 @@ export default function BackendStats() {
             {metric('Deleting', deletionQueue.processing || 0)}
             {metric('Failed', deletionQueue.failed || 0, 'text-red-600')}
           </div>
+        </div>}
+      />
+      <ScoreCardRow
+        icon={<FiActivity size={17} />}
+        content={<div className="flex flex-wrap items-center gap-x-5 gap-y-1">
+          <span>Registration owner: {registrationOwnerLabel}</span>
+          {latest?.processorOnlyRegistration &&
+            <span className="rounded-md bg-dim px-1.5 py-0.5 text-xs uppercase">
+              Processor-only enabled
+            </span>}
         </div>}
       />
     </ScoreCard>

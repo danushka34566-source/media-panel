@@ -17,7 +17,7 @@ on:
         type: boolean
         default: false
       run_minutes:
-        description: Max runtime when run_once is disabled
+        description: Max runtime in minutes (1-350; the job has a six-hour safety ceiling)
         required: false
         default: '55'
 
@@ -53,7 +53,10 @@ jobs:
   run:
     if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    # Keep this above the longest supported run_minutes value. The previous
+    # 60-minute job ceiling killed a requested 120-minute processor even
+    # though the shell timeout was configured from the dispatch input.
+    timeout-minutes: 360
 
     defaults:
       run:
@@ -118,6 +121,11 @@ jobs:
           if [ "${RUN_ONCE}" = "1" ]; then
             npm run start
             exit 0
+          fi
+
+          if ! [[ "${RUN_MINUTES}" =~ ^[1-9][0-9]*$ ]] || [ "${RUN_MINUTES}" -gt 350 ]; then
+            echo "run_minutes must be an integer from 1 through 350"
+            exit 1
           fi
 
           set +e

@@ -23,6 +23,8 @@ export const saveProcessingSettingsAction = async (
       );
       values.orchestratorEnabled = formData.has('orchestratorEnabled');
       values.registrationEnabled = formData.has('registrationEnabled');
+      values.processorRegistrationEnabled = formData.has('processorRegistrationEnabled');
+      values.processorOnlyRegistration = formData.has('processorOnlyRegistration');
       values.videoProcessingEnabled = formData.has('videoProcessingEnabled');
       const settings = parseProcessingSettings(values);
       await saveProcessingSettings(settings);

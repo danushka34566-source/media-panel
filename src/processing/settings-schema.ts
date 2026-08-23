@@ -1,6 +1,8 @@
 export const PROCESSING_SETTINGS_DEFAULTS = {
   orchestratorEnabled: true,
   registrationEnabled: true,
+  processorRegistrationEnabled: false,
+  processorOnlyRegistration: false,
   videoProcessingEnabled: true,
   registerBatchSize: 2,
   maxRegisterPasses: 2,
@@ -55,6 +57,11 @@ export const parseProcessingSettings = (
     settings[key] = (Number.isFinite(parsed) && limits
       ? Math.min(Math.max(Math.round(parsed), limits[0]), limits[1])
       : fallback) as never;
+  }
+  // Processor-only mode is meaningful only when processor registration is
+  // allowed; never persist a configuration that disables every registrar.
+  if (!settings.processorRegistrationEnabled) {
+    settings.processorOnlyRegistration = false;
   }
   return settings;
 };

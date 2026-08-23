@@ -45,6 +45,9 @@ export type BackendStatus = {
   errorCode?: 'timeout' | 'connection' | 'upstream'
   build?: string
   storageProvider?: 'drive' | 'cloudflare-r2'
+  registrationOwner?: 'worker' | 'processor' | 'processor-waiting'
+  processorOnlyRegistration?: boolean
+  processorRegistrationEnabled?: boolean
   processors?: BackendProcessorStatus[]
   activeJobs?: BackendJobStatus[]
   deletionQueue?: Record<string, number>

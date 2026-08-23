@@ -110,6 +110,12 @@ export default function ProcessingConfigurationForm({
   const [registrationEnabled, setRegistrationEnabled] = useState(
     settings.registrationEnabled,
   );
+  const [processorOnlyRegistration, setProcessorOnlyRegistration] = useState(
+    settings.processorOnlyRegistration,
+  );
+  const [processorRegistrationEnabled, setProcessorRegistrationEnabled] = useState(
+    settings.processorRegistrationEnabled,
+  );
   const [videoProcessingEnabled, setVideoProcessingEnabled] = useState(
     settings.videoProcessingEnabled,
   );
@@ -174,6 +180,23 @@ export default function ProcessingConfigurationForm({
         description="Detect and register new image and video uploads."
         checked={registrationEnabled}
         onChange={setRegistrationEnabled}
+      />
+      <ConfigToggle
+        name="processorRegistrationEnabled"
+        label="Processor registration"
+        description="Allow a connected backend processor to claim and register uploads."
+        checked={processorRegistrationEnabled}
+        onChange={enabled => {
+          setProcessorRegistrationEnabled(enabled);
+          if (!enabled) { setProcessorOnlyRegistration(false); }
+        }}
+      />
+      <ConfigToggle
+        name="processorOnlyRegistration"
+        label="Processor-only registration"
+        description="When enabled, only an online backend processor can register uploads; the Worker will not register them."
+        checked={processorOnlyRegistration && processorRegistrationEnabled}
+        onChange={setProcessorOnlyRegistration}
       />
       <ConfigToggle
         name="videoProcessingEnabled"

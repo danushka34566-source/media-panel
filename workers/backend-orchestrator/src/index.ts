@@ -97,11 +97,16 @@ export interface Env {
   REGISTRATION_SCAN_DEADLINE_AT?: string
   REGISTRATION_SCHEDULED?: string
   REGISTRATION_PROCESSOR_ONLY?: string
+  REGISTRATION_PROCESSOR_PULL?: string
+  PROCESSOR_REGISTRATION_ENABLED?: string
+  PROCESSOR_ONLY_REGISTRATION?: string
 }
 
 type RuntimeProcessingSettings = {
   orchestratorEnabled: boolean
   registrationEnabled: boolean
+  processorRegistrationEnabled: boolean
+  processorOnlyRegistration: boolean
   videoProcessingEnabled: boolean
   registerBatchSize: number
   maxRegisterPasses: number
@@ -170,6 +175,8 @@ const getRuntimeProcessingSettings = async (env: Env) => {
     };
     defaults.orchestratorEnabled = enabled('orchestratorEnabled', true);
     defaults.registrationEnabled = enabled('registrationEnabled', true);
+    defaults.processorRegistrationEnabled = enabled('processorRegistrationEnabled', false);
+    defaults.processorOnlyRegistration = enabled('processorOnlyRegistration', false);
     defaults.videoProcessingEnabled = enabled('videoProcessingEnabled', true);
     defaults.registerBatchSize = number('registerBatchSize', defaults.registerBatchSize, 1, 100);
     defaults.maxRegisterPasses = number('maxRegisterPasses', defaults.maxRegisterPasses, 1, 20);
@@ -190,6 +197,8 @@ const getRuntimeProcessingSettings = async (env: Env) => {
 const getDefaultRuntimeProcessingSettings = (env: Env): RuntimeProcessingSettings => ({
     orchestratorEnabled: true,
     registrationEnabled: true,
+    processorRegistrationEnabled: false,
+    processorOnlyRegistration: false,
     videoProcessingEnabled: true,
     registerBatchSize: getNumber(env.REGISTER_BATCH_SIZE, 2, { min: 1, max: 100 }),
     maxRegisterPasses: getNumber(env.MAX_REGISTER_PASSES, 2, { min: 1, max: 20 }),
@@ -235,6 +244,8 @@ const envWithRuntimeSettings = (
   STALE_PROCESSING_MINUTES: String(settings.staleProcessingMinutes),
   STALE_REGISTRATION_MINUTES: String(settings.staleRegistrationMinutes),
   REGISTRATION_HISTORY_DAYS: String(settings.registrationHistoryDays),
+  PROCESSOR_REGISTRATION_ENABLED: settings.processorRegistrationEnabled ? '1' : '0',
+  PROCESSOR_ONLY_REGISTRATION: settings.processorOnlyRegistration ? '1' : '0',
 });
 
 const MEDIA_EXTENSIONS = new Set([
@@ -267,7 +278,7 @@ const GENERATED_MEDIA_SUFFIX_REGEX =
 const STALE_REGISTRATION_ERROR_MESSAGE =
   'Previous registration attempt stalled; queued for retry';
 const MISSING_UPLOAD_ERROR_PREFIX = 'Upload not found in storage';
-const WORKER_BUILD_ID = 'v98';
+const WORKER_BUILD_ID = 'v99';
 // A scheduled Worker must finish promptly. Drive copies can become visible
 // asynchronously, so persist the in-flight state and check again on the next
 // minute instead of polling long enough to lose the registration lease.
@@ -2965,6 +2976,36 @@ const claimRegistrationQueueRow = async (env: Env) => {
   };
 };
 
+// A live processor heartbeat makes the processor the registration owner. The
+// scheduled Worker remains the durable fallback only after that heartbeat
+// expires, so a processor outage cannot strand the queue behind an in-flight
+// claim. Missing presence tables are treated as "no processor" for backward
+// compatibility with installations that have never started a processor.
+const hasActiveRegistrationProcessor = async (env: Env) => {
+  try {
+    const sql = sqlForEnv(env);
+    const rows = await sql`
+      SELECT EXISTS (
+        SELECT 1
+        FROM video_processor_presence
+        WHERE last_seen_at > now() - interval '2 minutes'
+          AND COALESCE(state, 'idle') <> 'stopped'
+      ) AS active
+    ` as unknown as Array<{ active: boolean }>;
+    return Boolean(rows[0]?.active);
+  } catch (error) {
+    // The heartbeat table is created lazily by the processor endpoint. A
+    // missing table (or a transient read failure) must never disable the
+    // Worker fallback registration path.
+    if (!/relation .*video_processor_presence.*does not exist/i.test(
+      error instanceof Error ? error.message : String(error),
+    )) {
+      console.warn('Unable to read processor registration presence; using Worker fallback', error);
+    }
+    return false;
+  }
+};
+
 const getRegistrationStatusRowsByUrls = async (env: Env, urls: string[]) => {
   const uniqueUrls = Array.from(new Set(urls.filter(Boolean)));
   if (uniqueUrls.length === 0) { return [] as RegistrationStatusRow[]; }
@@ -4008,6 +4049,28 @@ const scanAndRegisterWithLease = async (
   let passes = 0;
   const attemptedRegistrationKeys = new Set<string>();
   const isScheduledRegistration = env.REGISTRATION_SCHEDULED === '1';
+  const isProcessorPull = env.REGISTRATION_PROCESSOR_PULL === '1';
+  if (isScheduledRegistration && !isProcessorPull) {
+    const processorRegistrationEnabled = env.PROCESSOR_REGISTRATION_ENABLED !== '0';
+    const processorOnly = processorRegistrationEnabled &&
+      env.PROCESSOR_ONLY_REGISTRATION === '1';
+    const processorActive = processorRegistrationEnabled &&
+      (processorOnly || await hasActiveRegistrationProcessor(env));
+    if (processorActive) {
+      // Processor ownership is evaluated before the queue claim. This keeps
+      // the Worker from ever marking a row registering while a live processor
+      // is responsible for the registration queue.
+      return {
+        registered: 0,
+        registrationPasses: 0,
+        registrationRemaining: 0,
+        pendingVideos: 0,
+        missingProcessingSources: 0,
+        scanSkipped: true,
+        registrationProcessorActive: true,
+      };
+    }
+  }
   // On the Free plan, scheduled invocations have only 10 ms of CPU. Claim one
   // durable FIFO row atomically instead of loading the full queue first.
   const queueClaim = isScheduledRegistration
@@ -5629,6 +5692,12 @@ const status = async (
     total: 0,
     jobs: [],
   };
+  const runtimeSettings = await getRuntimeProcessingSettings(env);
+  const registrationOwner = !runtimeSettings.processorRegistrationEnabled
+    ? 'worker'
+    : runtimeSettings.processorOnlyRegistration
+    ? (processors.length > 0 ? 'processor' : 'processor-waiting')
+    : (processors.length > 0 ? 'processor' : 'worker');
   return {
     ...counts,
     processors,
@@ -5641,6 +5710,9 @@ const status = async (
       total: registrationSnapshot.total,
     },
     registrationJobs: registrationSnapshot.jobs,
+    registrationOwner,
+    processorRegistrationEnabled: runtimeSettings.processorRegistrationEnabled,
+    processorOnlyRegistration: runtimeSettings.processorOnlyRegistration,
     build: WORKER_BUILD_ID,
     storageProvider: detectStorageProvider(env),
     checkedAt: new Date().toISOString(),
@@ -5830,6 +5902,8 @@ export default {
         details: {
           orchestratorEnabled: settings.orchestratorEnabled,
           registrationEnabled: settings.registrationEnabled,
+          processorRegistrationEnabled: settings.processorRegistrationEnabled,
+          processorOnlyRegistration: settings.processorOnlyRegistration,
           registerBatchSize: settings.registerBatchSize,
           maxRegisterPasses: settings.maxRegisterPasses,
         },
@@ -6071,7 +6145,8 @@ export default {
       if (!isAuthorized(request, env.BACKEND_PROCESSOR_SHARED_SECRET)) {
         return json(401, { error: 'Unauthorized' });
       }
-      if (!settings.orchestratorEnabled || !settings.registrationEnabled) {
+      if (!settings.orchestratorEnabled || !settings.registrationEnabled ||
+        !settings.processorRegistrationEnabled) {
         return json(200, { claimed: 0, registered: 0, disabled: true });
       }
       try {
@@ -6083,6 +6158,7 @@ export default {
           ...runtimeEnv,
           REGISTRATION_SCHEDULED: '1',
           REGISTRATION_PROCESSOR_ONLY: '1',
+          REGISTRATION_PROCESSOR_PULL: '1',
         };
         const scan = startScan(processorEnv, {
           shareInFlight: false,
@@ -6132,6 +6208,8 @@ export default {
         idleIntervalMs: settings.processorIdleIntervalMs,
         heartbeatIntervalMs: settings.processorHeartbeatIntervalMs,
         claimLimit: settings.processorClaimLimit,
+        processorRegistrationEnabled: settings.processorRegistrationEnabled,
+        processorOnlyRegistration: settings.processorOnlyRegistration,
         enabled: settings.orchestratorEnabled && settings.videoProcessingEnabled,
       });
     }
