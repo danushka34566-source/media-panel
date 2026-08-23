@@ -156,7 +156,7 @@ test('a registration scan does not fan out direct database connections for a bac
   const scanEnd = workerSource.indexOf('const scanAndRegister =', scanStart);
   const source = workerSource.slice(scanStart, scanEnd);
 
-  assert.match(source, /listStoragePage\(env, inventoryCursor\)/);
+  assert.match(source, /listStoragePage\([\s\S]*inventoryCursor/);
   assert.match(source, /setRegistrationScanCursor\(/);
   assert.match(source, /getMediaRows\(env\)/);
   assert.match(source, /getQueuedDeletionPrefixes\(env\)/);

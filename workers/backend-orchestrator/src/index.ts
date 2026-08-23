@@ -266,7 +266,7 @@ const GENERATED_MEDIA_SUFFIX_REGEX =
 const STALE_REGISTRATION_ERROR_MESSAGE =
   'Previous registration attempt stalled; queued for retry';
 const MISSING_UPLOAD_ERROR_PREFIX = 'Upload not found in storage';
-const WORKER_BUILD_ID = 'v96';
+const WORKER_BUILD_ID = 'v97';
 // A scheduled Worker must finish promptly. Drive copies can become visible
 // asynchronously, so persist the in-flight state and check again on the next
 // minute instead of polling long enough to lose the registration lease.
@@ -1511,13 +1511,14 @@ const r2Request = async (
 const listStoragePage = async (
   env: Env,
   continuationToken?: string,
+  pageSize = REGISTRATION_SCAN_PAGE_SIZE,
 ): Promise<StorageListPage> => {
   if (isDriveStorageEnabled(env)) {
     const listUrl = new URL(`${driveApiBaseUrl(env)}/api/v1/storage/list`);
     listUrl.searchParams.set('projectId', env.DRIVE_STORAGE_PROJECT_ID || '');
     listUrl.searchParams.set('bucket', env.DRIVE_STORAGE_BUCKET || '');
     listUrl.searchParams.set('paged', '1');
-    listUrl.searchParams.set('limit', String(REGISTRATION_SCAN_PAGE_SIZE));
+    listUrl.searchParams.set('limit', String(pageSize));
     if (continuationToken) {
       listUrl.searchParams.set('continuationToken', continuationToken);
     }
@@ -1544,7 +1545,7 @@ const listStoragePage = async (
 
   const query = new URLSearchParams({
     'list-type': '2',
-    'max-keys': String(REGISTRATION_SCAN_PAGE_SIZE),
+    'max-keys': String(pageSize),
   });
   if (continuationToken) {
     query.set('continuation-token', continuationToken);
@@ -4044,7 +4045,11 @@ const scanAndRegisterWithLease = async (
       }).filter(object => Boolean(object.key)),
       nextContinuationToken: undefined,
     } satisfies StorageListPage)
-    : listStoragePage(env, inventoryCursor);
+    : listStoragePage(
+      env,
+      inventoryCursor,
+      isScheduledRegistration ? Math.min(registerBatchSize * maxRegisterPasses, 8) : undefined,
+    );
   let inventoryCursorPersisted = false;
   let deferredFileMaps: Array<{
     media_id: string
