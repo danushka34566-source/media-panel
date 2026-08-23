@@ -177,6 +177,15 @@ test('storage inventory uses a bounded resumable page', () => {
   assert.match(workerSource, /worker_registration_scan_cursor/);
 });
 
+test('scheduled registration claims enforce the configured global concurrency cap', () => {
+  const claimStart = workerSource.indexOf('const claimRegistrationQueueRow');
+  const claimEnd = workerSource.indexOf('const getRegistrationStatusRowsByUrls', claimStart);
+  const claimSource = workerSource.slice(claimStart, claimEnd);
+  assert.match(claimSource, /pg_advisory_xact_lock/);
+  assert.match(claimSource, /active_count < \$\{concurrencyLimit\}/);
+  assert.match(workerSource, /claimRegistrationQueueRow\(env, registerBatchSize\)/);
+});
+
 test('registration status and logs expose file-level queue progress', () => {
   assert.match(workerSource, /registrationQueue:/);
   assert.match(workerSource, /registrationJobs:/);

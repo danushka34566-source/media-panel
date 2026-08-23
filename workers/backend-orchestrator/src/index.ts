@@ -257,7 +257,7 @@ const GENERATED_MEDIA_SUFFIX_REGEX =
 const STALE_REGISTRATION_ERROR_MESSAGE =
   'Previous registration attempt stalled; queued for retry';
 const MISSING_UPLOAD_ERROR_PREFIX = 'Upload not found in storage';
-const WORKER_BUILD_ID = 'v110';
+const WORKER_BUILD_ID = 'v111';
 // A scheduled Worker must finish promptly. Drive copies can become visible
 // asynchronously, so persist the in-flight state and check again on the next
 // minute instead of polling long enough to lose the registration lease.
@@ -2931,20 +2931,40 @@ const getRegistrationStatusRows = async (env: Env, limit?: number) => {
   `) as unknown as RegistrationStatusRow[];
 };
 
-// Atomically reserve exactly one eligible FIFO row. The claim itself is the
-// concurrency guard for scheduled work: fresh `registering` rows are excluded
-// so a slow copy can never fill the limit ahead of newly detected uploads.
-const claimRegistrationQueueRow = async (env: Env) => {
+// Atomically reserve exactly one eligible FIFO row. Scheduled events can
+// overlap while a Drive copy is in flight, so the claim also takes a short
+// transaction-scoped advisory lock and enforces the configured global active
+// registration limit. Without that fence, a batch size of 1 still allowed one
+// new claim every minute and accumulated unbounded `registering` rows.
+const claimRegistrationQueueRow = async (
+  env: Env,
+  activeRegistrationLimit = 1,
+) => {
   const sql = sqlForEnv(env);
   const staleMinutes = getNumber(env.STALE_REGISTRATION_MINUTES, 15, {
     min: 1,
     max: 24 * 60,
   });
+  const concurrencyLimit = Math.max(1, Math.min(Math.round(activeRegistrationLimit), 10));
   const rows = await sql`
-    WITH candidate AS (
+    WITH claim_lock AS MATERIALIZED (
+      SELECT pg_advisory_xact_lock(
+        hashtextextended('media-panel:registration-claim', 0)
+      ) AS acquired
+    ), active AS MATERIALIZED (
+      SELECT COUNT(*)::int AS active_count
+      FROM worker_registration_status active_row
+      CROSS JOIN claim_lock
+      WHERE active_row.status='registering'
+        AND active_row.updated_at >= now() -
+          (${String(staleMinutes)} || ' minutes')::interval
+    ), candidate AS (
       SELECT url
       FROM worker_registration_status
-      WHERE status='detected'
+      CROSS JOIN active
+      WHERE active.active_count < ${concurrencyLimit}
+        AND (
+      status='detected'
         OR (
           status='registering'
           AND updated_at < now() - (${String(staleMinutes)} || ' minutes')::interval
@@ -2961,6 +2981,7 @@ const claimRegistrationQueueRow = async (env: Env) => {
             OR error_message LIKE 'Copied destination is not readable in storage:%'
             OR error_message LIKE 'Copied destination size mismatch:%'
           )
+        )
         )
       ORDER BY uploaded_at ASC NULLS LAST, updated_at ASC, url ASC
       LIMIT 1
@@ -4265,9 +4286,11 @@ const scanAndRegisterWithLease = async (
     }
   }
   // On the Free plan, scheduled invocations have only 10 ms of CPU. Claim one
-  // durable FIFO row atomically instead of loading the full queue first.
+  // durable FIFO row atomically instead of loading the full queue first. The
+  // configured batch size is also the global active-claim ceiling, so
+  // overlapping cron invocations cannot accumulate extra registering rows.
   const queueClaim = isScheduledRegistration
-    ? await claimRegistrationQueueRow(env)
+    ? await claimRegistrationQueueRow(env, registerBatchSize)
     : undefined;
   const claimedRegistrationRow = queueClaim?.row;
   const scheduledQueueRows = claimedRegistrationRow
