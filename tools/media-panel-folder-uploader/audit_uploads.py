@@ -482,6 +482,11 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> int:
+    # Windows may default to a legacy code page while filenames can contain
+    # international characters. Keep the human-readable report from failing
+    # after the JSON report has already been written.
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     args = parse_args()
     env_file = args.env_file
     if env_file is None:
