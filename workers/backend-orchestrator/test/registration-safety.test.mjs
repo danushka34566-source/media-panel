@@ -297,8 +297,8 @@ test('manual retries explicitly requeue the matching registration record', () =>
 
 test('Supabase scans use a fresh bounded client and retry a dropped connection', () => {
   assert.match(workerSource, /new Client\(/);
-  assert.match(workerSource, /connectionTimeoutMillis: SUPABASE_CONNECT_TIMEOUT_MS/);
-  assert.match(workerSource, /query_timeout: SUPABASE_QUERY_TIMEOUT_MS/);
+  assert.match(workerSource, /connectionTimeoutMillis: connectionTimeoutMs/);
+  assert.match(workerSource, /query_timeout: queryTimeoutMs/);
   assert.match(workerSource, /isRetryableSupabaseConnectionError/);
   assert.match(workerSource, /SUPABASE_CONNECTION_RETRY_ATTEMPTS = 3/);
   assert.match(workerSource, /await client\.end\(\)\.catch/);

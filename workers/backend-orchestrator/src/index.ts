@@ -94,6 +94,7 @@ export interface Env {
   BACKEND_PROCESSOR_HEARTBEAT_INTERVAL_MS?: string
   BACKEND_PROCESSOR_CLAIM_LIMIT?: string
   REGISTRATION_HINT_LOOKUPS_ENABLED?: string
+  REGISTRATION_SCAN_DEADLINE_AT?: string
 }
 
 type RuntimeProcessingSettings = {
@@ -258,7 +259,7 @@ const GENERATED_MEDIA_SUFFIX_REGEX =
 const STALE_REGISTRATION_ERROR_MESSAGE =
   'Previous registration attempt stalled; queued for retry';
 const MISSING_UPLOAD_ERROR_PREFIX = 'Upload not found in storage';
-const WORKER_BUILD_ID = 'v88';
+const WORKER_BUILD_ID = 'v89';
 // A scheduled Worker must finish promptly. Drive copies can become visible
 // asynchronously, so persist the in-flight state and check again on the next
 // minute instead of polling long enough to lose the registration lease.
@@ -1132,6 +1133,11 @@ type SqlQuery = (...parts: any[]) => Promise<unknown[]>;
 const SUPABASE_CONNECT_TIMEOUT_MS = 10_000;
 const SUPABASE_QUERY_TIMEOUT_MS = 20_000;
 const SUPABASE_CONNECTION_RETRY_ATTEMPTS = 3;
+const getRegistrationScanBudgetMs = (env: Env) => {
+  const deadline = Number(env.REGISTRATION_SCAN_DEADLINE_AT);
+  if (!Number.isFinite(deadline)) { return Number.POSITIVE_INFINITY; }
+  return Math.max(0, deadline - Date.now());
+};
 const connectionStringWithoutSslMode = (value: string) => {
   try {
     const url = new URL(value);
@@ -1171,6 +1177,18 @@ const supabaseSqlForEnv = (env: Env): SqlQuery => {
       text += `$${index}${strings[index] || ''}`;
     }
     for (let attempt = 0; attempt < SUPABASE_CONNECTION_RETRY_ATTEMPTS; attempt += 1) {
+      const scanBudgetMs = getRegistrationScanBudgetMs(env);
+      if (scanBudgetMs <= 0) {
+        throw new Error('Registration scan safety window elapsed before Postgres query');
+      }
+      const connectionTimeoutMs = Math.max(
+        250,
+        Math.min(SUPABASE_CONNECT_TIMEOUT_MS, scanBudgetMs),
+      );
+      const queryTimeoutMs = Math.max(
+        250,
+        Math.min(SUPABASE_QUERY_TIMEOUT_MS, scanBudgetMs),
+      );
       // Workers are stateless. Do not retain a pg Client or Pool between
       // events: the runtime may reclaim the socket after a prior invocation.
       const client = new Client({
@@ -1178,22 +1196,23 @@ const supabaseSqlForEnv = (env: Env): SqlQuery => {
         ssl: shouldDisablePostgresSsl(env)
           ? false
           : { rejectUnauthorized: false },
-        connectionTimeoutMillis: SUPABASE_CONNECT_TIMEOUT_MS,
-        query_timeout: SUPABASE_QUERY_TIMEOUT_MS,
-        statement_timeout: SUPABASE_QUERY_TIMEOUT_MS,
+        connectionTimeoutMillis: connectionTimeoutMs,
+        query_timeout: queryTimeoutMs,
+        statement_timeout: queryTimeoutMs,
       });
       try {
         await client.connect();
         const result = await client.query({
           text,
           values,
-          query_timeout: SUPABASE_QUERY_TIMEOUT_MS,
-          statement_timeout: SUPABASE_QUERY_TIMEOUT_MS,
+          query_timeout: queryTimeoutMs,
+          statement_timeout: queryTimeoutMs,
         });
         return result.rows;
       } catch (error) {
         if (
           attempt < SUPABASE_CONNECTION_RETRY_ATTEMPTS - 1 &&
+          getRegistrationScanBudgetMs(env) > 500 &&
           isRetryableSupabaseConnectionError(error)
         ) {
           await sleep(250 * (attempt + 1));
@@ -4379,9 +4398,15 @@ const scanAndRegister = async (
       scanSkipped: true,
     };
   }
+  const scanEnv = {
+    ...env,
+    REGISTRATION_SCAN_DEADLINE_AT: String(
+      Date.now() + SCHEDULED_SCAN_DEADLINE_MS,
+    ),
+  };
   const leaseHeartbeat = startScanLeaseHeartbeat(env, leaseToken);
   try {
-    return await scanAndRegisterWithLease(env, leaseToken, {
+    return await scanAndRegisterWithLease(scanEnv, leaseToken, {
       waitUntil,
       assertLease: () => {
         if (leaseHeartbeat.isLost()) {
