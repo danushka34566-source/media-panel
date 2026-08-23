@@ -1,9 +1,15 @@
 'use client';
 
-import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from 'react';
 import { useRouter } from 'next/navigation';
 import { clsx } from 'clsx/lite';
-import { LuMaximize2, LuX } from 'react-icons/lu';
+import { LuMaximize2, LuPlay, LuX } from 'react-icons/lu';
 import { VideoPlaybackManager } from '@/utility/VideoPlaybackManager';
 import {
   getDockedVideo,
@@ -29,46 +35,64 @@ export default function VideoMiniPlayer() {
     () => false,
   );
   const [useFallbackSource, setUseFallbackSource] = useState(false);
+  const [playbackError, setPlaybackError] = useState(false);
+  const [playbackNeedsGesture, setPlaybackNeedsGesture] = useState(false);
+  const source = dockedVideo && useFallbackSource && dockedVideo.fallbackUrl
+    ? dockedVideo.fallbackUrl
+    : dockedVideo?.sourceUrl;
+  const requestPlayback = useCallback((video: HTMLVideoElement) => {
+    void VideoPlaybackManager.requestPlay(video)
+      .then(() => setPlaybackNeedsGesture(video.paused && !video.ended))
+      .catch(() => setPlaybackNeedsGesture(true));
+  }, []);
 
   useEffect(() => {
     // The source selection is local UI state that must reset with a new
     // media element; this is an intentional state synchronization boundary.
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setUseFallbackSource(false);
+    setPlaybackError(false);
+    setPlaybackNeedsGesture(false);
     resumeTimeRef.current = dockedVideo?.currentTime;
-  }, [dockedVideo?.currentTime, dockedVideo?.mediaId]);
+    // Playback time is updated continuously without changing the media
+    // element; only a new media id should reset the source selection.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dockedVideo?.mediaId]);
 
+  const shouldResumePlayback = Boolean(dockedVideo?.wasPlaying);
   useEffect(() => {
-    if (!dockedVideo || detailPageActive) { return; }
+    if (!source || detailPageActive) { return; }
     const video = videoRef.current;
     if (!video) { return; }
     const restore = () => {
       const currentTime = resumeTimeRef.current;
       if (typeof currentTime === 'number' && Number.isFinite(currentTime)) {
-        try { video.currentTime = Math.max(0, currentTime); } catch { /* media is still changing source */ }
+        try { video.currentTime = Math.max(0, currentTime); }
+        catch { /* media is still changing source */ }
       }
-      if (dockedVideo.wasPlaying) {
-        void VideoPlaybackManager.requestPlay(video).catch(() => undefined);
+      if (shouldResumePlayback) {
+        requestPlayback(video);
       }
     };
-    video.addEventListener('loadedmetadata', restore, { once: true });
     if (video.readyState >= 1) { restore(); }
-    return () => video.removeEventListener('loadedmetadata', restore);
-  }, [dockedVideo, detailPageActive, useFallbackSource]);
+  }, [
+    detailPageActive,
+    requestPlayback,
+    shouldResumePlayback,
+    source,
+    useFallbackSource,
+  ]);
 
-  if (!dockedVideo || detailPageActive) { return null; }
-
-  const source = useFallbackSource && dockedVideo.fallbackUrl
-    ? dockedVideo.fallbackUrl
-    : dockedVideo.sourceUrl;
+  if (!dockedVideo || detailPageActive || !source) { return null; }
 
   return (
     <aside
       aria-label="Playing video"
       className={clsx(
-        'fixed z-[900] right-3 bottom-3 sm:right-5 sm:bottom-5',
-        'w-[min(24rem,calc(100vw-1.5rem))] overflow-hidden rounded-lg',
-        'border border-medium bg-black shadow-2xl ring-1 ring-black/20',
+        'fixed right-2 z-[2100] sm:right-4 sm:bottom-4',
+        'bottom-[max(0.5rem,env(safe-area-inset-bottom))]',
+        'w-[min(18rem,calc(100vw-1rem))] overflow-hidden rounded-md',
+        'border border-medium bg-black shadow-xl ring-1 ring-black/20',
       )}
     >
       <div className="relative aspect-video bg-black">
@@ -84,25 +108,96 @@ export default function VideoMiniPlayer() {
           muted={dockedVideo.muted}
           preload="auto"
           onContextMenu={event => event.preventDefault()}
-          onTimeUpdate={event => {
-            updateDockedVideo({ currentTime: event.currentTarget.currentTime });
-          }}
-          onPlay={() => updateDockedVideo({ wasPlaying: true }, true)}
-          onPause={event => updateDockedVideo({
-            currentTime: event.currentTarget.currentTime,
-            wasPlaying: false,
-          }, true)}
-          onEnded={() => updateDockedVideo({ wasPlaying: false }, true)}
-          onError={() => {
-            if (dockedVideo.fallbackUrl && !useFallbackSource) {
-              setUseFallbackSource(true);
+          onLoadedMetadata={event => {
+            const currentTime = resumeTimeRef.current;
+            if (
+              typeof currentTime === 'number' &&
+              Number.isFinite(currentTime)
+            ) {
+              try {
+                event.currentTarget.currentTime = Math.max(0, currentTime);
+              }
+              catch { /* media is still changing source */ }
+            }
+            setPlaybackError(false);
+            if (dockedVideo.wasPlaying) {
+              requestPlayback(event.currentTarget);
             }
           }}
+          onTimeUpdate={event => {
+            const currentTime = event.currentTarget.currentTime;
+            resumeTimeRef.current = currentTime;
+            updateDockedVideo({ currentTime });
+          }}
+          onPlay={() => {
+            setPlaybackNeedsGesture(false);
+            updateDockedVideo({ wasPlaying: true }, true);
+          }}
+          onPause={event => {
+            const currentTime = event.currentTarget.currentTime;
+            resumeTimeRef.current = currentTime;
+            updateDockedVideo({ currentTime, wasPlaying: false }, true);
+          }}
+          onVolumeChange={event => {
+            updateDockedVideo({ muted: event.currentTarget.muted });
+          }}
+          onEnded={() => updateDockedVideo({ wasPlaying: false }, true)}
+          onError={() => {
+            const video = videoRef.current;
+            const currentTime = video?.currentTime;
+            if (
+              video &&
+              typeof currentTime === 'number' &&
+              Number.isFinite(currentTime)
+            ) {
+              resumeTimeRef.current = currentTime;
+              updateDockedVideo({ currentTime });
+            }
+            if (dockedVideo.fallbackUrl && source !== dockedVideo.fallbackUrl) {
+              setPlaybackError(false);
+              setUseFallbackSource(true);
+              return;
+            }
+            setPlaybackError(true);
+          }}
         />
-        <div className="absolute inset-x-0 top-0 flex items-center justify-between gap-2 p-1.5 pointer-events-none">
+        {playbackError && (
+          <div className="absolute inset-0 z-10 flex items-center justify-center
+            bg-black/75 px-3 text-center text-xs text-white">
+            Video unavailable. Open the media details to retry.
+          </div>
+        )}
+        {playbackNeedsGesture && !playbackError && dockedVideo.wasPlaying && (
+          <div className="pointer-events-none absolute inset-0 z-10 grid
+            place-items-center">
+            <button
+              type="button"
+              aria-label="Continue playback"
+              className="pointer-events-auto inline-flex size-9 items-center
+                justify-center rounded-full border border-white/30 bg-black/80
+                text-white shadow-lg backdrop-blur-sm transition-transform
+                hover:scale-105 focus-visible:outline-2
+                focus-visible:outline-white"
+              onClick={() => {
+                const video = videoRef.current;
+                if (!video) { return; }
+                requestPlayback(video);
+              }}
+            >
+              <LuPlay size={16} fill="currentColor" />
+            </button>
+          </div>
+        )}
+        <div className="pointer-events-none absolute inset-x-0 top-0 z-20 flex
+          items-center justify-between gap-1 bg-gradient-to-b from-black/70
+          to-transparent p-1.5">
           <button
             type="button"
-            className="pointer-events-auto inline-flex min-w-0 max-w-[75%] items-center rounded bg-black/60 px-2 py-1 text-xs text-white backdrop-blur-sm"
+            className="pointer-events-auto inline-flex min-w-0 max-w-[78%]
+              items-center rounded-md border border-white/25 bg-black/75 px-2
+              py-1 text-[0.7rem] font-medium leading-4 text-white shadow-sm
+              backdrop-blur-sm transition-colors hover:bg-black/90
+              focus-visible:outline-2 focus-visible:outline-white"
             onClick={() => {
               const video = videoRef.current;
               if (video) {
@@ -117,14 +212,24 @@ export default function VideoMiniPlayer() {
               router.push(dockedVideo.detailPath, { scroll: false });
             }}
             title="Open video details"
+            aria-label={`Open details for ${
+              dockedVideo.title || 'playing video'
+            }`}
           >
-            <span className="truncate">{dockedVideo.title || 'Open video'}</span>
+            <span className="truncate">
+              {dockedVideo.title || 'Open video'}
+            </span>
             <LuMaximize2 className="ml-1.5 shrink-0" size={13} />
           </button>
           <button
             type="button"
             aria-label="Close mini player"
-            className="pointer-events-auto inline-flex size-7 shrink-0 items-center justify-center rounded bg-black/60 text-white backdrop-blur-sm hover:bg-black/80"
+            title="Close mini player"
+            className="pointer-events-auto inline-flex size-7 shrink-0
+              items-center justify-center rounded-md border border-white/25
+              bg-black/75 text-white shadow-sm backdrop-blur-sm
+              transition-colors hover:bg-black/90
+              focus-visible:outline-2 focus-visible:outline-white"
             onClick={() => {
               videoRef.current?.pause();
               clearDockedVideo();

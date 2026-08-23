@@ -1434,13 +1434,34 @@ export default function MediaLarge({
                     controls={isFullVideoPlaying}
                     controlsList="nodownload noplaybackrate"
                     onContextMenu={(e) => e.preventDefault()}
+                    onTimeUpdate={event => {
+                      if (isFullVideoPlaying) {
+                        detailPlaybackRef.current.currentTime =
+                          event.currentTarget.currentTime;
+                        detailPlaybackRef.current.muted =
+                          event.currentTarget.muted;
+                      }
+                    }}
                     onPlay={() => {
-                      if (isFullVideoPlaying) { setIsMainVideoActuallyPlaying(true); }
+                      if (isFullVideoPlaying) {
+                        detailPlaybackRef.current.isMainVideoActuallyPlaying = true;
+                        setIsMainVideoActuallyPlaying(true);
+                      }
                     }}
                     onPause={() => {
-                      if (isFullVideoPlaying) { setIsMainVideoActuallyPlaying(false); }
+                      if (isFullVideoPlaying) {
+                        detailPlaybackRef.current.isMainVideoActuallyPlaying = false;
+                        setIsMainVideoActuallyPlaying(false);
+                      }
                     }}
-                    onEnded={() => setIsMainVideoActuallyPlaying(false)}
+                    onEnded={event => {
+                      if (isFullVideoPlaying) {
+                        detailPlaybackRef.current.currentTime =
+                          event.currentTarget.currentTime;
+                        detailPlaybackRef.current.isMainVideoActuallyPlaying = false;
+                      }
+                      setIsMainVideoActuallyPlaying(false);
+                    }}
                     preload="auto"
                     onLoadStart={() => {
                       if (!isFullVideoPlaying && isPreviewActive) {
