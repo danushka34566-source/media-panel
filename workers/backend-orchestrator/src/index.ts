@@ -259,7 +259,7 @@ const GENERATED_MEDIA_SUFFIX_REGEX =
 const STALE_REGISTRATION_ERROR_MESSAGE =
   'Previous registration attempt stalled; queued for retry';
 const MISSING_UPLOAD_ERROR_PREFIX = 'Upload not found in storage';
-const WORKER_BUILD_ID = 'v90';
+const WORKER_BUILD_ID = 'v91';
 // A scheduled Worker must finish promptly. Drive copies can become visible
 // asynchronously, so persist the in-flight state and check again on the next
 // minute instead of polling long enough to lose the registration lease.
@@ -3717,11 +3717,27 @@ const scanAndRegisterWithLease = async (
       }).catch(() => undefined));
     }
   };
-  await runMaintenance('repair_orphaned_maps', () => repairOrphanedRegisteredUploadMaps(env));
   await runMaintenance('clear_stale_statuses', () => clearStaleRegistrationStatuses(env));
-  await runMaintenance('clear_resolved_statuses', () => clearResolvedRegistrationStatuses(env));
-  await runMaintenance('clear_old_statuses', () => clearOldCompletedRegistrationStatuses(env));
-  await runMaintenance('retry_stale_processing', () => retryStaleProcessing(env));
+  // The stale registration update is the only maintenance step required to
+  // make the FIFO queue recoverable. The remaining cleanup queries can scan
+  // large tables; run them best-effort after the queue has been dispatched so
+  // they can never hold the registration lease or the scheduled event open.
+  const deferredMaintenance = [
+    ['repair_orphaned_maps', () => repairOrphanedRegisteredUploadMaps(env)],
+    ['clear_resolved_statuses', () => clearResolvedRegistrationStatuses(env)],
+    ['clear_old_statuses', () => clearOldCompletedRegistrationStatuses(env)],
+    ['retry_stale_processing', () => retryStaleProcessing(env)],
+  ] as const;
+  for (const [name, operation] of deferredMaintenance) {
+    const task = runMaintenance(name, operation);
+    if (waitUntil) {
+      // Do not register these promises with the scheduled execution context;
+      // a slow cleanup must not suppress the next cron invocation.
+      void task;
+    } else {
+      await task;
+    }
+  }
 
   const configuredRegisterBatchSize = getNumber(env.REGISTER_BATCH_SIZE, 2, {
     min: 1,
