@@ -249,6 +249,11 @@ export default function MediaGrid({
         duration={0.45}
         staggerDelay={0.015}
         distanceOffset={40}
+        // Keep cards visible while their images decode. A zero-opacity
+        // entrance left a black grid when the first animation frame was
+        // interrupted by a cold image request; the directional scale still
+        // provides motion without hiding the content.
+        fade={false}
         animateOnFirstLoadOnly={animateFirstLoadOnly}
         staggerOnFirstLoadOnly={staggerOnFirstLoadOnly}
         onAnimationComplete={onAnimationComplete}
