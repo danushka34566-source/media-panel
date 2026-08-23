@@ -98,6 +98,13 @@ import {
   type FullVideoTelemetry,
 } from './full-video-playback';
 import { getFullVideoBridgeUrl } from './full-video-bridge';
+import {
+  clearDockedVideo,
+  getDockedVideo,
+  setDetailVideoPageActive,
+  setDockedVideo,
+  type DockedVideoState,
+} from './video-mini-player';
 
 const SWIPE_NAVIGATION_DISTANCE = 50;
 const SWIPE_NAVIGATION_VERTICAL_TOLERANCE = 70;
@@ -262,6 +269,8 @@ export default function MediaLarge({
   const { videoPreviewMode = 'smart' } = useAppState();
   const [isPageResuming, setIsPageResuming] = useState(false);
   const [isFullVideoPlaying, setIsFullVideoPlaying] = useState(false);
+  const [dockedResumeState, setDockedResumeState] =
+    useState<DockedVideoState>();
   const [isPreparingFullVideo, setIsPreparingFullVideo] = useState(false);
   const [fullVideoDeliveryUrl, setFullVideoDeliveryUrl] = useState<string>();
   const [preparedFullVideoDownloads, setPreparedFullVideoDownloads] = useState<Record<string, {
@@ -283,6 +292,18 @@ export default function MediaLarge({
   const [isFloatingVideo, setIsFloatingVideo] = useState(false);
   const [floatingVideoHeight, setFloatingVideoHeight] = useState<number>();
   const floatingVideoSentinelRef = useRef<HTMLDivElement>(null);
+  const detailPlaybackRef = useRef<{
+    isFullVideoPlaying: boolean
+    isMainVideoActuallyPlaying: boolean
+    sourceUrl?: string
+    currentTime: number
+    muted: boolean
+  }>({
+    isFullVideoPlaying: false,
+    isMainVideoActuallyPlaying: false,
+    currentTime: 0,
+    muted: false,
+  });
   const [hasTextTracks, setHasTextTracks] = useState(false);
   const [captionsOn, setCaptionsOn] = useState(false);
   const [activeCaptionIndex, setActiveCaptionIndex] = useState(0);
@@ -337,6 +358,7 @@ export default function MediaLarge({
     setReadyPreviewSrc(undefined);
     setReadyPreviewActivationId(undefined);
     setShouldUseCompatibilityPlayback(false);
+    setDockedResumeState(undefined);
     // A route/media change must never carry a docked player state into the
     // next card.
     setIsFloatingVideo(false);
@@ -553,6 +575,83 @@ export default function MediaLarge({
   const fullVideoCompatibilityUrl = compatibilityPlaybackUrl
     ? getFullVideoBridgeUrl(compatibilityPlaybackUrl)
     : undefined;
+
+  // Keep the latest playback position outside React state so a route change
+  // can hand the active video to the global mini player before this card
+  // unmounts. This also avoids a render on every timeupdate event.
+  useEffect(() => {
+    const video = videoRef.current;
+    detailPlaybackRef.current = {
+      isFullVideoPlaying,
+      isMainVideoActuallyPlaying,
+      sourceUrl: fullVideoSourceUrl,
+      currentTime: video?.currentTime ?? 0,
+      muted: video?.muted ?? false,
+    };
+  }, [
+    fullVideoSourceUrl,
+    isFullVideoPlaying,
+    isMainVideoActuallyPlaying,
+  ]);
+
+  // Detail pages own the full-video element. When the page is left, transfer
+  // its playback state to the site-wide mini player; when opened from that
+  // player, claim the matching state and restore the exact position.
+  useEffect(() => {
+    if (!broadcastDetailVideoPlayback || !isVideo) { return; }
+    setDetailVideoPageActive(true);
+    const docked = getDockedVideo();
+    if (docked?.mediaId === photo.id) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setDockedResumeState(docked);
+      clearDockedVideo();
+      setIsFullVideoPlaying(true);
+      setFullVideoDeliveryUrl(docked.sourceUrl);
+    }
+    return () => {
+      const playback = detailPlaybackRef.current;
+      setDetailVideoPageActive(false);
+      if (
+        playback.isFullVideoPlaying &&
+        playback.sourceUrl &&
+        Number.isFinite(playback.currentTime)
+      ) {
+        setDockedVideo({
+          mediaId: photo.id,
+          title: titleForMedia(photo),
+          detailPath: pathForMedia({ photo }),
+          sourceUrl: playback.sourceUrl,
+          fallbackUrl: fullVideoCompatibilityUrl,
+          posterUrl: getMediaPosterUrl(photo),
+          currentTime: Math.max(0, playback.currentTime),
+          wasPlaying: playback.isMainVideoActuallyPlaying,
+          muted: playback.muted,
+        });
+      }
+    };
+  }, [
+    broadcastDetailVideoPlayback,
+    fullVideoCompatibilityUrl,
+    isVideo,
+    photo,
+  ]);
+
+  useEffect(() => {
+    if (!dockedResumeState || !isFullVideoPlaying) { return; }
+    const video = videoRef.current;
+    if (!video) { return; }
+    const restore = () => {
+      try { video.currentTime = Math.max(0, dockedResumeState.currentTime); }
+      catch { /* media may still be switching sources */ }
+      video.muted = dockedResumeState.muted;
+      if (dockedResumeState.wasPlaying) {
+        void VideoPlaybackManager.requestPlay(video).catch(() => undefined);
+      }
+    };
+    video.addEventListener('loadedmetadata', restore, { once: true });
+    if (video.readyState >= 1) { restore(); }
+    return () => video.removeEventListener('loadedmetadata', restore);
+  }, [dockedResumeState, fullVideoSourceUrl, isFullVideoPlaying]);
 
   const warmFullVideoDownload = useCallback((sourceUrl = photo.url) => {
     if (!isVideo || !sourceUrl) { return; }

@@ -29,6 +29,7 @@ import Script from 'next/script';
 import DeferredGlobalFeatures from '@/app/DeferredGlobalFeatures';
 import IdleSessionLogout from '@/auth/IdleSessionLogout';
 import PageResumeRecovery from '@/app/PageResumeRecovery';
+import VideoMiniPlayer from '@/media/VideoMiniPlayer';
 
 import '../tailwind.css';
 import { Geist } from "next/font/google";
@@ -139,6 +140,7 @@ export default async function RootLayout({
                 <SpeedInsights debug={false} />
                 <MediaEscapeHandler />
                 <PageResumeRecovery />
+                <VideoMiniPlayer />
                 <ToasterWithThemes />
               </ThemeProvider>
             </SelectMediaProvider>
