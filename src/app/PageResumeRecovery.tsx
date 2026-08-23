@@ -8,7 +8,7 @@ import { useEffect, useRef } from 'react';
 // this recovery at the root so it covers public, admin, and detail pages.
 export default function PageResumeRecovery() {
   const router = useRouter();
-  const hiddenAtRef = useRef<number>();
+  const hiddenAtRef = useRef<number | undefined>(undefined);
   const recoveringRef = useRef(false);
 
   useEffect(() => {

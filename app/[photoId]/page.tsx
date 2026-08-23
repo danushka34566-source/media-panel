@@ -16,9 +16,6 @@ import { cache } from 'react';
 import { staticallyGenerateMediaIfConfigured } from '@/app/static';
 
 export const maxDuration = 60;
-// Keep detail payloads warm for adjacent navigation. Media mutations call
-// revalidateMedia, so this short ISR window never delays an explicit update.
-export const revalidate = 60;
 
 const getMediaNearIdCachedCached = cache(async (photoId: string) => {
   // The near-id query already returns the primary item. Avoid the old
