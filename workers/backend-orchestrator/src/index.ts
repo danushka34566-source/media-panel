@@ -257,7 +257,7 @@ const GENERATED_MEDIA_SUFFIX_REGEX =
 const STALE_REGISTRATION_ERROR_MESSAGE =
   'Previous registration attempt stalled; queued for retry';
 const MISSING_UPLOAD_ERROR_PREFIX = 'Upload not found in storage';
-const WORKER_BUILD_ID = 'v105';
+const WORKER_BUILD_ID = 'v106';
 // A scheduled Worker must finish promptly. Drive copies can become visible
 // asynchronously, so persist the in-flight state and check again on the next
 // minute instead of polling long enough to lose the registration lease.
@@ -1594,6 +1594,36 @@ const listStoragePage = async (
     nextContinuationToken: isTruncated && nextTokenMatch?.[1]
       ? decodeXmlEntities(nextTokenMatch[1])
       : undefined,
+  };
+};
+
+const listRecentStoragePage = async (
+  env: Env,
+  pageSize = REGISTRATION_DISCOVERY_PAGE_SIZE,
+): Promise<StorageListPage> => {
+  if (!isDriveStorageEnabled(env)) {
+    return { objects: [] };
+  }
+  const listUrl = new URL(`${driveApiBaseUrl(env)}/api/v1/storage/recent`);
+  listUrl.searchParams.set('projectId', env.DRIVE_STORAGE_PROJECT_ID || '');
+  listUrl.searchParams.set('bucket', env.DRIVE_STORAGE_BUCKET || '');
+  listUrl.searchParams.set('limit', String(Math.min(pageSize, 100)));
+  const response = await fetch(listUrl.toString(), {
+    headers: driveHeaders(env),
+    signal: AbortSignal.timeout(REGISTRATION_STORAGE_TIMEOUT_MS),
+  });
+  if (!response.ok) {
+    throw new Error(`Drive recent list failed (${response.status})`);
+  }
+  const data = await response.json() as {
+    objects?: Array<{ key: string, uploadedAt?: string | null, size?: number }>
+  };
+  return {
+    objects: (data.objects || []).map(object => ({
+      key: object.key,
+      uploaded: object.uploadedAt ? new Date(object.uploadedAt) : undefined,
+      size: typeof object.size === 'number' ? object.size : undefined,
+    })),
   };
 };
 
@@ -3378,13 +3408,34 @@ const runRegistrationDiscoveryPage = async (
   try {
     const cursor = await getRegistrationScanCursor(env);
     const page = await listStoragePage(env, cursor, pageSize);
-    const discovered = await discoverRegistrationPage(env, page.objects);
+    let recent: StorageListPage = { objects: [] };
+    if (isDriveStorageEnabled(env)) {
+      try {
+        recent = await listRecentStoragePage(env, pageSize);
+      } catch (error) {
+        // The recent endpoint is an acceleration path. Keep the durable
+        // cursor scan healthy if an older Drive deployment has not picked up
+        // the endpoint yet; the next page still guarantees eventual coverage.
+        console.warn(
+          'Drive recent storage discovery unavailable; continuing cursor scan',
+          error,
+        );
+      }
+    }
+    const objectsByKey = new Map<string, R2ObjectLike>();
+    page.objects.forEach(object => objectsByKey.set(object.key, object));
+    recent.objects.forEach(object => objectsByKey.set(object.key, object));
+    const discovered = await discoverRegistrationPage(
+      env,
+      Array.from(objectsByKey.values()),
+    );
     await setRegistrationScanCursor(env, page.nextContinuationToken);
     console.log(JSON.stringify({
       category: 'registration',
       event: 'storage_discovery_page_scanned',
       status: 'success',
       pageSize: page.objects.length,
+      recentPageSize: recent.objects.length,
       discovered,
       hasNextPage: Boolean(page.nextContinuationToken),
     }));
