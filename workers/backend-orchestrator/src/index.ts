@@ -142,13 +142,19 @@ const getRuntimeProcessingSettings = async (env: Env) => {
   const defaults = getDefaultRuntimeProcessingSettings(env);
   try {
     const sql = sqlForEnv(env);
-    await sql`
-      CREATE TABLE IF NOT EXISTS processing_configuration (
-        key TEXT PRIMARY KEY,
-        value TEXT NOT NULL,
-        updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
-      )
-    `;
+    // Cron invocations on the Workers Free plan have only 10 ms of CPU.
+    // The configuration table is created by the panel/manual path; doing a
+    // DDL round-trip on every fresh scheduled isolate can consume the entire
+    // budget before the registration queue is claimed.
+    if (env.REGISTRATION_SCHEDULED !== '1') {
+      await sql`
+        CREATE TABLE IF NOT EXISTS processing_configuration (
+          key TEXT PRIMARY KEY,
+          value TEXT NOT NULL,
+          updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+        )
+      `;
+    }
     const rows = await sql`SELECT key, value FROM processing_configuration` as
       unknown as { key: string, value: string }[];
     const values = Object.fromEntries(rows.map(row => [row.key, row.value]));
@@ -260,7 +266,7 @@ const GENERATED_MEDIA_SUFFIX_REGEX =
 const STALE_REGISTRATION_ERROR_MESSAGE =
   'Previous registration attempt stalled; queued for retry';
 const MISSING_UPLOAD_ERROR_PREFIX = 'Upload not found in storage';
-const WORKER_BUILD_ID = 'v94';
+const WORKER_BUILD_ID = 'v95';
 // A scheduled Worker must finish promptly. Drive copies can become visible
 // asynchronously, so persist the in-flight state and check again on the next
 // minute instead of polling long enough to lose the registration lease.
@@ -1668,6 +1674,7 @@ type MediaDeletionQueueRow = {
 
 let mediaDeletionQueueTableReady: Promise<void> | undefined;
 const ensureMediaDeletionQueueTable = async (env: Env) => {
+  if (env.REGISTRATION_SCHEDULED === '1') return;
   if (!mediaDeletionQueueTableReady) {
     const sql = sqlForEnv(env);
     mediaDeletionQueueTableReady = sql`
@@ -1988,6 +1995,12 @@ const getDeletionQueueCounts = async (env: Env) => {
 
 let lastKnownQueuedDeletionPrefixes = new Set<string>();
 const getQueuedDeletionPrefixes = async (env: Env) => {
+  // Deletion is handled by the authenticated maintenance route. A queue
+  // read/DDL check competes with the registration claim on the 10 ms Free
+  // cron budget and is not needed to register unrelated objects.
+  if (env.REGISTRATION_SCHEDULED === '1') {
+    return new Set(lastKnownQueuedDeletionPrefixes);
+  }
   try {
     await ensureMediaDeletionQueueTable(env);
     const sql = sqlForEnv(env);
@@ -2438,6 +2451,7 @@ const findReadyRegistrationKeys = async (
 
 let uploadRegistrationHintsTableReady: Promise<void> | undefined;
 const ensureUploadRegistrationHintsTable = async (env: Env) => {
+  if (env.REGISTRATION_SCHEDULED === '1') return;
   if (!uploadRegistrationHintsTableReady) {
     const sql = sqlForEnv(env);
     uploadRegistrationHintsTableReady = sql`
@@ -2637,6 +2651,7 @@ const clearTrackedRegistration = async (
 
 let registrationStatusTableReady: Promise<void> | undefined;
 const ensureRegistrationStatusTable = async (env: Env) => {
+  if (env.REGISTRATION_SCHEDULED === '1') return;
   if (!registrationStatusTableReady) {
     const sql = sqlForEnv(env);
     registrationStatusTableReady = (async () => {
@@ -3158,6 +3173,7 @@ const retryStaleProcessing = async (env: Env) => {
 
 let registeredUploadFileMapTableReady: Promise<void> | undefined;
 const ensureRegisteredUploadFileMapTable = async (env: Env) => {
+  if (env.REGISTRATION_SCHEDULED === '1') return;
   if (!registeredUploadFileMapTableReady) {
     const sql = sqlForEnv(env);
     registeredUploadFileMapTableReady = sql`
@@ -3283,6 +3299,7 @@ const upsertRegisteredUploadFileMap = async (
 
 let scanLeaseTableReady: Promise<void> | undefined;
 const ensureScanLeaseTable = async (env: Env) => {
+  if (env.REGISTRATION_SCHEDULED === '1') return;
   if (!scanLeaseTableReady) {
     const sql = sqlForEnv(env);
     scanLeaseTableReady = sql`
@@ -3439,6 +3456,7 @@ const startScanLeaseHeartbeat = (env: Env, leaseToken: string) => {
 
 let registrationScanCursorTableReady: Promise<void> | undefined;
 const ensureRegistrationScanCursorTable = async (env: Env) => {
+  if (env.REGISTRATION_SCHEDULED === '1') return;
   if (!registrationScanCursorTableReady) {
     const sql = sqlForEnv(env);
     registrationScanCursorTableReady = sql`
@@ -3752,7 +3770,12 @@ const scanAndRegisterWithLease = async (
       }).catch(() => undefined));
     }
   };
-  await runMaintenance('clear_stale_statuses', () => clearStaleRegistrationStatuses(env));
+  // Stale claims are reselected by the FIFO pass itself. Defer the three
+  // broad recovery UPDATEs to the manual maintenance route on scheduled
+  // Free-plan invocations; they can consume the entire 10 ms CPU allowance.
+  if (env.REGISTRATION_SCHEDULED !== '1') {
+    await runMaintenance('clear_stale_statuses', () => clearStaleRegistrationStatuses(env));
+  }
   // The stale registration update is the only maintenance step required to
   // make the FIFO queue recoverable. The remaining cleanup queries can scan
   // large tables; run them best-effort after the queue has been dispatched so
@@ -4464,7 +4487,7 @@ const scanAndRegisterWithLease = async (
     if (batch.length === 0) { break; }
   }
 
-  if (deferredFileMaps.length > 0) {
+  if (deferredFileMaps.length > 0 && env.REGISTRATION_SCHEDULED !== '1') {
     // A scheduled invocation must keep housekeeping bounded independently of
     // the registration scan. One delete is enough to make steady progress;
     // manual maintenance may use the larger cleanup limit.
@@ -5464,18 +5487,10 @@ export default {
       // disable the scheduled registration run.
       console.warn('Unable to log scheduled registration trigger', error);
     }));
-    // Cleanup is independent of registration. It can hit a slow database or
-    // storage operation, so it must never hold the scheduled registration
-    // path hostage. Keep it alive separately and start the FIFO scan now.
-    const deletionDrain = startDeletionDrain(scheduledEnv);
-    if (deletionDrain.started) {
-      ctx.waitUntil(deletionDrain.promise.catch((error) => {
-        console.warn(
-          'Deletion queue drain failed; continuing scheduled registration scan',
-          error,
-        );
-      }));
-    }
+    // Keep destructive deletion work on the authenticated maintenance route.
+    // Starting it beside registration still consumes the same 10 ms Free-plan
+    // cron budget and can terminate the registration invocation before its
+    // first queue claim. Deletion remains resumable through /deletions/run.
     // A Supabase settings socket can remain pending after its own query
     // timeout. Do not await that socket in the scheduled handler: one stuck
     // lookup previously allowed triggers to be logged while no registration
@@ -5556,7 +5571,7 @@ export default {
     dispatch(fallbackSettings);
     ctx.waitUntil((async () => {
       try {
-        const settings = await getRuntimeProcessingSettingsForTrigger(env);
+        const settings = await getRuntimeProcessingSettingsForTrigger(scheduledEnv);
         dispatch(settings);
       } catch (error) {
         console.warn('Scheduled settings lookup failed; dispatching fallback', error);

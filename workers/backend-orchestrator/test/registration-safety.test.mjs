@@ -307,15 +307,13 @@ test('Supabase scans use a fresh bounded client and retry a dropped connection',
   assert.doesNotMatch(workerSource, /new Pool\(/);
 });
 
-test('a deletion queue drain cannot block the scheduled registration scan', () => {
+test('scheduled registration does not compete with the deletion queue', () => {
   const scheduledStart = workerSource.indexOf('async scheduled(');
   const scheduledEnd = workerSource.indexOf('async fetch(', scheduledStart);
   const source = workerSource.slice(scheduledStart, scheduledEnd);
 
-  assert.match(source, /const deletionDrain = startDeletionDrain\(scheduledEnv\)/);
-  assert.match(source, /ctx\.waitUntil\(deletionDrain\.promise\.catch/);
-  assert.doesNotMatch(source, /await startDeletionDrain/);
-  assert.match(source, /continuing scheduled registration scan/);
+  assert.match(source, /Deletion remains resumable through \/deletions\/run/);
+  assert.doesNotMatch(source, /const deletionDrain = startDeletionDrain\(scheduledEnv\)/);
   assert.match(source, /startScan\([\s\S]*?envWithRuntimeSettings\(scheduledEnv, settings\)[\s\S]*?shareInFlight: false/);
   assert.match(workerSource, /ctx\.waitUntil\(drain\.promise\.catch/);
   assert.match(workerSource, /continuing registration with cached prefixes/);
