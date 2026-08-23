@@ -4,7 +4,6 @@ import {
   getNextMedia,
   getPreviousMedia,
 } from '.';
-import AnimateItems from '@/components/AnimateItems';
 import { MediaSetCategory } from '../category';
 import MediaLarge from './MediaLarge';
 import AppGrid from '@/components/AppGrid';
@@ -187,14 +186,8 @@ export default function MediaDetailPage({
           hasAiTextGeneration={AI_CONTENT_GENERATION_ENABLED}
         />}
       />
-      <AnimateItems
-        className="md:mb-8 transform-gpu will-change-transform"
-        animateFromAppState
-        fade={false}
-        duration={0.22}
-        distanceOffset={12}
-        staggerDelay={0}
-        items={[<MediaLarge
+      <div className="md:mb-8" key={photo.id}>
+        <MediaLarge
           key={photo.id}
           photo={photo}
           album={album}
@@ -225,8 +218,8 @@ export default function MediaDetailPage({
           showAdminKeyCommands
           swipePreviousPath={swipePreviousPath}
           swipeNextPath={swipeNextPath}
-        />]}
-      />
+        />
+      </div>
       <AppGrid
         contentMain={<MediaGrid
           photos={photosGrid ?? photos}

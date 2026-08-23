@@ -337,6 +337,10 @@ export default function MediaLarge({
     setReadyPreviewSrc(undefined);
     setReadyPreviewActivationId(undefined);
     setShouldUseCompatibilityPlayback(false);
+    // A route/media change must never carry a docked player state into the
+    // next card.
+    setIsFloatingVideo(false);
+    setFloatingVideoHeight(undefined);
   }, [photo.id]);
 
   // Warm the adjacent route payloads while the current media is visible. The
