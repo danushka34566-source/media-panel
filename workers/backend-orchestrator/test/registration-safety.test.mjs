@@ -205,7 +205,7 @@ test('direct-upload discovery is isolated from the registration hot path', () =>
   const scanStart = workerSource.indexOf('const scanAndRegisterWithLease');
   const scanEnd = workerSource.indexOf('const scanAndRegister =', scanStart);
   assert.doesNotMatch(workerSource.slice(scanStart, scanEnd), /runRegistrationDiscoveryPage\(/);
-  assert.match(workerSource, /REGISTRATION_DISCOVERY_ONLY !== '1'/);
+  assert.match(workerSource, /if \(env\.REGISTRATION_SCHEDULED === '1'\)/);
 });
 
 test('Drive registration I/O is deadline-bound so a scan lease cannot stick forever', () => {

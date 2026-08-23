@@ -257,7 +257,7 @@ const GENERATED_MEDIA_SUFFIX_REGEX =
 const STALE_REGISTRATION_ERROR_MESSAGE =
   'Previous registration attempt stalled; queued for retry';
 const MISSING_UPLOAD_ERROR_PREFIX = 'Upload not found in storage';
-const WORKER_BUILD_ID = 'v104';
+const WORKER_BUILD_ID = 'v105';
 // A scheduled Worker must finish promptly. Drive copies can become visible
 // asynchronously, so persist the in-flight state and check again on the next
 // minute instead of polling long enough to lose the registration lease.
@@ -275,11 +275,11 @@ export const REGISTRATION_SCAN_PAGE_SIZE = 100;
 // Discovery is intentionally isolated from the one-row registration cron.
 // A small page keeps a direct-upload inventory pass below the Free-plan CPU
 // budget without ever delaying a durable registration claim.
-// Drive's paged list is bounded at 1,000 objects. Keep discovery at that API
-// limit so a normal inventory is covered in one isolated invocation while the
-// durable continuation cursor still makes larger inventories resumable. This
-// does not change the one-claim registration hot path or its CPU budget.
-export const REGISTRATION_DISCOVERY_PAGE_SIZE = 1000;
+// Keep the discovery SQL payload small enough for the Supabase pooler while
+// the durable continuation cursor makes large inventories resumable. The
+// discovery cron advances one bounded page at a time; it never shares the
+// registration claim/CPU path.
+export const REGISTRATION_DISCOVERY_PAGE_SIZE = 25;
 export const REGISTRATION_DISCOVERY_CRON = '*/2 * * * *';
 // A Drive copy can legitimately consume most of a free Worker invocation
 // while its destination becomes visible. One attempt per scan keeps the
@@ -2011,10 +2011,7 @@ const getQueuedDeletionPrefixes = async (env: Env) => {
   // cron budget and is not needed to register unrelated objects. The
   // discovery-only cron is deliberately separate from registration, so it
   // can refresh this protection before inserting new detected rows.
-  if (
-    env.REGISTRATION_SCHEDULED === '1' &&
-    env.REGISTRATION_DISCOVERY_ONLY !== '1'
-  ) {
+  if (env.REGISTRATION_SCHEDULED === '1') {
     return new Set(lastKnownQueuedDeletionPrefixes);
   }
   try {
@@ -3383,9 +3380,23 @@ const runRegistrationDiscoveryPage = async (
     const page = await listStoragePage(env, cursor, pageSize);
     const discovered = await discoverRegistrationPage(env, page.objects);
     await setRegistrationScanCursor(env, page.nextContinuationToken);
+    console.log(JSON.stringify({
+      category: 'registration',
+      event: 'storage_discovery_page_scanned',
+      status: 'success',
+      pageSize: page.objects.length,
+      discovered,
+      hasNextPage: Boolean(page.nextContinuationToken),
+    }));
     return { discovered, pageSize: page.objects.length };
   } catch (error) {
-    console.warn('Scheduled registration discovery page failed', error);
+    const message = error instanceof Error
+      ? `${error.name}: ${error.message}`
+      : String(error ?? 'unknown error');
+    console.warn(
+      `Scheduled registration discovery page failed: ${message}`,
+      error instanceof Error ? error.stack : undefined,
+    );
     return { discovered: 0, pageSize: 0 };
   }
 };
@@ -6000,11 +6011,6 @@ export default {
               pageSize: discovery.pageSize,
             }));
           }
-          // Refresh the DB-backed settings only on this isolated maintenance
-          // invocation. Registration never waits for a settings socket.
-          await getRuntimeProcessingSettings(scheduledEnv).catch(error => {
-            console.warn('Discovery settings refresh failed', error);
-          });
         } catch (error) {
           console.warn('Scheduled registration discovery failed', error);
         }
