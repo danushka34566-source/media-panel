@@ -266,7 +266,7 @@ const GENERATED_MEDIA_SUFFIX_REGEX =
 const STALE_REGISTRATION_ERROR_MESSAGE =
   'Previous registration attempt stalled; queued for retry';
 const MISSING_UPLOAD_ERROR_PREFIX = 'Upload not found in storage';
-const WORKER_BUILD_ID = 'v95';
+const WORKER_BUILD_ID = 'v96';
 // A scheduled Worker must finish promptly. Drive copies can become visible
 // asynchronously, so persist the in-flight state and check again on the next
 // minute instead of polling long enough to lose the registration lease.
@@ -2199,6 +2199,30 @@ const getMediaRows = async (env: Env) => {
   `) as unknown as MediaRow[];
 };
 
+const getMediaRowsByIds = async (env: Env, ids: string[]) => {
+  const uniqueIds = Array.from(new Set(ids.filter(Boolean)));
+  if (uniqueIds.length === 0) { return [] as MediaRow[]; }
+  const sql = sqlForEnv(env);
+  return (await sql`
+    SELECT id, url, extension, poster_url, preview_url, transcode_status
+    FROM media
+    WHERE id = ANY(${uniqueIds})
+  `) as unknown as MediaRow[];
+};
+
+const getMediaRowsByUrls = async (env: Env, urls: string[]) => {
+  const uniqueUrls = Array.from(new Set(urls.filter(Boolean)));
+  if (uniqueUrls.length === 0) { return [] as MediaRow[]; }
+  const sql = sqlForEnv(env);
+  return (await sql`
+    SELECT id, url, extension, poster_url, preview_url, transcode_status
+    FROM media
+    WHERE url = ANY(${uniqueUrls})
+      OR poster_url = ANY(${uniqueUrls})
+      OR preview_url = ANY(${uniqueUrls})
+  `) as unknown as MediaRow[];
+};
+
 const PROCESSING_SOURCE_MISSING_ERROR =
   'Source file is missing from storage. Upload a replacement to retry.';
 
@@ -2483,6 +2507,9 @@ const getUploadRegistrationHints = async (env: Env, urls: string[]) => {
   if (urls.length === 0) {
     return new Map<string, UploadRegistrationHintRow>();
   }
+  if (env.REGISTRATION_SCHEDULED === '1') {
+    return new Map<string, UploadRegistrationHintRow>();
+  }
   // Hints are optional metadata. Never let a Supabase pooler drop block the
   // registration queue; storage keys are a complete fallback for filenames.
   if (env.REGISTRATION_HINT_LOOKUPS_ENABLED !== '1') {
@@ -2549,7 +2576,10 @@ const getUploadRegistrationHints = async (env: Env, urls: string[]) => {
 };
 
 const getPendingUploadRegistrationHints = async (env: Env) => {
-  if (env.REGISTRATION_HINT_LOOKUPS_ENABLED !== '1') {
+  if (
+    env.REGISTRATION_SCHEDULED === '1' ||
+    env.REGISTRATION_HINT_LOOKUPS_ENABLED !== '1'
+  ) {
     return [];
   }
   try {
@@ -2612,6 +2642,7 @@ const clearUploadRegistrationHint = async (env: Env, url: string) => {
 };
 
 const clearUploadRegistrationHints = async (env: Env, urls: string[]) => {
+  if (env.REGISTRATION_SCHEDULED === '1') return;
   const uniqueUrls = Array.from(new Set(urls.filter(Boolean)));
   if (uniqueUrls.length === 0) { return; }
   await ensureUploadRegistrationHintsTable(env);
@@ -2782,9 +2813,51 @@ const clearResolvedRegistrationStatuses = async (env: Env) => {
   `;
 };
 
-const getRegistrationStatusRows = async (env: Env) => {
+const getRegistrationStatusRows = async (env: Env, limit?: number) => {
   await ensureRegistrationStatusTable(env);
   const sql = sqlForEnv(env);
+  if (limit !== undefined) {
+    return (await sql`
+      SELECT
+        url,
+        file_name,
+        uploaded_at,
+        status,
+        source_url,
+        original_file_name,
+        title,
+        media_id,
+        extension,
+        error_message,
+        updated_at
+      FROM worker_registration_status
+      WHERE status='detected'
+        OR (
+          status='registering'
+          AND updated_at < now() - (
+            ${String(getNumber(env.STALE_REGISTRATION_MINUTES, 15, {
+              min: 1,
+              max: 24 * 60,
+            }))} || ' minutes'
+          )::interval
+        )
+        OR (
+          status='error'
+          AND (
+            error_message IS NULL
+            OR error_message ILIKE '%timeout%'
+            OR error_message ILIKE '%connection terminated%'
+            OR error_message ILIKE '%connection reset%'
+            OR error_message LIKE 'Drive copy failed (5%'
+            OR error_message LIKE 'Drive copy not ready:%'
+            OR error_message LIKE 'Copied destination is not readable in storage:%'
+            OR error_message LIKE 'Copied destination size mismatch:%'
+          )
+        )
+      ORDER BY uploaded_at ASC NULLS LAST, updated_at ASC, url ASC
+      LIMIT ${Math.max(1, Math.min(Math.round(limit), 25))}
+    `) as unknown as RegistrationStatusRow[];
+  }
   return (await sql`
     SELECT
       url,
@@ -2799,6 +2872,107 @@ const getRegistrationStatusRows = async (env: Env) => {
       error_message,
       updated_at
     FROM worker_registration_status
+  `) as unknown as RegistrationStatusRow[];
+};
+
+// Atomically reserve exactly one eligible FIFO row. The claim itself is the
+// concurrency guard for scheduled work: fresh `registering` rows are excluded
+// so a slow copy can never fill the limit ahead of newly detected uploads.
+const claimRegistrationQueueRow = async (env: Env) => {
+  const sql = sqlForEnv(env);
+  const staleMinutes = getNumber(env.STALE_REGISTRATION_MINUTES, 15, {
+    min: 1,
+    max: 24 * 60,
+  });
+  const rows = await sql`
+    WITH candidate AS (
+      SELECT url
+      FROM worker_registration_status
+      WHERE status='detected'
+        OR (
+          status='registering'
+          AND updated_at < now() - (${String(staleMinutes)} || ' minutes')::interval
+        )
+        OR (
+          status='error'
+          AND (
+            error_message IS NULL
+            OR error_message ILIKE '%timeout%'
+            OR error_message ILIKE '%connection terminated%'
+            OR error_message ILIKE '%connection reset%'
+            OR error_message LIKE 'Drive copy failed (5%'
+            OR error_message LIKE 'Drive copy not ready:%'
+            OR error_message LIKE 'Copied destination is not readable in storage:%'
+            OR error_message LIKE 'Copied destination size mismatch:%'
+          )
+        )
+      ORDER BY uploaded_at ASC NULLS LAST, updated_at ASC, url ASC
+      LIMIT 1
+      FOR UPDATE SKIP LOCKED
+    )
+    UPDATE worker_registration_status AS status_row
+    SET status='registering', updated_at=now(), error_message=NULL
+    FROM candidate
+    WHERE status_row.url=candidate.url
+    RETURNING
+      status_row.url,
+      status_row.file_name,
+      status_row.uploaded_at,
+      status_row.status,
+      status_row.source_url,
+      status_row.original_file_name,
+      status_row.title,
+      status_row.media_id,
+      status_row.extension,
+      status_row.error_message,
+      status_row.updated_at
+  ` as unknown as RegistrationStatusRow[];
+  const claimed = rows[0];
+  // Process the row immediately in this invocation. It is persisted as
+  // `registering` for crash recovery, but represented as eligible in memory so
+  // the normal pending/batch selector does not defer its own claim.
+  if (claimed) {
+    return {
+      row: { ...claimed, status: 'detected' },
+      queueHasRows: true,
+    };
+  }
+  const state = await sql`
+    SELECT EXISTS (
+      SELECT 1
+      FROM worker_registration_status
+      WHERE status IN ('detected', 'registering')
+        OR (
+          status='error'
+          AND (
+            error_message IS NULL
+            OR error_message ILIKE '%timeout%'
+            OR error_message ILIKE '%connection terminated%'
+            OR error_message ILIKE '%connection reset%'
+            OR error_message LIKE 'Drive copy failed (5%'
+            OR error_message LIKE 'Drive copy not ready:%'
+            OR error_message LIKE 'Copied destination is not readable in storage:%'
+            OR error_message LIKE 'Copied destination size mismatch:%'
+          )
+        )
+    ) AS has_rows
+  ` as unknown as Array<{ has_rows: boolean }>;
+  return {
+    row: undefined,
+    queueHasRows: Boolean(state[0]?.has_rows),
+  };
+};
+
+const getRegistrationStatusRowsByUrls = async (env: Env, urls: string[]) => {
+  const uniqueUrls = Array.from(new Set(urls.filter(Boolean)));
+  if (uniqueUrls.length === 0) { return [] as RegistrationStatusRow[]; }
+  const sql = sqlForEnv(env);
+  return (await sql`
+    SELECT
+      url, file_name, uploaded_at, status, source_url, original_file_name,
+      title, media_id, extension, error_message, updated_at
+    FROM worker_registration_status
+    WHERE url = ANY(${uniqueUrls}) OR source_url = ANY(${uniqueUrls})
   `) as unknown as RegistrationStatusRow[];
 };
 
@@ -3207,6 +3381,34 @@ const getRegisteredUploadFileMapRows = async (env: Env) => {
      AND m.url=f.stored_url
     WHERE f.stored_url<>f.source_url
     ORDER BY f.updated_at ASC, f.media_id ASC
+  `) as unknown as Array<{
+    media_id: string
+    stored_url: string
+    source_url: string
+    updated_at: Date | string
+  }>;
+};
+
+const getRegisteredUploadFileMapRowsByUrls = async (env: Env, urls: string[]) => {
+  const uniqueUrls = Array.from(new Set(urls.filter(Boolean)));
+  if (uniqueUrls.length === 0) {
+    return [] as Array<{
+      media_id: string
+      stored_url: string
+      source_url: string
+      updated_at: Date | string
+    }>;
+  }
+  const sql = sqlForEnv(env);
+  await ensureRegisteredUploadFileMapTable(env);
+  return (await sql`
+    SELECT f.media_id, f.stored_url, f.source_url, f.updated_at
+    FROM registered_upload_file_map f
+    JOIN media m
+      ON m.id=f.media_id
+     AND m.url=f.stored_url
+    WHERE f.stored_url <> f.source_url
+      AND (f.stored_url = ANY(${uniqueUrls}) OR f.source_url = ANY(${uniqueUrls}))
   `) as unknown as Array<{
     media_id: string
     stored_url: string
@@ -3710,7 +3912,7 @@ const commitRegisteredMedia = async (
 
 const scanAndRegisterWithLease = async (
   env: Env,
-  leaseToken: string,
+  leaseToken: string | undefined,
   {
     waitUntil,
     assertLease,
@@ -3803,8 +4005,46 @@ const scanAndRegisterWithLease = async (
   let missingProcessingSources = 0;
   let passes = 0;
   const attemptedRegistrationKeys = new Set<string>();
-  const inventoryCursor = await getRegistrationScanCursor(env);
-  const listedObjectsPagePromise = listStoragePage(env, inventoryCursor);
+  const isScheduledRegistration = env.REGISTRATION_SCHEDULED === '1';
+  // On the Free plan, scheduled invocations have only 10 ms of CPU. Claim one
+  // durable FIFO row atomically instead of loading the full queue first.
+  const queueClaim = isScheduledRegistration
+    ? await claimRegistrationQueueRow(env)
+    : undefined;
+  const claimedRegistrationRow = queueClaim?.row;
+  const scheduledQueueRows = claimedRegistrationRow
+    ? [claimedRegistrationRow]
+    : undefined;
+  const hasScheduledQueue = Boolean(claimedRegistrationRow);
+  // A fresh in-flight row is already owned by another invocation. Do not fall
+  // through to the expensive storage-discovery path in that case; let its
+  // owner finish or let the stale-claim rule make it eligible later.
+  if (isScheduledRegistration && !hasScheduledQueue && queueClaim?.queueHasRows) {
+    return {
+      registered: 0,
+      registrationPasses: 0,
+      registrationRemaining: 0,
+      pendingVideos: 0,
+      missingProcessingSources: 0,
+      scanSkipped: false,
+    };
+  }
+  const inventoryCursor = (!isScheduledRegistration || !hasScheduledQueue)
+    ? await getRegistrationScanCursor(env)
+    : undefined;
+  const listedObjectsPagePromise = hasScheduledQueue
+    ? Promise.resolve({
+      objects: (scheduledQueueRows || []).map(row => {
+        const sourceUrl = trimToUndefined(row.source_url) || trimToUndefined(row.url) || '';
+        const sourceKey = sourceUrl ? keyFromStorageUrl(env, sourceUrl) : '';
+        return {
+          key: sourceKey,
+          uploaded: parseDateValue(row.uploaded_at),
+        };
+      }).filter(object => Boolean(object.key)),
+      nextContinuationToken: undefined,
+    } satisfies StorageListPage)
+    : listStoragePage(env, inventoryCursor);
   let inventoryCursorPersisted = false;
   let deferredFileMaps: Array<{
     media_id: string
@@ -3820,13 +4060,10 @@ const scanAndRegisterWithLease = async (
     // can terminate the scan before any item reaches `registering`.
     // Storage listing can overlap the first query, but database work remains
     // deliberately serial and bounded regardless of backlog size.
-    const rows = await getMediaRows(env);
-    const hintRows = await getPendingUploadRegistrationHints(env);
-    const registrationRows = await getRegistrationStatusRows(env);
-    const registeredFileMaps = await getRegisteredUploadFileMapRows(env);
-    deferredFileMaps = registeredFileMaps;
-    const queuedDeletionPrefixes = await getQueuedDeletionPrefixes(env);
     const storagePage = await listedObjectsPagePromise;
+    const queuedDeletionPrefixes = hasScheduledQueue
+      ? new Set<string>()
+      : await getQueuedDeletionPrefixes(env);
     const listedObjects = storagePage.objects.filter(object =>
       !Array.from(queuedDeletionPrefixes).some(prefix =>
         deletionKeyMatchesPrefix(object.key, prefix)));
@@ -3834,6 +4071,42 @@ const scanAndRegisterWithLease = async (
       listedObjects.map(object => [object.key, object]),
     );
     deferredObjectsByKey = objectsByKey;
+    const listedObjectUrls = listedObjects.map(object =>
+      urlForKey(env, object.key));
+    const hintRows = await getPendingUploadRegistrationHints(env);
+    const registrationRows = hasScheduledQueue
+      ? (scheduledQueueRows || [])
+      : isScheduledRegistration
+        ? await getRegistrationStatusRowsByUrls(env, listedObjectUrls)
+        : await getRegistrationStatusRows(env);
+    const queueCandidateIds = hasScheduledQueue
+      ? await Promise.all(registrationRows.map(async row => {
+        const existingId = trimToUndefined(row.media_id);
+        if (existingId) { return existingId; }
+        const sourceUrl = trimToUndefined(row.source_url) || trimToUndefined(row.url);
+        const sourceKey = sourceUrl ? keyFromStorageUrl(env, sourceUrl) : '';
+        return sourceKey
+          ? mediaIdForObject(env, sourceKey, parseDateValue(row.uploaded_at))
+          : undefined;
+      }))
+      : [];
+    // Keep collision protection for scheduled work without loading the whole
+    // media table. A targeted ID lookup preserves the existing idempotency
+    // behavior while keeping the query bounded by the queue slice.
+    const rows = hasScheduledQueue
+      ? await getMediaRowsByIds(
+        env,
+        queueCandidateIds.filter((id): id is string => Boolean(id)),
+      )
+      : isScheduledRegistration
+        ? await getMediaRowsByUrls(env, listedObjectUrls)
+        : await getMediaRows(env);
+    const registeredFileMaps = hasScheduledQueue
+      ? []
+      : isScheduledRegistration
+        ? await getRegisteredUploadFileMapRowsByUrls(env, listedObjectUrls)
+        : await getRegisteredUploadFileMapRows(env);
+    deferredFileMaps = registeredFileMaps;
     // The status table is the durable FIFO queue. Rehydrate queued source
     // objects that are outside this inventory page without listing the whole
     // bucket again; their size is fetched only if they are actually claimed.
@@ -3860,7 +4133,7 @@ const scanAndRegisterWithLease = async (
     if (pass === 0) {
       // A partial inventory cannot prove that an unrelated processing source
       // is missing. Only reconcile when one page is the complete inventory.
-      if (!inventoryCursor && !storagePage.nextContinuationToken) {
+      if (!hasScheduledQueue && !inventoryCursor && !storagePage.nextContinuationToken) {
         missingProcessingSources = await reconcileMissingProcessingSources(
           env,
           rows,
@@ -3879,7 +4152,7 @@ const scanAndRegisterWithLease = async (
       registrationRows,
     );
     const protectedRegistrationDestinationUrls = new Set<string>();
-    await Promise.all(registrationRows.map(async row => {
+    if (!hasScheduledQueue) await Promise.all(registrationRows.map(async row => {
       if (!trimToUndefined(row.media_id)) { return; }
       const sourceUrl = trimToUndefined(row.source_url) || trimToUndefined(row.url);
       if (!sourceUrl) { return; }
@@ -3931,11 +4204,13 @@ const scanAndRegisterWithLease = async (
       return !updatedAt ||
         now - updatedAt.getTime() >= staleRegistrationMinutes * 60 * 1000;
     };
-    const readyRegistrationKeys = await findReadyRegistrationKeys(
-      env,
-      registrationRows,
-      pendingObjectByKey,
-    );
+    const readyRegistrationKeys = hasScheduledQueue
+      ? new Set<string>()
+      : await findReadyRegistrationKeys(
+        env,
+        registrationRows,
+        pendingObjectByKey,
+      );
     if (readyRegistrationKeys.size > 0) {
       observe(logBackendActivity(env, {
         category: 'registration',
@@ -4095,7 +4370,7 @@ const scanAndRegisterWithLease = async (
     const pendingUploads = Array.from(pendingObjectByKey.values());
 
     await syncDetectedStatuses(env, pendingUploads, registrationRowsByUrl);
-    if (pass === 0 && !inventoryCursorPersisted) {
+    if (pass === 0 && !inventoryCursorPersisted && !hasScheduledQueue) {
       // Advance the cursor only after this page's detected rows are durable.
       // If the Worker is reclaimed earlier, the same page is safely retried.
       await setRegistrationScanCursor(
@@ -4128,7 +4403,7 @@ const scanAndRegisterWithLease = async (
     );
     for (const object of batch) {
       assertLease?.();
-      if (!await renewScanLease(env, leaseToken)) {
+      if (leaseToken && !await renewScanLease(env, leaseToken)) {
         throw new Error('Worker registration scan lease was lost');
       }
       attemptedRegistrationKeys.add(object.key);
@@ -4341,7 +4616,7 @@ const scanAndRegisterWithLease = async (
           sourceUrl,
           persistedSourceUrl,
         ].filter((url): url is string => Boolean(url));
-        await clearRegistrationTrackingAfterSuccess(env, {
+        const trackingCleanup = clearRegistrationTrackingAfterSuccess(env, {
           mediaId,
           urls: trackingUrls,
         }).catch(async error => {
@@ -4370,7 +4645,12 @@ const scanAndRegisterWithLease = async (
             });
           });
         });
-        await clearUploadRegistrationHints(env, [
+        if (waitUntil) {
+          waitUntil(trackingCleanup);
+        } else {
+          await trackingCleanup;
+        }
+        const hintCleanup = clearUploadRegistrationHints(env, [
           ...trackingUrls,
         ]).catch(error => {
           console.warn('Registration hint cleanup deferred after commit', {
@@ -4379,6 +4659,11 @@ const scanAndRegisterWithLease = async (
             error,
           });
         });
+        if (waitUntil) {
+          waitUntil(hintCleanup);
+        } else {
+          await hintCleanup;
+        }
         observe(logBackendActivity(env, {
           category: 'registration',
           event: 'media_registered',
@@ -4527,7 +4812,9 @@ const scanAndRegisterWithLease = async (
     registered,
     registrationPasses: passes,
     registrationRemaining,
-    pendingVideos: await countPendingVideos(env),
+    // The scheduled queue path must not spend another fresh Postgres
+    // connection on a cosmetic processing count after the registration work.
+    pendingVideos: isScheduledRegistration ? 0 : await countPendingVideos(env),
     missingProcessingSources,
     scanSkipped: false,
   };
@@ -4537,8 +4824,14 @@ const scanAndRegister = async (
   env: Env,
   { waitUntil }: { waitUntil?: (promise: Promise<unknown>) => void } = {},
 ) => {
-  const leaseToken = await acquireScanLease(env);
-  if (!leaseToken) {
+  // Scheduled scans use the atomic row claim as their concurrency guard. The
+  // global lease would add three more fresh Postgres clients around the claim
+  // and consume the same 10 ms CPU budget. Manual scans retain the lease.
+  const scheduledRegistration = env.REGISTRATION_SCHEDULED === '1';
+  const leaseToken = scheduledRegistration
+    ? undefined
+    : await acquireScanLease(env);
+  if (!scheduledRegistration && !leaseToken) {
     return {
       registered: 0,
       registrationPasses: 0,
@@ -4554,23 +4847,29 @@ const scanAndRegister = async (
       Date.now() + SCHEDULED_SCAN_DEADLINE_MS,
     ),
   };
-  const leaseHeartbeat = startScanLeaseHeartbeat(env, leaseToken);
+  const leaseHeartbeat = leaseToken
+    ? startScanLeaseHeartbeat(env, leaseToken)
+    : undefined;
   try {
     return await scanAndRegisterWithLease(scanEnv, leaseToken, {
       waitUntil,
       assertLease: () => {
-        if (leaseHeartbeat.isLost()) {
+        if (leaseHeartbeat?.isLost()) {
           throw new Error('Worker registration scan lease was lost');
         }
       },
     });
   } finally {
-    await leaseHeartbeat.stop().catch(error => {
-      console.warn('Failed to stop worker scan lease heartbeat', error);
-    });
-    await releaseScanLease(env, leaseToken).catch(error => {
-      console.warn('Failed to release worker scan lease', error);
-    });
+    if (leaseHeartbeat) {
+      await leaseHeartbeat.stop().catch(error => {
+        console.warn('Failed to stop worker scan lease heartbeat', error);
+      });
+    }
+    if (leaseToken) {
+      await releaseScanLease(env, leaseToken).catch(error => {
+        console.warn('Failed to release worker scan lease', error);
+      });
+    }
   }
 };
 
