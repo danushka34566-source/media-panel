@@ -257,7 +257,7 @@ const GENERATED_MEDIA_SUFFIX_REGEX =
 const STALE_REGISTRATION_ERROR_MESSAGE =
   'Previous registration attempt stalled; queued for retry';
 const MISSING_UPLOAD_ERROR_PREFIX = 'Upload not found in storage';
-const WORKER_BUILD_ID = 'v103';
+const WORKER_BUILD_ID = 'v104';
 // A scheduled Worker must finish promptly. Drive copies can become visible
 // asynchronously, so persist the in-flight state and check again on the next
 // minute instead of polling long enough to lose the registration lease.
@@ -275,7 +275,11 @@ export const REGISTRATION_SCAN_PAGE_SIZE = 100;
 // Discovery is intentionally isolated from the one-row registration cron.
 // A small page keeps a direct-upload inventory pass below the Free-plan CPU
 // budget without ever delaying a durable registration claim.
-export const REGISTRATION_DISCOVERY_PAGE_SIZE = 25;
+// Drive's paged list is bounded at 1,000 objects. Keep discovery at that API
+// limit so a normal inventory is covered in one isolated invocation while the
+// durable continuation cursor still makes larger inventories resumable. This
+// does not change the one-claim registration hot path or its CPU budget.
+export const REGISTRATION_DISCOVERY_PAGE_SIZE = 1000;
 export const REGISTRATION_DISCOVERY_CRON = '*/2 * * * *';
 // A Drive copy can legitimately consume most of a free Worker invocation
 // while its destination becomes visible. One attempt per scan keeps the
