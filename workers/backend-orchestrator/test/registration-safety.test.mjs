@@ -312,11 +312,11 @@ test('a deletion queue drain cannot block the scheduled registration scan', () =
   const scheduledEnd = workerSource.indexOf('async fetch(', scheduledStart);
   const source = workerSource.slice(scheduledStart, scheduledEnd);
 
-  assert.match(source, /const deletionDrain = startDeletionDrain\(env\)/);
+  assert.match(source, /const deletionDrain = startDeletionDrain\(scheduledEnv\)/);
   assert.match(source, /ctx\.waitUntil\(deletionDrain\.promise\.catch/);
   assert.doesNotMatch(source, /await startDeletionDrain/);
   assert.match(source, /continuing scheduled registration scan/);
-  assert.match(source, /startScan\([\s\S]*?envWithRuntimeSettings\(env, settings\)[\s\S]*?shareInFlight: false/);
+  assert.match(source, /startScan\([\s\S]*?envWithRuntimeSettings\(scheduledEnv, settings\)[\s\S]*?shareInFlight: false/);
   assert.match(workerSource, /ctx\.waitUntil\(drain\.promise\.catch/);
   assert.match(workerSource, /continuing registration with cached prefixes/);
 });
