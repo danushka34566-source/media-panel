@@ -82,6 +82,33 @@ const orchestratorRequest = async (pathname, init) => {
 const claimJobs = async () => orchestratorRequest(`/jobs/claim?limit=${CLAIM_LIMIT}`)
     .then(res => res.json())
     .then(data => data.jobs ?? []);
+const runRegistrationJob = async () => orchestratorRequest('/registration/jobs/run', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+}).then(res => res.json());
+const pullRegistrationJobs = async () => {
+    // Each request claims at most one row. Parallel requests are safe because
+    // the worker uses SELECT ... FOR UPDATE SKIP LOCKED; no claimed-but-unstarted
+    // list can strand files as `registering` when this process stops.
+    const concurrency = Math.max(1, Math.min(CLAIM_LIMIT, 3));
+    const results = await Promise.allSettled(Array.from({ length: concurrency }, () => runRegistrationJob()));
+    let registered = 0;
+    results.forEach(result => {
+        if (result.status === 'fulfilled') {
+            registered += Number(result.value.registered || 0);
+            return;
+        }
+        log('registration:request-error', {
+            error: result.reason instanceof Error
+                ? result.reason.message
+                : String(result.reason),
+        });
+    });
+    if (registered > 0) {
+        log('registration:completed', { registered, concurrency });
+    }
+    return registered;
+};
 const loadRuntimeConfig = async () => {
     try {
         const config = await orchestratorRequest('/jobs/config')
@@ -659,16 +686,28 @@ const processJob = async (job) => {
     }
 };
 const runOnce = async () => {
+    // Registration pulls run alongside video processing. If the processor goes
+    // offline, these requests stop and the Worker cron remains the independent
+    // fallback; no registration row is claimed by the stopped processor.
+    const registrationPromise = pullRegistrationJobs();
     const jobs = await claimJobs();
     log('poll:claimed', {
         count: jobs.length,
         photoIds: jobs.map(job => job.photoId),
     });
-    let processed = 0;
-    for (const job of jobs) {
-        await processJob(job);
-        processed += 1;
-    }
+    const processingPromise = (async () => {
+        let processed = 0;
+        for (const job of jobs) {
+            await processJob(job);
+            processed += 1;
+        }
+        return processed;
+    })();
+    const [processed, registered] = await Promise.all([
+        processingPromise,
+        registrationPromise,
+    ]);
+    log('poll:completed', { processed, registered });
     return processed;
 };
 const main = async () => {

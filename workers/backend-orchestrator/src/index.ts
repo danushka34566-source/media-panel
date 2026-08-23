@@ -96,6 +96,7 @@ export interface Env {
   REGISTRATION_HINT_LOOKUPS_ENABLED?: string
   REGISTRATION_SCAN_DEADLINE_AT?: string
   REGISTRATION_SCHEDULED?: string
+  REGISTRATION_PROCESSOR_ONLY?: string
 }
 
 type RuntimeProcessingSettings = {
@@ -266,7 +267,7 @@ const GENERATED_MEDIA_SUFFIX_REGEX =
 const STALE_REGISTRATION_ERROR_MESSAGE =
   'Previous registration attempt stalled; queued for retry';
 const MISSING_UPLOAD_ERROR_PREFIX = 'Upload not found in storage';
-const WORKER_BUILD_ID = 'v97';
+const WORKER_BUILD_ID = 'v98';
 // A scheduled Worker must finish promptly. Drive copies can become visible
 // asynchronously, so persist the in-flight state and check again on the next
 // minute instead of polling long enough to lose the registration lease.
@@ -4030,6 +4031,16 @@ const scanAndRegisterWithLease = async (
       scanSkipped: false,
     };
   }
+  if (env.REGISTRATION_PROCESSOR_ONLY === '1' && !hasScheduledQueue) {
+    return {
+      registered: 0,
+      registrationPasses: 0,
+      registrationRemaining: 0,
+      pendingVideos: 0,
+      missingProcessingSources: 0,
+      scanSkipped: false,
+    };
+  }
   const inventoryCursor = (!isScheduledRegistration || !hasScheduledQueue)
     ? await getRegistrationScanCursor(env)
     : undefined;
@@ -6053,6 +6064,39 @@ export default {
         });
       } catch (error: any) {
         return json(500, { error: error?.message || 'Scan failed' });
+      }
+    }
+
+    if (url.pathname === '/registration/jobs/run' && request.method === 'POST') {
+      if (!isAuthorized(request, env.BACKEND_PROCESSOR_SHARED_SECRET)) {
+        return json(401, { error: 'Unauthorized' });
+      }
+      if (!settings.orchestratorEnabled || !settings.registrationEnabled) {
+        return json(200, { claimed: 0, registered: 0, disabled: true });
+      }
+      try {
+        // Processor pulls are intentionally one-job requests. The atomic
+        // SKIP LOCKED claim in the worker is the concurrency fence, while the
+        // processor only supplies compute capacity and never receives DB/Drive
+        // credentials or performs source deletion itself.
+        const processorEnv = {
+          ...runtimeEnv,
+          REGISTRATION_SCHEDULED: '1',
+          REGISTRATION_PROCESSOR_ONLY: '1',
+        };
+        const scan = startScan(processorEnv, {
+          shareInFlight: false,
+          waitUntil: promise => ctx.waitUntil(promise),
+        });
+        const result = await scan.promise;
+        return json(200, {
+          claimed: result.registered > 0 ? 1 : 0,
+          ...result,
+        });
+      } catch (error: any) {
+        return json(500, {
+          error: error?.message || 'Processor registration run failed',
+        });
       }
     }
 
