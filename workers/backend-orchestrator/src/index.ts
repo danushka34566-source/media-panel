@@ -257,7 +257,7 @@ const GENERATED_MEDIA_SUFFIX_REGEX =
 const STALE_REGISTRATION_ERROR_MESSAGE =
   'Previous registration attempt stalled; queued for retry';
 const MISSING_UPLOAD_ERROR_PREFIX = 'Upload not found in storage';
-const WORKER_BUILD_ID = 'v109';
+const WORKER_BUILD_ID = 'v110';
 // A scheduled Worker must finish promptly. Drive copies can become visible
 // asynchronously, so persist the in-flight state and check again on the next
 // minute instead of polling long enough to lose the registration lease.
@@ -282,7 +282,10 @@ export const REGISTRATION_SCAN_PAGE_SIZE = 100;
 // registration claim/CPU path.
 export const REGISTRATION_DISCOVERY_PAGE_SIZE = 100;
 export const REGISTRATION_DISCOVERY_SQL_BATCH_SIZE = 25;
-export const REGISTRATION_DISCOVERY_RECENT_PAGE_SIZE = 25;
+// Drive's upload-event endpoint accepts at most 100 rows. Keep the hot lane
+// at that ceiling so a burst of direct uploads cannot fall between the recent
+// window and the lexicographic cursor after the cursor has passed their keys.
+export const REGISTRATION_DISCOVERY_RECENT_PAGE_SIZE = 100;
 // Use two alternating schedules so discovery runs once per minute without
 // sharing the registration cron. Both schedules execute the same bounded,
 // resumable page and never claim or copy a registration.
