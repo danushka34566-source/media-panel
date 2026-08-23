@@ -260,7 +260,7 @@ const GENERATED_MEDIA_SUFFIX_REGEX =
 const STALE_REGISTRATION_ERROR_MESSAGE =
   'Previous registration attempt stalled; queued for retry';
 const MISSING_UPLOAD_ERROR_PREFIX = 'Upload not found in storage';
-const WORKER_BUILD_ID = 'v93';
+const WORKER_BUILD_ID = 'v94';
 // A scheduled Worker must finish promptly. Drive copies can become visible
 // asynchronously, so persist the in-flight state and check again on the next
 // minute instead of polling long enough to lose the registration lease.
@@ -2389,6 +2389,22 @@ const findReadyRegistrationKeys = async (
 ) => {
   const activeRows = rows
     .filter(row => row.status === 'registering')
+    // PostgreSQL does not guarantee row order without ORDER BY. Keep the
+    // readiness probe deterministic and FIFO so a large set of Drive copies
+    // cannot starve older claims behind the first arbitrary eight rows.
+    .sort((left, right) => {
+      const leftUploaded = parseDateValue(left.uploaded_at)?.getTime() ?? Number.MAX_SAFE_INTEGER;
+      const rightUploaded = parseDateValue(right.uploaded_at)?.getTime() ?? Number.MAX_SAFE_INTEGER;
+      if (leftUploaded !== rightUploaded) {
+        return leftUploaded - rightUploaded;
+      }
+      const leftUpdated = parseDateValue(left.updated_at)?.getTime() ?? Number.MAX_SAFE_INTEGER;
+      const rightUpdated = parseDateValue(right.updated_at)?.getTime() ?? Number.MAX_SAFE_INTEGER;
+      if (leftUpdated !== rightUpdated) {
+        return leftUpdated - rightUpdated;
+      }
+      return left.url.localeCompare(right.url);
+    })
     .slice(0, REGISTRATION_READY_CHECK_LIMIT);
   if (activeRows.length === 0) { return new Set<string>(); }
   const readyKeys = new Set<string>();
@@ -3345,6 +3361,7 @@ const cleanupRegisteredSourceFiles = async (
     updated_at: Date | string
   }>,
   objectsByKey: Map<string, R2ObjectLike>,
+  limit = REGISTERED_SOURCE_CLEANUP_LIMIT,
 ) => {
   let cleaned = 0;
   const eligible = fileMaps.filter(fileMap => {
@@ -3362,7 +3379,7 @@ const cleanupRegisteredSourceFiles = async (
       ) &&
       isExactVerifiedStorageCopy(sourceObject.size, storedObject.size),
     );
-  }).slice(0, REGISTERED_SOURCE_CLEANUP_LIMIT);
+  }).slice(0, Math.max(1, limit));
   for (const fileMap of eligible) {
     const sourceKey = keyFromStorageUrl(env, fileMap.source_url);
     const storedKey = keyFromStorageUrl(env, fileMap.stored_url);
@@ -3973,9 +3990,18 @@ const scanAndRegisterWithLease = async (
         env,
         hintKey,
       );
+      // A generated destination can be left behind by an interrupted copy.
+      // Existence alone is not proof that the object is complete; require an
+      // exact source/destination size match before recovering the hint.
+      const recoveredSourceSize = recoveredRegistrationKey
+        ? await storageObjectSize(env, hintKey).catch(() => undefined)
+        : undefined;
+      const recoveredDestinationSize = recoveredRegistrationKey
+        ? await storageObjectSize(env, recoveredRegistrationKey).catch(() => undefined)
+        : undefined;
       if (
         recoveredRegistrationKey &&
-        await storageObjectExists(env, recoveredRegistrationKey)
+        isExactVerifiedStorageCopy(recoveredSourceSize, recoveredDestinationSize)
       ) {
         const recoveredRegistrationUrl = urlForKey(env, recoveredRegistrationKey);
         await replaceRegistrationStatusUrl(
@@ -4105,6 +4131,7 @@ const scanAndRegisterWithLease = async (
         fallbackFileName: sourceFileName,
       });
       let mediaId = trimToUndefined(existingRegistration?.media_id);
+      let registrationCommitted = false;
       let registrationPhase: 'allocating' | 'preparing' | 'committing' =
         'allocating';
       try {
@@ -4253,6 +4280,10 @@ const scanAndRegisterWithLease = async (
                 sourceUrl,
               });
             }
+            // Everything after this point is housekeeping. If one of those
+            // cleanup calls loses its database connection, the committed
+            // media/map must never be reported as a failed registration.
+            registrationCommitted = true;
           },
           cleanupSource: async () => {
             if (registrationUrl !== sourceUrl) {
@@ -4282,19 +4313,49 @@ const scanAndRegisterWithLease = async (
             });
           },
         });
-        await clearRegistrationTrackingAfterSuccess(env, {
-          mediaId,
-          urls: [
-            registrationUrl,
-            sourceUrl,
-            persistedSourceUrl,
-          ].filter((url): url is string => Boolean(url)),
-        });
-        await clearUploadRegistrationHints(env, [
+        const trackingUrls = [
           registrationUrl,
           sourceUrl,
           persistedSourceUrl,
-        ].filter((url): url is string => Boolean(url))).catch(() => undefined);
+        ].filter((url): url is string => Boolean(url));
+        await clearRegistrationTrackingAfterSuccess(env, {
+          mediaId,
+          urls: trackingUrls,
+        }).catch(async error => {
+          console.warn(
+            'Registration committed but tracking cleanup will be retried',
+            { mediaId, sourceUrl, error },
+          );
+          // Keep a durable non-claimable marker if deletion of the tracking
+          // row itself failed. The next maintenance pass can remove it,
+          // while the registration queue will not copy the file again.
+          await setRegistrationStatus(env, {
+            url: sourceUrl,
+            fileName: originalFileName,
+            uploadedAt: sourceUploadedAt,
+            status: 'registered',
+            sourceUrl: persistedSourceUrl,
+            originalFileName,
+            title: registrationTitle,
+            extension,
+            mediaId,
+          }).catch(housekeepingError => {
+            console.warn('Unable to persist committed registration marker', {
+              mediaId,
+              sourceUrl,
+              error: housekeepingError,
+            });
+          });
+        });
+        await clearUploadRegistrationHints(env, [
+          ...trackingUrls,
+        ]).catch(error => {
+          console.warn('Registration hint cleanup deferred after commit', {
+            mediaId,
+            sourceUrl,
+            error,
+          });
+        });
         observe(logBackendActivity(env, {
           category: 'registration',
           event: 'media_registered',
@@ -4329,6 +4390,18 @@ const scanAndRegisterWithLease = async (
         knownUrls.add(registrationUrl);
         registered += 1;
       } catch (error) {
+        if (registrationCommitted) {
+          // The atomic media/map commit already succeeded. Do not overwrite
+          // that success with an error because post-commit housekeeping failed.
+          console.warn('Registration committed; post-commit housekeeping deferred', {
+            mediaId,
+            sourceUrl,
+            error,
+          });
+          knownUrls.add(registrationUrl);
+          registered += 1;
+          continue;
+        }
         const isRecoverableCopyDelay =
           isDriveStorageEnabled(env) &&
           isRecoverableDriveCopyError(error);
@@ -4392,10 +4465,15 @@ const scanAndRegisterWithLease = async (
   }
 
   if (deferredFileMaps.length > 0) {
+    // A scheduled invocation must keep housekeeping bounded independently of
+    // the registration scan. One delete is enough to make steady progress;
+    // manual maintenance may use the larger cleanup limit.
+    const cleanupLimit = waitUntil ? 1 : REGISTERED_SOURCE_CLEANUP_LIMIT;
     const cleanup = cleanupRegisteredSourceFiles(
       env,
       deferredFileMaps,
       deferredObjectsByKey,
+      cleanupLimit,
     ).catch(error => {
       console.warn('Deferred source cleanup task failed', error);
     });
