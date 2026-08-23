@@ -16,6 +16,8 @@ const BACKEND_PROCESSOR_SHARED_SECRET = process.env.BACKEND_PROCESSOR_SHARED_SEC
 let POLL_INTERVAL_MS = 15_000;
 let IDLE_INTERVAL_MS = 30_000;
 let CLAIM_LIMIT = 1;
+const RUNTIME_CONFIG_REFRESH_INTERVAL_MS = 60_000;
+let lastRuntimeConfigLoadedAt = 0;
 const RUN_ONCE = process.env.RUN_ONCE === '1';
 let HEARTBEAT_INTERVAL_MS = 5_000;
 const BACKEND_PROCESSOR_ID = process.env.BACKEND_PROCESSOR_ID ||
@@ -121,12 +123,19 @@ const loadRuntimeConfig = async () => {
         IDLE_INTERVAL_MS = number('idleIntervalMs', IDLE_INTERVAL_MS);
         HEARTBEAT_INTERVAL_MS = number('heartbeatIntervalMs', HEARTBEAT_INTERVAL_MS);
         CLAIM_LIMIT = number('claimLimit', CLAIM_LIMIT);
+        lastRuntimeConfigLoadedAt = Date.now();
     }
     catch (error) {
         log('config:fallback', {
             error: error instanceof Error ? error.message : String(error),
         });
     }
+};
+const refreshRuntimeConfigIfDue = async () => {
+    if (Date.now() - lastRuntimeConfigLoadedAt < RUNTIME_CONFIG_REFRESH_INTERVAL_MS) {
+        return;
+    }
+    await loadRuntimeConfig();
 };
 const sendProcessorPresence = () => orchestratorRequest('/processors/heartbeat', {
     method: 'POST',
@@ -686,6 +695,7 @@ const processJob = async (job) => {
     }
 };
 const runOnce = async () => {
+    await refreshRuntimeConfigIfDue();
     // Registration pulls run alongside video processing. If the processor goes
     // offline, these requests stop and the Worker cron remains the independent
     // fallback; no registration row is claimed by the stopped processor.
