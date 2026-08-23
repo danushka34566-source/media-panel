@@ -185,6 +185,29 @@ test('registration status and logs expose file-level queue progress', () => {
   assert.match(workerSource, /phase: registrationPhase/);
 });
 
+test('scheduled logging keeps the Free-plan CPU hot path bounded', () => {
+  assert.match(workerSource, /if \(env\.REGISTRATION_SCHEDULED === '1'\)[\s\S]*?const status = activity\.status \|\| 'info'/);
+  assert.match(workerSource, /if \(status === 'info' && !keepPhaseMarker\) \{\s*return;/);
+});
+
+test('direct-upload discovery is isolated from the registration hot path', () => {
+  assert.match(workerSource, /const discoverRegistrationPage = async/);
+  assert.match(workerSource, /registered_upload_file_map/);
+  assert.match(workerSource, /runRegistrationDiscoveryPage/);
+  assert.match(workerSource, /Scheduled registration discovery page failed/);
+  assert.match(workerSource, /REGISTRATION_DISCOVERY_CRON = '.*5 \* \* \* \*'/);
+  const discoveryStart = workerSource.indexOf('const discoverRegistrationPage');
+  const discoveryEnd = workerSource.indexOf('const runRegistrationDiscoveryPage', discoveryStart);
+  assert.doesNotMatch(
+    workerSource.slice(discoveryStart, discoveryEnd),
+    /GENERATED_MEDIA_ID_PATTERN\.test\(fileNameBase\)/,
+  );
+  const scanStart = workerSource.indexOf('const scanAndRegisterWithLease');
+  const scanEnd = workerSource.indexOf('const scanAndRegister =', scanStart);
+  assert.doesNotMatch(workerSource.slice(scanStart, scanEnd), /runRegistrationDiscoveryPage\(/);
+  assert.match(workerSource, /REGISTRATION_DISCOVERY_ONLY !== '1'/);
+});
+
 test('Drive registration I/O is deadline-bound so a scan lease cannot stick forever', () => {
   assert.match(workerSource, /const REGISTRATION_STORAGE_TIMEOUT_MS = 30_000/);
   assert.match(workerSource, /DRIVE_COPY_VISIBILITY_ATTEMPTS = 3/);
@@ -238,14 +261,16 @@ test('observability database failures cannot disable scheduled registration', ()
   const scheduledStart = workerSource.indexOf('async scheduled(');
   const scheduledEnd = workerSource.indexOf('async fetch(', scheduledStart);
   const scheduledSource = workerSource.slice(scheduledStart, scheduledEnd);
-  assert.match(scheduledSource, /event: 'scheduled_triggered'[\s\S]*\.catch\(error =>/);
+  assert.match(scheduledSource, /scheduled_scan_skipped/);
+  assert.doesNotMatch(scheduledSource, /getRuntimeProcessingSettingsForTrigger/);
 });
 
 test('scheduled scans do not share an in-memory promise across cron events', () => {
-  assert.match(workerSource, /startScan\([\s\S]*?\{ shareInFlight: false \}/);
+  assert.match(workerSource, /startScan\([\s\S]*?shareInFlight: false/);
   assert.match(workerSource, /if \(shareInFlight && scanInFlight\)/);
-  assert.match(workerSource, /scheduled_scan_dispatch/);
-  assert.match(workerSource, /scheduled_scan_queued/);
+  assert.match(workerSource, /REGISTRATION_DISCOVERY_CRON/);
+  assert.match(workerSource, /registration_claimed/);
+  assert.match(workerSource, /registration_id_allocated/);
 });
 
 test('registration commit keeps media and source map in one SQL statement', () => {
@@ -312,7 +337,6 @@ test('scheduled registration does not compete with the deletion queue', () => {
   const scheduledEnd = workerSource.indexOf('async fetch(', scheduledStart);
   const source = workerSource.slice(scheduledStart, scheduledEnd);
 
-  assert.match(source, /Deletion remains resumable through \/deletions\/run/);
   assert.doesNotMatch(source, /const deletionDrain = startDeletionDrain\(scheduledEnv\)/);
   assert.match(source, /startScan\([\s\S]*?envWithRuntimeSettings\(scheduledEnv, settings\)[\s\S]*?shareInFlight: false/);
   assert.match(workerSource, /ctx\.waitUntil\(drain\.promise\.catch/);

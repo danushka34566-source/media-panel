@@ -96,6 +96,7 @@ export interface Env {
   REGISTRATION_HINT_LOOKUPS_ENABLED?: string
   REGISTRATION_SCAN_DEADLINE_AT?: string
   REGISTRATION_SCHEDULED?: string
+  REGISTRATION_DISCOVERY_ONLY?: string
   REGISTRATION_PROCESSOR_ONLY?: string
   REGISTRATION_PROCESSOR_PULL?: string
   PROCESSOR_REGISTRATION_ENABLED?: string
@@ -211,29 +212,6 @@ const getDefaultRuntimeProcessingSettings = (env: Env): RuntimeProcessingSetting
     processorClaimLimit: getNumber(env.BACKEND_PROCESSOR_CLAIM_LIMIT, 1, { min: 1, max: 3 }),
 });
 
-const RUNTIME_SETTINGS_LOOKUP_TIMEOUT_MS = 2_500;
-
-const getRuntimeProcessingSettingsForTrigger = async (env: Env) => {
-  const fallback = runtimeSettingsCache?.settings ?? getDefaultRuntimeProcessingSettings(env);
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    return await Promise.race([
-      getRuntimeProcessingSettings(env),
-      new Promise<RuntimeProcessingSettings>(resolve => {
-        timer = setTimeout(() => {
-          console.warn('Runtime processing settings lookup exceeded trigger budget; using cached/default settings');
-          resolve(fallback);
-        }, RUNTIME_SETTINGS_LOOKUP_TIMEOUT_MS);
-      }),
-    ]);
-  } catch (error) {
-    console.warn('Runtime processing settings lookup failed; using cached/default settings', error);
-    return fallback;
-  } finally {
-    if (timer) clearTimeout(timer);
-  }
-};
-
 const envWithRuntimeSettings = (
   env: Env,
   settings: RuntimeProcessingSettings,
@@ -279,7 +257,7 @@ const GENERATED_MEDIA_SUFFIX_REGEX =
 const STALE_REGISTRATION_ERROR_MESSAGE =
   'Previous registration attempt stalled; queued for retry';
 const MISSING_UPLOAD_ERROR_PREFIX = 'Upload not found in storage';
-const WORKER_BUILD_ID = 'v100';
+const WORKER_BUILD_ID = 'v101';
 // A scheduled Worker must finish promptly. Drive copies can become visible
 // asynchronously, so persist the in-flight state and check again on the next
 // minute instead of polling long enough to lose the registration lease.
@@ -294,6 +272,11 @@ const REGISTRATION_STORAGE_TIMEOUT_MS = 30_000;
 // budget. The database status table is the durable FIFO queue; the storage
 // cursor only discovers a bounded slice of new objects on each scan.
 export const REGISTRATION_SCAN_PAGE_SIZE = 100;
+// Discovery is intentionally isolated from the one-row registration cron.
+// A small page keeps a direct-upload inventory pass below the Free-plan CPU
+// budget without ever delaying a durable registration claim.
+export const REGISTRATION_DISCOVERY_PAGE_SIZE = 25;
+export const REGISTRATION_DISCOVERY_CRON = '*/5 * * * *';
 // A Drive copy can legitimately consume most of a free Worker invocation
 // while its destination becomes visible. One attempt per scan keeps the
 // lease/retry boundary below the platform execution limit; the DB queue keeps
@@ -1308,14 +1291,24 @@ const logBackendActivity = async (
 ) => {
   // The Free Workers CPU budget is only 10 ms per cron invocation. Opening a
   // fresh Postgres client for every observability event can exhaust that tiny
-  // budget before registration starts. Scheduled scans still emit the full
-  // structured event to Cloudflare Logs, while interactive/manual calls keep
-  // the durable database activity history.
+  // budget before registration starts. Even console serialization is costly
+  // on a cold scheduled isolate, so keep the cron hot path to actionable
+  // events. Successful completions and warnings/errors remain visible in
+  // Cloudflare Logs; routine trigger chatter is omitted. Keep tiny phase
+  // markers so an exceeded-CPU invocation still identifies whether it died
+  // before ID allocation or during copy/commit.
   if (env.REGISTRATION_SCHEDULED === '1') {
+    const status = activity.status || 'info';
+    const keepPhaseMarker = activity.event === 'registration_claimed' ||
+      activity.event === 'registration_id_allocated' ||
+      activity.event === 'registration_commit_started';
+    if (status === 'info' && !keepPhaseMarker) {
+      return;
+    }
     console.log(JSON.stringify({
       category: activity.category,
       event: activity.event,
-      status: activity.status || 'info',
+      status,
       message: activity.message,
       mediaId: activity.mediaId,
       processorId: activity.processorId,
@@ -2011,8 +2004,13 @@ let lastKnownQueuedDeletionPrefixes = new Set<string>();
 const getQueuedDeletionPrefixes = async (env: Env) => {
   // Deletion is handled by the authenticated maintenance route. A queue
   // read/DDL check competes with the registration claim on the 10 ms Free
-  // cron budget and is not needed to register unrelated objects.
-  if (env.REGISTRATION_SCHEDULED === '1') {
+  // cron budget and is not needed to register unrelated objects. The
+  // discovery-only cron is deliberately separate from registration, so it
+  // can refresh this protection before inserting new detected rows.
+  if (
+    env.REGISTRATION_SCHEDULED === '1' &&
+    env.REGISTRATION_DISCOVERY_ONLY !== '1'
+  ) {
     return new Set(lastKnownQueuedDeletionPrefixes);
   }
   try {
@@ -2977,45 +2975,6 @@ const claimRegistrationQueueRow = async (env: Env) => {
   };
 };
 
-// A live processor heartbeat makes the processor the registration owner. The
-// scheduled Worker remains the durable fallback only after that heartbeat
-// expires, so a processor outage cannot strand the queue behind an in-flight
-// claim. Missing presence tables are treated as "no processor" for backward
-// compatibility with installations that have never started a processor.
-const hasActiveRegistrationProcessor = async (env: Env) => {
-  try {
-    const sql = sqlForEnv(env);
-    const heartbeatIntervalMs = getNumber(
-      env.BACKEND_PROCESSOR_HEARTBEAT_INTERVAL_MS,
-      5_000,
-      { min: 1_000, max: 60_000 },
-    );
-    const presenceTimeoutSeconds = Math.max(
-      1,
-      Math.ceil(heartbeatIntervalMs * 3 / 1_000),
-    );
-    const rows = await sql`
-      SELECT EXISTS (
-        SELECT 1
-        FROM video_processor_presence
-        WHERE last_seen_at > now() - (${String(presenceTimeoutSeconds)} || ' seconds')::interval
-          AND COALESCE(state, 'idle') <> 'stopped'
-      ) AS active
-    ` as unknown as Array<{ active: boolean }>;
-    return Boolean(rows[0]?.active);
-  } catch (error) {
-    // The heartbeat table is created lazily by the processor endpoint. A
-    // missing table (or a transient read failure) must never disable the
-    // Worker fallback registration path.
-    if (!/relation .*video_processor_presence.*does not exist/i.test(
-      error instanceof Error ? error.message : String(error),
-    )) {
-      console.warn('Unable to read processor registration presence; using Worker fallback', error);
-    }
-    return false;
-  }
-};
-
 const getRegistrationStatusRowsByUrls = async (env: Env, urls: string[]) => {
   const uniqueUrls = Array.from(new Set(urls.filter(Boolean)));
   if (uniqueUrls.length === 0) { return [] as RegistrationStatusRow[]; }
@@ -3326,6 +3285,125 @@ const syncDetectedStatuses = async (
       errorMessage: undefined,
     }));
   await upsertRegistrationStatuses(env, newStatuses);
+};
+
+// Scheduled scans normally claim one durable queue row and avoid a full
+// inventory walk so the Free-plan CPU budget stays bounded. That optimization
+// must not starve discovery: direct Drive uploads do not create panel hints and
+// would otherwise remain invisible until the entire older queue drained. Keep
+// discovery on its own bounded cron and insert only genuinely unknown source
+// objects in one SQL statement. Registration itself is performed by the FIFO
+// claim on a later invocation.
+const discoverRegistrationPage = async (
+  env: Env,
+  objects: R2ObjectLike[],
+) => {
+  const queuedDeletionPrefixes = await getQueuedDeletionPrefixes(env);
+  const candidates = objects
+    .map(object => {
+      const { fileName, fileNameBase, extension } = getFileParts(object.key);
+      if (
+        !MEDIA_EXTENSIONS.has(extension) ||
+        GENERATED_MEDIA_SUFFIX_REGEX.test(fileNameBase) ||
+        Array.from(queuedDeletionPrefixes).some(prefix =>
+          deletionKeyMatchesPrefix(object.key, prefix))
+      ) {
+        return undefined;
+      }
+      const url = urlForKey(env, object.key);
+      return {
+        url,
+        fileName,
+        extension,
+        uploadedAt: object.uploaded?.toISOString() ?? null,
+        title: resolveRegistrationTitle({
+          originalFileName: fileName,
+          fallbackFileName: fileName,
+        }),
+      };
+    })
+    .filter((candidate): candidate is NonNullable<typeof candidate> => Boolean(candidate));
+  if (candidates.length === 0) { return 0; }
+
+  const sql = sqlForEnv(env);
+  const payload = JSON.stringify(candidates.map(candidate => ({
+    url: candidate.url,
+    file_name: candidate.fileName,
+    extension: candidate.extension,
+    uploaded_at: candidate.uploadedAt,
+    title: candidate.title,
+  })));
+  const rows = await sql`
+    WITH incoming AS (
+      SELECT *
+      FROM jsonb_to_recordset(${payload}::jsonb) AS row(
+        url TEXT,
+        file_name TEXT,
+        extension TEXT,
+        uploaded_at TIMESTAMP WITH TIME ZONE,
+        title TEXT
+      )
+    ), candidates AS (
+      SELECT i.*
+      FROM incoming i
+      WHERE NOT EXISTS (
+        SELECT 1
+        FROM worker_registration_status s
+        WHERE s.url=i.url OR s.source_url=i.url
+      )
+        AND NOT EXISTS (
+          SELECT 1
+          FROM registered_upload_file_map f
+          WHERE f.source_url=i.url OR f.stored_url=i.url
+        )
+        AND NOT EXISTS (
+          SELECT 1
+          FROM media m
+          WHERE m.url=i.url OR m.poster_url=i.url OR m.preview_url=i.url
+        )
+    )
+    INSERT INTO worker_registration_status (
+      url,
+      file_name,
+      uploaded_at,
+      status,
+      source_url,
+      original_file_name,
+      title,
+      extension,
+      error_message
+    )
+    SELECT
+      url,
+      file_name,
+      uploaded_at,
+      'detected',
+      url,
+      file_name,
+      title,
+      extension,
+      NULL
+    FROM candidates
+    ON CONFLICT (url) DO NOTHING
+    RETURNING url
+  ` as unknown as Array<{ url: string }>;
+  return rows.length;
+};
+
+const runRegistrationDiscoveryPage = async (
+  env: Env,
+  pageSize: number,
+) => {
+  try {
+    const cursor = await getRegistrationScanCursor(env);
+    const page = await listStoragePage(env, cursor, pageSize);
+    const discovered = await discoverRegistrationPage(env, page.objects);
+    await setRegistrationScanCursor(env, page.nextContinuationToken);
+    return { discovered, pageSize: page.objects.length };
+  } catch (error) {
+    console.warn('Scheduled registration discovery page failed', error);
+    return { discovered: 0, pageSize: 0 };
+  }
 };
 
 const requeueRegistrationStatuses = async (env: Env, urls: string[]) => {
@@ -4061,15 +4139,12 @@ const scanAndRegisterWithLease = async (
   const isScheduledRegistration = env.REGISTRATION_SCHEDULED === '1';
   const isProcessorPull = env.REGISTRATION_PROCESSOR_PULL === '1';
   if (isScheduledRegistration && !isProcessorPull) {
-    const processorRegistrationEnabled = env.PROCESSOR_REGISTRATION_ENABLED !== '0';
-    const processorOnly = processorRegistrationEnabled &&
-      env.PROCESSOR_ONLY_REGISTRATION === '1';
-    const processorActive = processorRegistrationEnabled &&
-      (processorOnly || await hasActiveRegistrationProcessor(env));
-    if (processorActive) {
-      // Processor ownership is evaluated before the queue claim. This keeps
-      // the Worker from ever marking a row registering while a live processor
-      // is responsible for the registration queue.
+    // The atomic SKIP LOCKED claim is the concurrency fence. A processor
+    // heartbeat query here used one more fresh database connection before
+    // every claim and caused the Free-plan cron to die before registration.
+    // Only the explicit processor-only setting suppresses the Worker; when
+    // both owners are allowed they safely claim different rows concurrently.
+    if (env.PROCESSOR_ONLY_REGISTRATION === '1') {
       return {
         registered: 0,
         registrationPasses: 0,
@@ -4077,7 +4152,7 @@ const scanAndRegisterWithLease = async (
         pendingVideos: 0,
         missingProcessingSources: 0,
         scanSkipped: true,
-        registrationProcessorActive: true,
+        registrationProcessorOnly: true,
       };
     }
   }
@@ -4091,9 +4166,18 @@ const scanAndRegisterWithLease = async (
     ? [claimedRegistrationRow]
     : undefined;
   const hasScheduledQueue = Boolean(claimedRegistrationRow);
+  if (claimedRegistrationRow) {
+    observe(logBackendActivity(env, {
+      category: 'registration',
+      event: 'registration_claimed',
+      status: 'info',
+      message: `Claimed ${claimedRegistrationRow.file_name || claimedRegistrationRow.url}`,
+      details: { url: claimedRegistrationRow.url },
+    }).catch(() => undefined));
+  }
   // A fresh in-flight row is already owned by another invocation. Do not fall
-  // through to the expensive storage-discovery path in that case; let its
-  // owner finish or let the stale-claim rule make it eligible later.
+  // through to the registration path in that case. Discovery runs on its own
+  // cron so this hot path never spends CPU on a storage list or discovery SQL.
   if (isScheduledRegistration && !hasScheduledQueue && queueClaim?.queueHasRows) {
     return {
       registered: 0,
@@ -4537,6 +4621,29 @@ const scanAndRegisterWithLease = async (
           mediaId,
           extension,
         );
+        // Persist the deterministic ID before the first Drive request. If a
+        // Free-plan invocation is reclaimed during a HEAD/copy, the next
+        // claim can resume the exact destination instead of rotating an
+        // opaque `registering` row with a null ID.
+        await setRegistrationStatus(env, {
+          url: sourceUrl,
+          fileName: originalFileName,
+          uploadedAt: sourceUploadedAt,
+          status: 'registering',
+          sourceUrl: persistedSourceUrl,
+          originalFileName,
+          title: registrationTitle,
+          extension,
+          mediaId,
+        });
+        observe(logBackendActivity(env, {
+          category: 'registration',
+          event: 'registration_id_allocated',
+          status: 'info',
+          message: `Allocated registration ID for ${originalFileName}`,
+          mediaId,
+          details: { phase: 'preparing', sourceUrl },
+        }).catch(() => undefined));
         // Rows rehydrated from the durable queue may be outside the current
         // inventory page and therefore have no listed size. Fetch the source
         // size once before validating an existing generated destination;
@@ -4596,12 +4703,6 @@ const scanAndRegisterWithLease = async (
           registrationUrl = targetRegistrationUrl;
         }
         const registeredFileName = getFileParts(registrationUrl).fileName;
-        await setRegistrationStatus(env, {
-          url: sourceUrl,
-          status: 'registering',
-          sourceUrl: persistedSourceUrl,
-          mediaId,
-        });
         observe(logBackendActivity(env, {
           category: 'registration',
           event: 'registration_started',
@@ -4622,6 +4723,14 @@ const scanAndRegisterWithLease = async (
           console.warn('Unable to log registration start', error);
         }));
         registrationPhase = 'preparing';
+        observe(logBackendActivity(env, {
+          category: 'registration',
+          event: 'registration_commit_started',
+          status: 'info',
+          message: `Preparing commit for ${originalFileName}`,
+          mediaId,
+          details: { phase: registrationPhase, sourceUrl },
+        }).catch(() => undefined));
         await runSafeRegistrationCommit({
           // Keep the original object until the generated-name destination is
           // verified and the media row plus filename map are both committed.
@@ -5870,117 +5979,79 @@ export default {
     env: Env,
     ctx: ExecutionContext,
   ) {
+    const discoveryOnly = controller.cron === REGISTRATION_DISCOVERY_CRON;
     const scheduledEnv: Env = {
       ...env,
       REGISTRATION_SCHEDULED: '1',
+      REGISTRATION_DISCOVERY_ONLY: discoveryOnly ? '1' : '0',
     };
-    ctx.waitUntil(logBackendActivity(scheduledEnv, {
-      category: 'orchestrator',
-      event: 'scheduled_triggered',
-      status: 'info',
-      message: 'Cloudflare scheduled registration run triggered',
-      details: {
-        cron: controller.cron,
-        scheduledTime: controller.scheduledTime,
-      },
-    }).catch(error => {
-      // The trigger log is useful, but never let a transient database failure
-      // disable the scheduled registration run.
-      console.warn('Unable to log scheduled registration trigger', error);
-    }));
-    // Keep destructive deletion work on the authenticated maintenance route.
-    // Starting it beside registration still consumes the same 10 ms Free-plan
-    // cron budget and can terminate the registration invocation before its
-    // first queue claim. Deletion remains resumable through /deletions/run.
-    // A Supabase settings socket can remain pending after its own query
-    // timeout. Do not await that socket in the scheduled handler: one stuck
-    // lookup previously allowed triggers to be logged while no registration
-    // scan was ever dispatched. Use the last cached settings when available,
-    // otherwise dispatch the safe enabled defaults after a short grace period;
-    // a successful panel lookup still wins if it completes first.
-    const fallbackSettings = runtimeSettingsCache?.settings ??
+    // Discovery has its own bounded cron. It may list storage and refresh the
+    // cursor/configuration, but it never claims or registers a row, so a slow
+    // inventory pass cannot consume the registration invocation's CPU budget.
+    if (discoveryOnly) {
+      ctx.waitUntil((async () => {
+        try {
+          const settings = runtimeSettingsCache?.settings ??
+            getDefaultRuntimeProcessingSettings(scheduledEnv);
+          if (!settings.orchestratorEnabled || !settings.registrationEnabled) {
+            await logBackendActivity(scheduledEnv, {
+              category: 'orchestrator',
+              event: 'scheduled_scan_skipped',
+              status: 'warning',
+              message: 'Discovery skipped because registration is disabled',
+            });
+            return;
+          }
+          const discovery = await runRegistrationDiscoveryPage(
+            scheduledEnv,
+            REGISTRATION_DISCOVERY_PAGE_SIZE,
+          );
+          if (discovery.discovered > 0) {
+            console.log(JSON.stringify({
+              category: 'registration',
+              event: 'storage_objects_detected',
+              status: 'success',
+              count: discovery.discovered,
+              pageSize: discovery.pageSize,
+            }));
+          }
+          // Refresh the DB-backed settings only on this isolated maintenance
+          // invocation. Registration never waits for a settings socket.
+          await getRuntimeProcessingSettings(scheduledEnv).catch(error => {
+            console.warn('Discovery settings refresh failed', error);
+          });
+        } catch (error) {
+          console.warn('Scheduled registration discovery failed', error);
+        }
+      })());
+      return;
+    }
+
+    // The hot path must be claim -> ID -> Drive -> atomic commit. Use the
+    // last DB-backed settings cache and never open a settings connection here.
+    const settings = runtimeSettingsCache?.settings ??
       getDefaultRuntimeProcessingSettings(scheduledEnv);
-    let dispatched = false;
-    let fallbackTimer: ReturnType<typeof setTimeout> | undefined;
-    let resolveFallbackWait: (() => void) | undefined;
-    const dispatch = (settings: RuntimeProcessingSettings) => {
-      if (dispatched) { return; }
-      dispatched = true;
-      if (fallbackTimer) { clearTimeout(fallbackTimer); }
-      resolveFallbackWait?.();
+    if (!settings.orchestratorEnabled || !settings.registrationEnabled) {
       ctx.waitUntil(logBackendActivity(scheduledEnv, {
         category: 'orchestrator',
-        event: 'scheduled_scan_dispatch',
-        status: 'info',
-        message: 'Scheduled registration dispatch evaluated',
-        details: {
-          orchestratorEnabled: settings.orchestratorEnabled,
-          registrationEnabled: settings.registrationEnabled,
-          processorRegistrationEnabled: settings.processorRegistrationEnabled,
-          processorOnlyRegistration: settings.processorOnlyRegistration,
-          registerBatchSize: settings.registerBatchSize,
-          maxRegisterPasses: settings.maxRegisterPasses,
-        },
+        event: 'scheduled_scan_skipped',
+        status: 'warning',
+        message: 'Scheduled registration skipped because it is disabled',
       }).catch(error => {
-        console.warn('Unable to log scheduled scan dispatch', error);
+        console.warn('Unable to log scheduled scan skip', error);
       }));
-      if (!settings.orchestratorEnabled || !settings.registrationEnabled) {
-        ctx.waitUntil(logBackendActivity(scheduledEnv, {
-          category: 'orchestrator',
-          event: 'scheduled_scan_skipped',
-          status: 'warning',
-          message: 'Scheduled registration skipped because it is disabled',
-        }).catch(error => {
-          console.warn('Unable to log scheduled scan skip', error);
-        }));
-        return;
-      }
-      const scan = startScan(
-        envWithRuntimeSettings(scheduledEnv, settings),
-        {
-          ...{ shareInFlight: false },
-          waitUntil: promise => ctx.waitUntil(promise),
-        },
-      );
-      ctx.waitUntil(logBackendActivity(scheduledEnv, {
-        category: 'orchestrator',
-        event: 'scheduled_scan_queued',
-        status: 'info',
-        message: scan.started
-          ? 'Scheduled registration scan queued'
-          : 'Scheduled registration scan joined an existing run',
-        details: { scanStarted: scan.started },
-      }).catch(error => {
-        console.warn('Unable to log scheduled scan queue state', error);
-      }));
-      if (scan.started) {
-        keepScheduledScanBounded(scan.promise, scheduledEnv, ctx);
-      }
-    };
-    // A timer created outside a waitUntil promise can be discarded as soon as
-    // the scheduled handler returns. Keep the fallback timer itself alive so a
-    // slow Supabase settings socket cannot silently suppress registration.
-    const fallbackWait = new Promise<void>(resolve => {
-      resolveFallbackWait = resolve;
-      fallbackTimer = setTimeout(() => {
-        dispatch(fallbackSettings);
-        resolve();
-      }, 1_500);
-    });
-    ctx.waitUntil(fallbackWait);
-    // Start the FIFO scan immediately from the last known settings (or safe
-    // enabled defaults). The database lookup below only refreshes the cache
-    // for the next cron cycle; it must never be a prerequisite for dispatch.
-    dispatch(fallbackSettings);
-    ctx.waitUntil((async () => {
-      try {
-        const settings = await getRuntimeProcessingSettingsForTrigger(scheduledEnv);
-        dispatch(settings);
-      } catch (error) {
-        console.warn('Scheduled settings lookup failed; dispatching fallback', error);
-        dispatch(fallbackSettings);
-      }
-    })());
+      return;
+    }
+    const scan = startScan(
+      envWithRuntimeSettings(scheduledEnv, settings),
+      {
+        shareInFlight: false,
+        waitUntil: promise => ctx.waitUntil(promise),
+      },
+    );
+    if (scan.started) {
+      keepScheduledScanBounded(scan.promise, scheduledEnv, ctx);
+    }
   },
 
   async fetch(request: Request, env: Env, ctx: ExecutionContext) {
@@ -6043,6 +6114,43 @@ export default {
         triggered: true,
         started: drain.started,
       });
+    }
+
+    // Processor registration pulls must reach the atomic queue claim without
+    // first opening the general runtime-settings connection. The processor
+    // refreshes /jobs/config separately; a warm cache enforces the latest DB
+    // toggle, while a cold isolate safely defaults this optional feature off.
+    if (url.pathname === '/registration/jobs/run' && request.method === 'POST') {
+      if (!isAuthorized(request, env.BACKEND_PROCESSOR_SHARED_SECRET)) {
+        return json(401, { error: 'Unauthorized' });
+      }
+      const settings = runtimeSettingsCache?.settings ??
+        getDefaultRuntimeProcessingSettings(env);
+      if (!settings.orchestratorEnabled || !settings.registrationEnabled ||
+        !settings.processorRegistrationEnabled) {
+        return json(200, { claimed: 0, registered: 0, disabled: true });
+      }
+      try {
+        const processorEnv = {
+          ...envWithRuntimeSettings(env, settings),
+          REGISTRATION_SCHEDULED: '1',
+          REGISTRATION_PROCESSOR_ONLY: '1',
+          REGISTRATION_PROCESSOR_PULL: '1',
+        };
+        const scan = startScan(processorEnv, {
+          shareInFlight: false,
+          waitUntil: promise => ctx.waitUntil(promise),
+        });
+        const result = await scan.promise;
+        return json(200, {
+          claimed: result.registered > 0 ? 1 : 0,
+          ...result,
+        });
+      } catch (error: any) {
+        return json(500, {
+          error: error?.message || 'Processor registration run failed',
+        });
+      }
     }
 
     const settings = await getRuntimeProcessingSettings(env);
@@ -6152,41 +6260,6 @@ export default {
         });
       } catch (error: any) {
         return json(500, { error: error?.message || 'Scan failed' });
-      }
-    }
-
-    if (url.pathname === '/registration/jobs/run' && request.method === 'POST') {
-      if (!isAuthorized(request, env.BACKEND_PROCESSOR_SHARED_SECRET)) {
-        return json(401, { error: 'Unauthorized' });
-      }
-      if (!settings.orchestratorEnabled || !settings.registrationEnabled ||
-        !settings.processorRegistrationEnabled) {
-        return json(200, { claimed: 0, registered: 0, disabled: true });
-      }
-      try {
-        // Processor pulls are intentionally one-job requests. The atomic
-        // SKIP LOCKED claim in the worker is the concurrency fence, while the
-        // processor only supplies compute capacity and never receives DB/Drive
-        // credentials or performs source deletion itself.
-        const processorEnv = {
-          ...runtimeEnv,
-          REGISTRATION_SCHEDULED: '1',
-          REGISTRATION_PROCESSOR_ONLY: '1',
-          REGISTRATION_PROCESSOR_PULL: '1',
-        };
-        const scan = startScan(processorEnv, {
-          shareInFlight: false,
-          waitUntil: promise => ctx.waitUntil(promise),
-        });
-        const result = await scan.promise;
-        return json(200, {
-          claimed: result.registered > 0 ? 1 : 0,
-          ...result,
-        });
-      } catch (error: any) {
-        return json(500, {
-          error: error?.message || 'Processor registration run failed',
-        });
       }
     }
 
