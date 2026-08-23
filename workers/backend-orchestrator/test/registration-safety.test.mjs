@@ -215,13 +215,15 @@ test('Drive registration I/O is deadline-bound so a scan lease cannot stick fore
   );
 });
 
-test('long scans keep their lease alive without a false whole-scan timeout', () => {
+test('long scans keep their lease alive while hung scheduled invocations self-release', () => {
   assert.doesNotMatch(workerSource, /Promise\.race\(\[scanAndRegister\(env\), watchdog\]\)/);
   assert.doesNotMatch(workerSource, /Registration scan watchdog exceeded/);
   assert.match(workerSource, /startScanLeaseHeartbeat/);
   assert.match(workerSource, /setInterval\(heartbeat, intervalMs\)/);
   assert.match(workerSource, /await leaseHeartbeat\.stop\(\)/);
-  assert.match(workerSource, /ctx\.waitUntil\(scan\.promise\.catch/);
+  assert.match(workerSource, /SCHEDULED_SCAN_DEADLINE_MS/);
+  assert.match(workerSource, /scheduled_scan_circuit_breaker/);
+  assert.match(workerSource, /keepScheduledScanBounded\(scan\.promise/);
 });
 
 test('observability database failures cannot disable scheduled registration', () => {

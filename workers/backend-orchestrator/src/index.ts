@@ -258,7 +258,7 @@ const GENERATED_MEDIA_SUFFIX_REGEX =
 const STALE_REGISTRATION_ERROR_MESSAGE =
   'Previous registration attempt stalled; queued for retry';
 const MISSING_UPLOAD_ERROR_PREFIX = 'Upload not found in storage';
-const WORKER_BUILD_ID = 'v85';
+const WORKER_BUILD_ID = 'v86';
 // A scheduled Worker must finish promptly. Drive copies can become visible
 // asynchronously, so persist the in-flight state and check again on the next
 // minute instead of polling long enough to lose the registration lease.
@@ -293,6 +293,12 @@ const REGISTERED_SOURCE_CLEANUP_LIMIT = 4;
 // A scheduled invocation can be terminated before finally{} runs. Keep the
 // cross-invocation lease short enough that the next cron can recover it.
 export const SCAN_LEASE_SECONDS = 90;
+// A scheduled invocation must release its execution slot before the durable
+// lease expires. This only bounds a hung invocation; it never marks a file
+// failed or deletes a source. The registration row remains durable for the
+// next stale-claim recovery pass.
+export const SCHEDULED_SCAN_DEADLINE_MS =
+  Math.max(30_000, SCAN_LEASE_SECONDS * 1000 - 10_000);
 
 const encoder = new TextEncoder();
 
@@ -5240,6 +5246,37 @@ const startScan = (
   return { started: true, promise };
 };
 
+const keepScheduledScanBounded = (
+  scanPromise: Promise<Awaited<ReturnType<typeof scanAndRegister>>>,
+  env: Env,
+  ctx: ExecutionContext,
+) => {
+  let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+  const watchdog = new Promise<{ timedOut: true }>(resolve => {
+    timeoutHandle = setTimeout(() => resolve({ timedOut: true }), SCHEDULED_SCAN_DEADLINE_MS);
+  });
+  const bounded = Promise.race([
+    scanPromise.then(result => ({ timedOut: false as const, result })),
+    watchdog,
+  ]).then(outcome => {
+    if (!outcome.timedOut) { return; }
+    return logBackendActivity(env, {
+      category: 'orchestrator',
+      event: 'scheduled_scan_circuit_breaker',
+      status: 'warning',
+      message: 'Scheduled registration invocation exceeded its safety window; durable queue will retry',
+      details: { deadlineMs: SCHEDULED_SCAN_DEADLINE_MS },
+    }).catch(error => {
+      console.warn('Unable to log scheduled scan circuit breaker', error);
+    });
+  }).catch(error => {
+    console.warn('Scheduled registration scan failed', error);
+  }).finally(() => {
+    if (timeoutHandle) { clearTimeout(timeoutHandle); }
+  });
+  ctx.waitUntil(bounded);
+};
+
 const scheduleScan = (env: Env, ctx: ExecutionContext) => {
   const scan = startScan(env, { waitUntil: promise => ctx.waitUntil(promise) });
   if (scan.started) {
@@ -5340,9 +5377,7 @@ export default {
         console.warn('Unable to log scheduled scan queue state', error);
       }));
       if (scan.started) {
-        ctx.waitUntil(scan.promise.catch(error => {
-          console.warn('Scheduled registration scan failed', error);
-        }));
+        keepScheduledScanBounded(scan.promise, env, ctx);
       }
     };
     // A timer created outside a waitUntil promise can be discarded as soon as
