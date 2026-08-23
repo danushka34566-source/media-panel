@@ -259,7 +259,7 @@ const GENERATED_MEDIA_SUFFIX_REGEX =
 const STALE_REGISTRATION_ERROR_MESSAGE =
   'Previous registration attempt stalled; queued for retry';
 const MISSING_UPLOAD_ERROR_PREFIX = 'Upload not found in storage';
-const WORKER_BUILD_ID = 'v89';
+const WORKER_BUILD_ID = 'v90';
 // A scheduled Worker must finish promptly. Drive copies can become visible
 // asynchronously, so persist the in-flight state and check again on the next
 // minute instead of polling long enough to lose the registration lease.
@@ -281,6 +281,7 @@ export const REGISTRATION_SCAN_PAGE_SIZE = 100;
 const DELETION_STORAGE_TIMEOUT_MS = 15_000;
 const DELETION_MUTATION_TIMEOUT_MS = 45_000;
 const DELETION_MUTATION_CONCURRENCY = 4;
+const REGISTRATION_MAINTENANCE_TIMEOUT_MS = 10_000;
 // Source reconciliation is maintenance only. It must never consume the
 // whole scheduled invocation before the durable registration queue runs.
 const PROCESSING_SOURCE_RECONCILIATION_TIMEOUT_MS = 5_000;
@@ -3687,7 +3688,21 @@ const scanAndRegisterWithLease = async (
     operation: () => Promise<unknown>,
   ) => {
     try {
-      await operation();
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        await Promise.race([
+          operation(),
+          new Promise<never>((_, reject) => {
+            timer = setTimeout(() => reject(
+              new Error(
+                `Registration maintenance ${name} exceeded ${REGISTRATION_MAINTENANCE_TIMEOUT_MS}ms`,
+              ),
+            ), REGISTRATION_MAINTENANCE_TIMEOUT_MS);
+          }),
+        ]);
+      } finally {
+        if (timer) { clearTimeout(timer); }
+      }
     } catch (error) {
       console.warn(`Registration maintenance ${name} failed; continuing scan`, error);
       observe(logBackendActivity(env, {
