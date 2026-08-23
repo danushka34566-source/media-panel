@@ -257,7 +257,7 @@ const GENERATED_MEDIA_SUFFIX_REGEX =
 const STALE_REGISTRATION_ERROR_MESSAGE =
   'Previous registration attempt stalled; queued for retry';
 const MISSING_UPLOAD_ERROR_PREFIX = 'Upload not found in storage';
-const WORKER_BUILD_ID = 'v112';
+const WORKER_BUILD_ID = 'v114';
 // A scheduled Worker must finish promptly. Drive copies can become visible
 // asynchronously, so persist the in-flight state and check again on the next
 // minute instead of polling long enough to lose the registration lease.
@@ -280,18 +280,23 @@ export const REGISTRATION_SCAN_PAGE_SIZE = 100;
 // discovery cron can inspect a larger storage window, but reconciles it in
 // 25-object writes so detection throughput improves without touching the
 // registration claim/CPU path.
-export const REGISTRATION_DISCOVERY_PAGE_SIZE = 100;
+// Cloudflare Free scheduled invocations have a very small CPU budget. Keep
+// each discovery page to one bounded database upsert while the durable cursor
+// continues through the bucket over successive runs. This is throughput-safe
+// for large inventories and prevents a discovery pass from consuming the
+// registration cron's resource window.
+export const REGISTRATION_DISCOVERY_PAGE_SIZE = 25;
 export const REGISTRATION_DISCOVERY_SQL_BATCH_SIZE = 25;
 // Drive's upload-event endpoint accepts at most 100 rows. Keep the hot lane
 // at that ceiling so a burst of direct uploads cannot fall between the recent
 // window and the lexicographic cursor after the cursor has passed their keys.
 export const REGISTRATION_DISCOVERY_RECENT_PAGE_SIZE = 100;
-// Use two alternating schedules so discovery runs once per minute without
-// sharing the registration cron. Both schedules execute the same bounded,
-// resumable page and never claim or copy a registration.
+// Keep discovery on one separate schedule. Two alternating discovery crons
+// doubled the expensive list/upsert work every minute and repeatedly exceeded
+// the Cloudflare Free CPU budget. The cursor makes a two-minute cadence
+// resumable and lossless; the registration cron remains independent.
 export const REGISTRATION_DISCOVERY_CRONS = [
   '*/2 * * * *',
-  '1-59/2 * * * *',
 ] as const;
 export const REGISTRATION_DISCOVERY_CRON = REGISTRATION_DISCOVERY_CRONS[0];
 // A Drive copy can legitimately consume most of a free Worker invocation
@@ -4170,6 +4175,140 @@ const commitRegisteredMedia = async (
   });
 };
 
+// A Drive copy can finish after the Worker-side request deadline. When the
+// durable queue row already contains its media ID and the generated object is
+// now present at the exact source size, promote that copy immediately instead
+// of sending another copy request through the Drive API. This is deliberately
+// a narrow recovery path for a tracked row; untracked objects still use the
+// normal FIFO registration flow and collision checks.
+const recoverTrackedRegistrationDestination = async (
+  env: Env,
+  row: RegistrationStatusRow,
+  {
+    waitUntil,
+    observe,
+  }: {
+    waitUntil?: (promise: Promise<unknown>) => void
+    observe?: (operation: Promise<unknown>) => void
+  } = {},
+) => {
+  const mediaId = trimToUndefined(row.media_id);
+  const sourceUrl = trimToUndefined(row.source_url) || trimToUndefined(row.url);
+  const sourceKey = sourceUrl ? keyFromStorageUrl(env, sourceUrl) : '';
+  const extension = trimToUndefined(row.extension) ||
+    (sourceKey ? getFileParts(sourceKey).extension : '');
+  if (!mediaId || !sourceUrl || !sourceKey || !extension) { return false; }
+
+  const registrationKey = buildRegistrationKey(env, sourceKey, mediaId, extension);
+  if (registrationKey === sourceKey) { return false; }
+  const sourceSize = await storageObjectSize(
+    env,
+    sourceKey,
+    REGISTRATION_READY_CHECK_TIMEOUT_MS,
+  ).catch(() => undefined);
+  const destinationSize = await storageObjectSize(
+    env,
+    registrationKey,
+    REGISTRATION_READY_CHECK_TIMEOUT_MS,
+  ).catch(() => undefined);
+  if (!isExactVerifiedStorageCopy(sourceSize, destinationSize)) {
+    return false;
+  }
+
+  const registrationUrl = urlForKey(env, registrationKey);
+  const originalFileName =
+    trimToUndefined(row.original_file_name) ||
+    trimToUndefined(row.file_name) ||
+    getFileParts(sourceKey).fileName;
+  const title = trimToUndefined(row.title) || resolveRegistrationTitle({
+    originalFileName,
+    fallbackFileName: getFileParts(sourceKey).fileName,
+  });
+  const uploadedAt = parseDateValue(row.uploaded_at)?.toISOString() ||
+    new Date().toISOString();
+  const mediaType = VIDEO_EXTENSIONS.has(extension) ? 'video' : 'photo';
+  const storedFileName = getFileParts(registrationUrl).fileName;
+
+  try {
+    await commitRegisteredMedia(env, {
+      id: mediaId,
+      url: registrationUrl,
+      extension,
+      mediaType,
+      title,
+      transcodeStatus: mediaType === 'video' ? 'pending' : undefined,
+      transcodeError: mediaType === 'video'
+        ? 'Queued for background processing'
+        : undefined,
+      aspectRatio: mediaType === 'video' ? 16 / 9 : 1.5,
+      takenAt: uploadedAt,
+      takenAtNaive: toNaivePostgresString(uploadedAt),
+      originalFileName,
+      storedFileName,
+      sourceUrl,
+    });
+  } catch (error) {
+    console.warn('Ready tracked registration destination could not be committed', {
+      mediaId,
+      sourceUrl,
+      registrationUrl,
+      error,
+    });
+    return false;
+  }
+
+  const trackingUrls = [registrationUrl, sourceUrl];
+  const trackingCleanup = clearRegistrationTrackingAfterSuccess(env, {
+    mediaId,
+    urls: trackingUrls,
+  }).catch(error => {
+    console.warn('Ready registration tracking cleanup deferred', {
+      mediaId,
+      sourceUrl,
+      error,
+    });
+  });
+  if (waitUntil) {
+    waitUntil(trackingCleanup);
+  } else {
+    await trackingCleanup;
+  }
+
+  const sourceCleanup = deleteObject(env, sourceKey).catch(error => {
+    console.warn('Ready registration source cleanup deferred', {
+      mediaId,
+      sourceUrl,
+      error,
+    });
+  });
+  if (waitUntil) {
+    waitUntil(sourceCleanup);
+  } else {
+    await sourceCleanup;
+  }
+
+  observe?.(logBackendActivity(env, {
+    category: 'registration',
+    event: 'media_registered',
+    status: 'success',
+    message: `Registered ${originalFileName} from a verified Drive copy`,
+    mediaId,
+    details: {
+      phase: 'recovered_ready_destination',
+      sourceUrl,
+      storedUrl: registrationUrl,
+      storageProvider: detectStorageProvider(env),
+    },
+  }).catch(() => undefined));
+  const revalidation = revalidateMediaPanel(env, mediaId).catch(() => undefined);
+  if (waitUntil) {
+    waitUntil(revalidation);
+  } else {
+    await revalidation;
+  }
+  return true;
+};
+
 const scanAndRegisterWithLease = async (
   env: Env,
   leaseToken: string | undefined,
@@ -4305,6 +4444,30 @@ const scanAndRegisterWithLease = async (
       message: `Claimed ${claimedRegistrationRow.file_name || claimedRegistrationRow.url}`,
       details: { url: claimedRegistrationRow.url },
     }).catch(() => undefined));
+  }
+  if (claimedRegistrationRow?.media_id) {
+    const recovered = await recoverTrackedRegistrationDestination(
+      env,
+      claimedRegistrationRow,
+      { waitUntil, observe },
+    ).catch(error => {
+      console.warn('Tracked registration destination recovery failed', {
+        mediaId: claimedRegistrationRow.media_id,
+        url: claimedRegistrationRow.url,
+        error,
+      });
+      return false;
+    });
+    if (recovered) {
+      return {
+        registered: 1,
+        registrationPasses: 1,
+        registrationRemaining: 0,
+        pendingVideos: 0,
+        missingProcessingSources: 0,
+        scanSkipped: false,
+      };
+    }
   }
   // A scheduled invocation without a claim must finish immediately. Discovery
   // owns the storage cursor on its separate cron, so the registration hot path
