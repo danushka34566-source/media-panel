@@ -257,7 +257,7 @@ const GENERATED_MEDIA_SUFFIX_REGEX =
 const STALE_REGISTRATION_ERROR_MESSAGE =
   'Previous registration attempt stalled; queued for retry';
 const MISSING_UPLOAD_ERROR_PREFIX = 'Upload not found in storage';
-const WORKER_BUILD_ID = 'v108';
+const WORKER_BUILD_ID = 'v109';
 // A scheduled Worker must finish promptly. Drive copies can become visible
 // asynchronously, so persist the in-flight state and check again on the next
 // minute instead of polling long enough to lose the registration lease.
@@ -3459,7 +3459,11 @@ const runRegistrationDiscoveryPage = async (
         queuedDeletionPrefixes,
       );
     }
-    await setRegistrationScanCursor(env, page.nextContinuationToken);
+    await compareAndSetRegistrationScanCursor(
+      env,
+      cursor,
+      page.nextContinuationToken,
+    );
     console.log(JSON.stringify({
       category: 'registration',
       event: 'storage_discovery_page_scanned',
@@ -3915,6 +3919,31 @@ const setRegistrationScanCursor = async (
       continuation_token=EXCLUDED.continuation_token,
       updated_at=now()
   `;
+};
+
+// Alternating discovery crons can be delivered by separate isolates. Protect
+// the durable cursor from a slow invocation writing an older page token after
+// a newer invocation has already advanced it. A failed compare-and-set only
+// causes that page to be retried; it never affects registration claims.
+const compareAndSetRegistrationScanCursor = async (
+  env: Env,
+  expectedContinuationToken: string | undefined,
+  continuationToken?: string,
+) => {
+  await ensureRegistrationScanCursorTable(env);
+  const sql = sqlForEnv(env);
+  const rows = await sql`
+    UPDATE worker_registration_scan_cursor
+    SET
+      continuation_token=${continuationToken ?? null},
+      updated_at=now()
+    WHERE cursor_name='registration'
+      AND continuation_token IS NOT DISTINCT FROM ${expectedContinuationToken ?? null}
+    RETURNING cursor_name
+  ` as unknown as Array<{ cursor_name: string }>;
+  if (rows.length === 0) {
+    throw new Error('Registration discovery cursor changed during scan; retrying page');
+  }
 };
 
 const upsertMediaRow = async (
