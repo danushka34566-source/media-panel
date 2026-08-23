@@ -36,39 +36,38 @@ export default function MediaLink({
   const { setNextMediaAnimation } = useAppState();
   const router = useRouter();
 
-  const href = photo
-    ? pathForMedia({ photo, ...categories })
-    : undefined;
-
   const linkProps:
     Omit<ComponentProps<typeof LinkWithStatus>, 'children'> |
     undefined = photo
-      ? {
-        ref,
-        className,
-        href,
-        onClick: () => {
-          rememberMediaScrollPosition();
-          if (nextMediaAnimation) {
-            setNextMediaAnimation?.(nextMediaAnimation);
-          }
-        },
-        onPointerEnter: () => {
-          // Next's viewport prefetch is not reliable for controls that are
-          // below the fold or reached by keyboard/touch. Warm the exact
-          // adjacent detail payload as soon as the user targets it.
-          if (prefetch && href) {
-            router.prefetch(href);
-          }
-        },
-        onFocus: () => {
-          if (prefetch && href) {
-            router.prefetch(href);
-          }
-        },
-        scroll,
-        prefetch,
-      }
+      ? (() => {
+        const href = pathForMedia({ photo, ...categories });
+        return {
+          ref,
+          className,
+          href,
+          onClick: () => {
+            rememberMediaScrollPosition();
+            if (nextMediaAnimation) {
+              setNextMediaAnimation?.(nextMediaAnimation);
+            }
+          },
+          onPointerEnter: () => {
+            // Next's viewport prefetch is not reliable for controls that are
+            // below the fold or reached by keyboard/touch. Warm the exact
+            // adjacent detail payload as soon as the user targets it.
+            if (prefetch) {
+              router.prefetch(href);
+            }
+          },
+          onFocus: () => {
+            if (prefetch) {
+              router.prefetch(href);
+            }
+          },
+          scroll,
+          prefetch,
+        };
+      })()
       : undefined;
 
   const children = photo
