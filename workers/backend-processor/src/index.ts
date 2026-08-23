@@ -30,6 +30,7 @@ const BACKEND_PROCESSOR_SHARED_SECRET =
 let POLL_INTERVAL_MS = 15_000;
 let IDLE_INTERVAL_MS = 30_000;
 let CLAIM_LIMIT = 1;
+let PROCESSOR_REGISTRATION_ENABLED = false;
 const RUNTIME_CONFIG_REFRESH_INTERVAL_MS = 60_000;
 let lastRuntimeConfigLoadedAt = 0;
 const RUN_ONCE = process.env.RUN_ONCE === '1';
@@ -174,6 +175,9 @@ const runRegistrationJob = async () =>
   }).then(res => res.json() as Promise<RegistrationRunResponse>);
 
 const pullRegistrationJobs = async () => {
+  if (!PROCESSOR_REGISTRATION_ENABLED) {
+    return 0;
+  }
   // Each request claims at most one row. Parallel requests are safe because
   // the worker uses SELECT ... FOR UPDATE SKIP LOCKED; no claimed-but-unstarted
   // list can strand files as `registering` when this process stops.
@@ -214,6 +218,10 @@ const loadRuntimeConfig = async () => {
       HEARTBEAT_INTERVAL_MS,
     );
     CLAIM_LIMIT = number('claimLimit', CLAIM_LIMIT);
+    PROCESSOR_REGISTRATION_ENABLED = config.processorRegistrationEnabled === true ||
+      config.processorRegistrationEnabled === 'true' ||
+      config.processorRegistrationEnabled === 1 ||
+      config.processorRegistrationEnabled === '1';
     lastRuntimeConfigLoadedAt = Date.now();
   } catch (error) {
     log('config:fallback', {
