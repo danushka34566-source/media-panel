@@ -61,18 +61,33 @@ export default function PageResumeRecovery() {
             void root.offsetHeight;
             root.style.display = '';
             window.dispatchEvent(new Event('resize'));
-            try {
-              router.refresh();
-            } catch {
-              // A route can be tearing down at the same time; pageshow will
-              // deliver another opportunity on the next resume.
+            const main = document.querySelector('main');
+            const hasRenderedContent = Boolean(
+              main && main.childElementCount > 0 &&
+              main.getBoundingClientRect().height > 0,
+            );
+            // Do not refresh every route after a normal mobile resume. A
+            // refresh recreates grid data and jumps the user to the top even
+            // when the existing tree only needed a compositor repaint.
+            // Refresh is reserved for a genuinely missing/empty route tree.
+            if (!hasRenderedContent) {
+              try {
+                router.refresh();
+              } catch {
+                // A route can be tearing down at the same time; pageshow will
+                // deliver another opportunity on the next resume.
+              }
             }
             // If the App Router tree was discarded rather than merely stale,
             // fall back to one document reload. The guard prevents loops.
             fallbackTimer = window.setTimeout(() => {
               fallbackTimer = undefined;
-              const main = document.querySelector('main');
-              if (!main || !main.textContent?.trim()) {
+              const currentMain = document.querySelector('main');
+              if (
+                !currentMain ||
+                currentMain.childElementCount === 0 ||
+                currentMain.getBoundingClientRect().height === 0
+              ) {
                 window.location.reload();
               }
               recoveringRef.current = false;
