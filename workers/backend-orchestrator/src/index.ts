@@ -57,6 +57,9 @@ type RegistrationStatusRow = {
   error_message?: string | null
   attempt_count?: number | null
   updated_at?: string | Date | null
+  // Captured before the atomic claim refreshes updated_at. This prevents a
+  // stale retry from being mistaken for a fresh in-flight copy.
+  was_stale_retry?: boolean
 };
 
 type UploadRegistrationHintRow = {
@@ -263,7 +266,7 @@ const GENERATED_MEDIA_SUFFIX_REGEX =
 const STALE_REGISTRATION_ERROR_MESSAGE =
   'Previous registration attempt stalled; queued for retry';
 const MISSING_UPLOAD_ERROR_PREFIX = 'Upload not found in storage';
-const WORKER_BUILD_ID = 'v117';
+const WORKER_BUILD_ID = 'v118';
 // A scheduled Worker must finish promptly. Drive copies can become visible
 // asynchronously, so persist the in-flight state and check again on the next
 // minute instead of polling long enough to lose the registration lease.
@@ -901,7 +904,10 @@ const listDriveObjectSize = async (
     headers: driveHeaders(env),
     signal: AbortSignal.timeout(timeoutMs),
   });
-  if (!response.ok) return undefined;
+  if (response.status === 404) return undefined;
+  if (!response.ok) {
+    throw new Error(`Drive source metadata unavailable (${response.status})`);
+  }
   const data = await response.json() as {
     objects?: Array<{ key?: string, fileName?: string, url?: string, size?: number | string }>
   };
@@ -958,12 +964,15 @@ const storageObjectSize = async (
     // an absent object incorrectly terminalized valid registrations after the
     // source preflight could not read a content length.
     if (response.status === 405 || response.status === 501) {
-      return listDriveObjectSize(env, key, timeoutMs).catch(() => undefined);
+      return listDriveObjectSize(env, key, timeoutMs);
     }
-    if (!response.ok) { return undefined; }
+    if (response.status === 404) { return undefined; }
+    if (!response.ok) {
+      throw new Error(`Drive source metadata unavailable (${response.status})`);
+    }
     const contentLength = response.headers.get('content-length');
     if (contentLength === null) {
-      return listDriveObjectSize(env, key, timeoutMs).catch(() => undefined);
+      return listDriveObjectSize(env, key, timeoutMs);
     }
     const size = Number(contentLength);
     return Number.isFinite(size) && size >= 0 ? size : undefined;
@@ -1076,6 +1085,7 @@ export const isRecoverableDriveCopyError = (error: unknown) => {
   return (
     /^Drive copy failed \((?:408|425|429|5\d{2})\)/i.test(message) ||
     message.startsWith('Drive copy not ready:') ||
+    message.startsWith('Drive source metadata unavailable') ||
     message.startsWith('Copied destination is not readable in storage:') ||
     message.startsWith('Copied destination size mismatch:')
   );
@@ -2866,6 +2876,7 @@ const clearStaleRegistrationStatuses = async (env: Env) => {
         OR error_message LIKE 'Drive copy failed (429%'
         OR error_message LIKE 'Drive copy failed (5%'
         OR error_message LIKE 'Drive copy not ready:%'
+        OR error_message LIKE 'Drive source metadata unavailable%'
         OR error_message LIKE 'Copied destination is not readable in storage:%'
         OR error_message LIKE 'Copied destination size mismatch:%'
         OR error_message ILIKE '%timed out%'
@@ -2968,6 +2979,7 @@ const getRegistrationStatusRows = async (env: Env, limit?: number) => {
             OR error_message LIKE 'Drive copy failed (429%'
             OR error_message LIKE 'Drive copy failed (5%'
             OR error_message LIKE 'Drive copy not ready:%'
+            OR error_message LIKE 'Drive source metadata unavailable%'
             OR error_message LIKE 'Copied destination is not readable in storage:%'
             OR error_message LIKE 'Copied destination size mismatch:%'
           )
@@ -3039,8 +3051,14 @@ const claimRegistrationQueueRow = async (
       WHERE active_row.status='registering'
         AND active_row.updated_at >= now() -
           (${String(staleMinutes)} || ' minutes')::interval
-    ), candidate AS (
-      SELECT url
+    ), candidate AS MATERIALIZED (
+      SELECT
+        url,
+        (
+          status='registering'
+          AND updated_at < now() -
+            (${String(staleMinutes)} || ' minutes')::interval
+        ) AS was_stale_retry
       FROM worker_registration_status
       CROSS JOIN active
       WHERE active.active_count < ${concurrencyLimit}
@@ -3064,6 +3082,7 @@ const claimRegistrationQueueRow = async (
             OR error_message LIKE 'Drive copy failed (429%'
             OR error_message LIKE 'Drive copy failed (5%'
             OR error_message LIKE 'Drive copy not ready:%'
+            OR error_message LIKE 'Drive source metadata unavailable%'
             OR error_message LIKE 'Copied destination is not readable in storage:%'
             OR error_message LIKE 'Copied destination size mismatch:%'
           )
@@ -3072,28 +3091,45 @@ const claimRegistrationQueueRow = async (
       ORDER BY uploaded_at ASC NULLS LAST, updated_at ASC, url ASC
       LIMIT 1
       FOR UPDATE SKIP LOCKED
+    ), claimed AS (
+      UPDATE worker_registration_status AS status_row
+      SET
+        status='registering',
+        updated_at=now(),
+        error_message=NULL,
+        attempt_count=COALESCE(status_row.attempt_count, 0) + 1
+      FROM candidate
+      WHERE status_row.url=candidate.url
+      RETURNING
+        status_row.url,
+        status_row.file_name,
+        status_row.uploaded_at,
+        status_row.status,
+        status_row.source_url,
+        status_row.original_file_name,
+        status_row.title,
+        status_row.media_id,
+        status_row.extension,
+        status_row.error_message,
+        status_row.attempt_count,
+        status_row.updated_at
     )
-    UPDATE worker_registration_status AS status_row
-    SET
-      status='registering',
-      updated_at=now(),
-      error_message=NULL,
-      attempt_count=COALESCE(status_row.attempt_count, 0) + 1
-    FROM candidate
-    WHERE status_row.url=candidate.url
-    RETURNING
-      status_row.url,
-      status_row.file_name,
-      status_row.uploaded_at,
-      status_row.status,
-      status_row.source_url,
-      status_row.original_file_name,
-      status_row.title,
-      status_row.media_id,
-      status_row.extension,
-      status_row.error_message,
-      status_row.attempt_count,
-      status_row.updated_at
+    SELECT
+      claimed.url,
+      candidate.was_stale_retry,
+      claimed.file_name,
+      claimed.uploaded_at,
+      claimed.status,
+      claimed.source_url,
+      claimed.original_file_name,
+      claimed.title,
+      claimed.media_id,
+      claimed.extension,
+      claimed.error_message,
+      claimed.attempt_count,
+      claimed.updated_at
+    FROM claimed
+    JOIN candidate ON candidate.url=claimed.url
   ` as unknown as RegistrationStatusRow[];
   const claimed = rows[0];
   // Process the row immediately in this invocation. It is persisted as
@@ -5115,7 +5151,11 @@ const scanAndRegisterWithLease = async (
           // A fresh row may still represent a Drive copy in progress. Once
           // its status is stale, retry the idempotent copy instead of waiting
           // forever for a destination that may never exist.
-          retryStale: isStaleRegistration(existingRegistration),
+          retryStale: Boolean(
+            existingRegistration?.was_stale_retry ||
+            claimedRegistrationRow?.was_stale_retry ||
+            isStaleRegistration(existingRegistration),
+          ),
         })) {
           throw new Error(
             `Copied destination is not readable in storage: ${registrationKey}`,

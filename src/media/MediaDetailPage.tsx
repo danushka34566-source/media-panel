@@ -231,6 +231,7 @@ export default function MediaDetailPage({
         contentMain={<MediaGrid
           photos={photosGrid ?? photos}
           selectedMedia={photo}
+          prioritizeInitialMedia
           {...categoryPathParams}
           autoplaySmartPreviews
           suspendSmartPreviewsOnMainPlayback

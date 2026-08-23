@@ -52,7 +52,7 @@ export const INFINITE_SCROLL_GRID_INITIAL =
 export const INFINITE_SCROLL_GRID_MULTIPLE =
   process.env.NODE_ENV === 'development' ? 24 : 48;
 
-// Thumbnails below large photos on pages like /p/[photoId]
+// Thumbnails below large media detail pages.
 export const RELATED_GRID_MEDIA_TO_SHOW = 12;
 
 export const DEFAULT_ASPECT_RATIO = 1.5;

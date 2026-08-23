@@ -16,29 +16,35 @@ import { cache } from 'react';
 import { staticallyGenerateMediaIfConfigured } from '@/app/static';
 
 export const maxDuration = 60;
+// Keep detail payloads warm for adjacent navigation. Media mutations call
+// revalidateMedia, so this short ISR window never delays an explicit update.
+export const revalidate = 60;
 
 const getMediaNearIdCachedCached = cache(async (photoId: string) => {
-  const photo = await getMediaCached(photoId);
-  // Omit related photos when photo is excluded from feeds
-  if (!photo?.excludeFromFeeds) {
-    try {
-      return await getMediaNearIdCached(
-        photoId, {
-          limit: (RELATED_GRID_MEDIA_TO_SHOW * 2) + 1,
-          excludeFromFeeds: true,
-        },
-      );
-    } catch (error) {
-      // A related-media query must not make the primary detail page fail.
-      // This is especially important with Supabase transaction-pooler
-      // connections, where a transient read can fail independently.
-      console.error('Failed to load related media; rendering the primary item', {
-        photoId,
-        error,
-      });
-    }
+  // The near-id query already returns the primary item. Avoid the old
+  // getMediaCached + getMediaNearIdCached serial pair on every detail hit;
+  // that extra database round trip was the dominant delay during next/prev
+  // navigation. Excluded items are intentionally handled by the fallback so
+  // they never become part of a public neighbour list.
+  try {
+    const nearby = await getMediaNearIdCached(
+      photoId, {
+        limit: (RELATED_GRID_MEDIA_TO_SHOW * 2) + 1,
+        excludeFromFeeds: true,
+      },
+    );
+    if (nearby.photo) { return nearby; }
+  } catch (error) {
+    // A related-media query must not make the primary detail page fail.
+    // This is especially important with Supabase transaction-pooler
+    // connections, where a transient read can fail independently.
+    console.error('Failed to load related media; rendering the primary item', {
+      photoId,
+      error,
+    });
   }
 
+  const photo = await getMediaCached(photoId);
   return {
     photo,
     photos: [],

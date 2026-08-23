@@ -7,7 +7,6 @@ import {
   PATH_OG_SAMPLE,
   PATH_SETUP,
   PATH_VERIFY_LOGIN,
-  PREFIX_PHOTO,
   PREFIX_TAG,
 } from '@/app/path';
 import NextAuth, { User } from 'next-auth';
@@ -289,7 +288,7 @@ export const {
       const photoAlias = pathname.match(/^\/photos\/(.+)$/);
       if (photoAlias?.[1]) {
         return NextResponse.rewrite(new URL(
-          `${PREFIX_PHOTO}/${photoAlias[1]}`,
+          `/${photoAlias[1]}`,
           request.nextUrl,
         ));
       }

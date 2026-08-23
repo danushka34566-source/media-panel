@@ -47,8 +47,6 @@ export const PATH_RSS_XML               = '/rss.xml';
 export const PATH_FEED_JSON             = '/feed.json';
 
 // Path prefixes
-export const PREFIX_MEDIA               = '/p';
-export const PREFIX_PHOTO               = PREFIX_MEDIA;
 export const PREFIX_CAMERA              = '/shot-on';
 export const PREFIX_LENS                = '/lens';
 export const PREFIX_ALBUM               = '/album';
@@ -64,7 +62,6 @@ export const PREFIX_YEAR                = '/year';
 export const PREFIX_RECENTS             = '/recents';
 
 // Dynamic paths
-const PATH_MEDIA_DYNAMIC                = `${PREFIX_MEDIA}/[photoId]`;
 const PATH_MEDIA_ROOT_DYNAMIC           = `/[photoId]`;
 const PATH_CAMERA_DYNAMIC               = `${PREFIX_CAMERA}/[make]/[model]`;
 const PATH_LENS_DYNAMIC                 = `${PREFIX_LENS}/[make]/[model]`;
@@ -147,7 +144,6 @@ export const PATHS_TO_CACHE = [
   PATH_GRID,
   PATH_FULL,
   PATH_OG,
-  PATH_MEDIA_DYNAMIC,
   PATH_MEDIA_ROOT_DYNAMIC,
   PATH_CAMERA_DYNAMIC,
   PATH_LENS_DYNAMIC,
@@ -453,11 +449,9 @@ export const absolutePathForYearImage = (year: string) =>
 export const absolutePathForRecentsImage = () =>
   `${absolutePathForRecents()}/${IMAGE}`;
 
-// p/[photoId]
+// /[photoId]
 export const isPathMedia = (pathname = '') => {
-  // Old style: /p/[photoId]
-  if (new RegExp(`^${PREFIX_MEDIA}/[^/]+/?$`).test(pathname)) { return true; }
-  // New style: /[photoId] (single segment at root that is not a reserved prefix)
+  // Single-segment root media detail path that is not a reserved prefix.
   const seg = pathname.split('/').filter(Boolean);
   if (seg.length !== 1) { return false; }
   const first = seg[0];
@@ -598,9 +592,7 @@ export const getPathComponents = (
   album?: string
   photoId?: string
 }) => {
-  const photoIdFromMedia = pathname.match(
-    new RegExp(`^${PREFIX_MEDIA}/([^/]+)`))?.[1];
-  // New root-based photo path: /[photoId]
+  // Root-based photo path: /[photoId]
   const maybeRootId = pathname.match(new RegExp(`^/([^/]+)`))?.[1];
   const reserved = new Set([
     'grid', 'full', 'admin', 'api', 'sign-in', 'sign-up', 'verify-email',
@@ -647,7 +639,6 @@ export const getPathComponents = (
 
   return {
     photoId: (
-      photoIdFromMedia ||
       photoIdFromRoot ||
       photoIdFromTag ||
       photoIdFromCamera ||

@@ -5,6 +5,7 @@ import { Media, titleForMedia } from '@/media';
 import { MediaSetCategory } from '@/category';
 import { AnimationConfig } from '../components/AnimateItems';
 import { useAppState } from '@/app/AppState';
+import { useRouter } from 'next/navigation';
 import { pathForMedia } from '@/app/path';
 import { clsx } from 'clsx/lite';
 import LinkWithStatus from '@/components/LinkWithStatus';
@@ -33,6 +34,11 @@ export default function MediaLink({
   loaderType?: 'spinner' | 'badge'
 } & MediaSetCategory) {
   const { setNextMediaAnimation } = useAppState();
+  const router = useRouter();
+
+  const href = photo
+    ? pathForMedia({ photo, ...categories })
+    : undefined;
 
   const linkProps:
     Omit<ComponentProps<typeof LinkWithStatus>, 'children'> |
@@ -40,11 +46,24 @@ export default function MediaLink({
       ? {
         ref,
         className,
-        href: pathForMedia({ photo, ...categories }),
+        href,
         onClick: () => {
           rememberMediaScrollPosition();
           if (nextMediaAnimation) {
             setNextMediaAnimation?.(nextMediaAnimation);
+          }
+        },
+        onPointerEnter: () => {
+          // Next's viewport prefetch is not reliable for controls that are
+          // below the fold or reached by keyboard/touch. Warm the exact
+          // adjacent detail payload as soon as the user targets it.
+          if (prefetch && href) {
+            router.prefetch(href);
+          }
+        },
+        onFocus: () => {
+          if (prefetch && href) {
+            router.prefetch(href);
           }
         },
         scroll,

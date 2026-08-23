@@ -31,7 +31,7 @@ const PATH_OG                       = '/og';
 const PATH_OG_ALL                   = `${PATH_OG}/all`;
 const PATH_OG_SAMPLE                = `${PATH_OG}/sample`;
 
-const PATH_PHOTO                    = `/p/${PHOTO_ID}`;
+const PATH_PHOTO                    = `/${PHOTO_ID}`;
 
 const PATH_TAG                      = `/tag/${TAG}`;
 const PATH_TAG_PHOTO                = `${PATH_TAG}/${PHOTO_ID}`;

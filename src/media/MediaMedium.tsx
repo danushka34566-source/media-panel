@@ -152,7 +152,7 @@ export default function MediaMedium({
                   className="absolute inset-0 w-full h-full"
                   classNameImage="w-full h-full object-cover"
                   loading={eagerPreviewImage ? 'eager' : 'lazy'}
-                  fetchPriority={eagerPreviewImage ? 'high' : 'low'}
+                  fetchPriority={priority ? 'high' : 'auto'}
                   onError={() => setPosterFailedMediaId(photo.id)}
                   showLoadingIndicator
                 />
@@ -185,7 +185,7 @@ export default function MediaMedium({
                 alt={altTextForMedia(photo)}
                 priority={priority}
                 loading={eagerPreviewImage ? 'eager' : 'lazy'}
-                fetchPriority={eagerPreviewImage ? 'high' : 'low'}
+                fetchPriority={priority ? 'high' : 'auto'}
                 showLoadingIndicator
               />}
         </div>}

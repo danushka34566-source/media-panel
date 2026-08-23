@@ -95,6 +95,7 @@ test('Drive copy failures distinguish retryable transport errors from bad creden
   assert.equal(isRecoverableDriveCopyError(new Error('Drive copy failed (404): Source not found')), false);
   assert.equal(isRecoverableDriveCopyError(new Error('Drive copy failed (429): Too many requests')), true);
   assert.equal(isRecoverableDriveCopyError(new Error('fetch failed')), true);
+  assert.equal(isRecoverableDriveCopyError(new Error('Drive source metadata unavailable (503)')), true);
 });
 
 test('registration scans process a bounded slice instead of one file per cron', () => {
@@ -190,6 +191,8 @@ test('scheduled registration claims enforce the configured global concurrency ca
   const claimSource = workerSource.slice(claimStart, claimEnd);
   assert.match(claimSource, /pg_advisory_xact_lock/);
   assert.match(claimSource, /active_count < \$\{concurrencyLimit\}/);
+  assert.match(claimSource, /was_stale_retry/);
+  assert.match(workerSource, /claimedRegistrationRow\?\.was_stale_retry/);
   assert.match(workerSource, /claimRegistrationQueueRow\(env, registerBatchSize\)/);
 });
 

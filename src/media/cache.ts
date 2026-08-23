@@ -212,7 +212,6 @@ export const revalidateMedia = (photoId: string) => {
   revalidateFocalLengthsKey();
   // Paths
   revalidatePath(pathForMedia({ photo: photoId }), 'layout');
-  revalidatePath(`/p/${photoId}`, 'layout');
   revalidatePath(PATH_ROOT, 'layout');
   revalidatePath(PATH_GRID, 'layout');
   revalidatePath(PATH_FULL, 'layout');

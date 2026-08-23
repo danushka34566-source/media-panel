@@ -267,9 +267,13 @@ export default function MediaGrid({
                 // every detail route in a large grid saturates the connection.
                 prefetch: index < 6,
                 selected: photo.id === selectedMedia?.id,
-                priority: prioritizeInitialMedia ? index < 2 : undefined,
+                // The detail hero owns the browser's high-priority image
+                // slot. Related cards still mount immediately, but their
+                // requests stay normal priority so they cannot delay the
+                // hero poster or the first frame during navigation.
+                priority: undefined,
                 initiallyLoadPreviewImage:
-                  prioritizeInitialMedia && index < 6,
+                  prioritizeInitialMedia && index < 2,
                 preloadVideoPreview: !areSmartPreviewsSuspended &&
                   shouldPreloadGridPreview(
                     videoPreviewMode,
