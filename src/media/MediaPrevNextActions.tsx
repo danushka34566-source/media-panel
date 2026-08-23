@@ -241,6 +241,7 @@ export default function MediaPrevNextActions({
             photo={previousMedia}
             nextMediaAnimation={ANIMATION_RIGHT}
             scroll={false}
+            replace
             loaderType="badge"
             prefetch
           >
@@ -263,6 +264,7 @@ export default function MediaPrevNextActions({
             photo={nextMedia}
             nextMediaAnimation={ANIMATION_LEFT}
             scroll={false}
+            replace
             loaderType="badge"
             prefetch
           >

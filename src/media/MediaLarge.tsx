@@ -553,6 +553,7 @@ export default function MediaLarge({
   const fullVideoCompatibilityUrl = compatibilityPlaybackUrl
     ? getFullVideoBridgeUrl(compatibilityPlaybackUrl)
     : undefined;
+
   const warmFullVideoDownload = useCallback((sourceUrl = photo.url) => {
     if (!isVideo || !sourceUrl) { return; }
     const url = getFullVideoBridgeUrl(sourceUrl);
@@ -694,7 +695,7 @@ export default function MediaLarge({
   // when someone scrolls quickly past a row.
   const shouldLoadPreviewImage = true;
   const eagerMediaImage = Boolean(priority) || initiallyLoadPreviewImage ||
-    isPageResuming;
+    isPageResuming || isInPreloadRange;
   // Do not prewarm every original video when a long full page mounts. That
   // creates one signed-download request per card (including cards hundreds of
   // rows below the viewport), exhausting browser/network memory and causing
@@ -1196,10 +1197,10 @@ export default function MediaLarge({
 
     if (deltaX < 0 && swipeNextPath) {
       setNextMediaAnimation?.(SWIPE_ANIMATION_LEFT);
-      router.push(swipeNextPath, { scroll: false });
+      router.replace(swipeNextPath, { scroll: false });
     } else if (deltaX > 0 && swipePreviousPath) {
       setNextMediaAnimation?.(SWIPE_ANIMATION_RIGHT);
-      router.push(swipePreviousPath, { scroll: false });
+      router.replace(swipePreviousPath, { scroll: false });
     }
   }, [
     router,

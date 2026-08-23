@@ -14,6 +14,7 @@ export default function PageResumeRecovery() {
   useEffect(() => {
     let recoveryTimer: number | undefined;
     let fallbackTimer: number | undefined;
+    let resetTimer: number | undefined;
 
     const clearTimers = () => {
       if (recoveryTimer !== undefined) {
@@ -23,6 +24,10 @@ export default function PageResumeRecovery() {
       if (fallbackTimer !== undefined) {
         window.clearTimeout(fallbackTimer);
         fallbackTimer = undefined;
+      }
+      if (resetTimer !== undefined) {
+        window.clearTimeout(resetTimer);
+        resetTimer = undefined;
       }
     };
 
@@ -47,6 +52,15 @@ export default function PageResumeRecovery() {
         recoveryTimer = undefined;
         requestAnimationFrame(() => {
           requestAnimationFrame(() => {
+            // iOS can keep a stale composited layer after a tab resumes even
+            // though the React tree still contains all of its content. A
+            // short display toggle forces that layer to be rebuilt without
+            // throwing away the current route or scroll position.
+            const root = document.documentElement;
+            root.style.display = 'none';
+            void root.offsetHeight;
+            root.style.display = '';
+            window.dispatchEvent(new Event('resize'));
             try {
               router.refresh();
             } catch {
@@ -61,10 +75,19 @@ export default function PageResumeRecovery() {
               if (!main || !main.textContent?.trim()) {
                 window.location.reload();
               }
+              recoveringRef.current = false;
             }, 1_500);
           });
         });
       }, 120);
+
+      // Keep the guard scoped to this resume event. A tab can be locked and
+      // unlocked repeatedly; one successful recovery must not disable all
+      // future recovery attempts for the lifetime of the page.
+      resetTimer = window.setTimeout(() => {
+        resetTimer = undefined;
+        recoveringRef.current = false;
+      }, 2_000);
     };
 
     const onVisibilityChange = () => recover();

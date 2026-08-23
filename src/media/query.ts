@@ -1245,6 +1245,40 @@ export const getPendingMediaProcessing = async (limit = 1000, offset = 0) =>
     'getPendingMediaProcessing',
   );
 
+/**
+ * Fetch the processing page and its total from the same database snapshot.
+ * The admin processing screen refreshes frequently; using a window count
+ * avoids issuing a second full queue count query for every refresh.
+ */
+export const getPendingMediaProcessingPage = async (limit = 1000, offset = 0) =>
+  safelyQuery(
+    () => query<MediaDb & { __total: string }>(
+      `
+        SELECT media.*, COUNT(*) OVER()::text AS __total
+        FROM media
+        WHERE ${pendingMediaProcessingWhere}
+        ORDER BY
+          CASE transcode_status
+            WHEN 'processing' THEN 0
+            WHEN 'pending' THEN 1
+            WHEN 'failed' THEN 2
+          END,
+          created_at DESC,
+          id DESC
+        LIMIT $1
+        OFFSET $2
+      `,
+      [limit, offset],
+    ).then(({ rows }) => ({
+      total: Number.parseInt(rows[0]?.__total || '0', 10),
+      items: parseMediaRowsSafely(
+        rows as MediaDb[],
+        'getPendingMediaProcessingPage',
+      ),
+    })),
+    'getPendingMediaProcessingPage',
+  );
+
 export const getAllMediaStorageReferences = async () =>
   safelyQuery(
     () => query<{

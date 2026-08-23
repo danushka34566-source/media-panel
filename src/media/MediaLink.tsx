@@ -18,6 +18,7 @@ export default function MediaLink({
   photo,
   scroll,
   prefetch,
+  replace,
   nextMediaAnimation,
   className,
   children: _children,
@@ -28,6 +29,7 @@ export default function MediaLink({
   photo?: Media
   scroll?: boolean
   prefetch?: boolean
+  replace?: boolean
   nextMediaAnimation?: AnimationConfig
   className?: string
   children?: ReactNode
@@ -67,6 +69,7 @@ export default function MediaLink({
           },
           scroll,
           prefetch,
+          replace,
         };
       })()
       : undefined;

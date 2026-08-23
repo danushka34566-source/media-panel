@@ -161,6 +161,156 @@ const ACTIVE_REGISTRATION_STATUSES: WorkerRegistrationStatus[] = [
   'registering',
 ];
 
+type WorkerRegistrationStatusRow = {
+  url: string
+  file_name: string | null
+  uploaded_at: Date | null
+  status: WorkerRegistrationStatus
+  source_url: string | null
+  original_file_name: string | null
+  title: string | null
+  media_id: string | null
+  extension: string | null
+  error_message: string | null
+  created_at?: Date | null
+};
+
+const mapWorkerRegistrationStatusRow = (
+  row: WorkerRegistrationStatusRow,
+): WorkerRegistrationStatusItem => ({
+  url: row.url,
+  fileName: row.file_name || row.url.split('/').pop() || row.url,
+  uploadedAt: row.uploaded_at ?? undefined,
+  status: row.status,
+  sourceUrl: row.source_url ?? undefined,
+  originalFileName: row.original_file_name ?? undefined,
+  title: row.title ?? undefined,
+  mediaId: row.media_id ?? undefined,
+  extension: row.extension ?? undefined,
+  errorMessage: row.error_message ?? undefined,
+});
+
+const prepareWorkerRegistrationRead = async () => {
+  await createWorkerRegistrationStatusTable();
+  await createRegisteredUploadFileMapTable();
+  await ensureWorkerRegistrationStatusColumns();
+  await ensureWorkerRegistrationStatusColumnTypes();
+  await createUploadRegistrationHintsTable();
+  await ensureUploadRegistrationHintsColumnTypes();
+  await clearStaleWorkerRegistrationStatuses();
+  await clearResolvedWorkerRegistrationStatuses();
+  await clearCompletedWorkerRegistrationStatuses();
+};
+
+/**
+ * Fetch the registration page and total in one prepared read.
+ *
+ * The processing admin page needs both values for pagination. Keeping these
+ * together prevents two concurrent rounds of table setup/cleanup and avoids a
+ * second scan of the same anti-join-heavy queue query on every refresh.
+ */
+export const getUnregisteredStorageUploadsPage = async (
+  limit = 1000,
+  offset = 0,
+) => {
+  const pageLimit = Math.min(Math.max(Math.floor(limit), 1), 1000);
+  const pageOffset = Math.max(Math.floor(offset), 0);
+  return safelyQuery(async () => {
+    await prepareWorkerRegistrationRead();
+    return query<{
+      total: string
+      uploads: WorkerRegistrationStatusRow[]
+    }>(`
+      WITH eligible AS (
+        SELECT
+          s.url,
+          s.file_name,
+          s.uploaded_at,
+          s.status,
+          s.source_url,
+          COALESCE(s.original_file_name, h.original_file_name) AS original_file_name,
+          COALESCE(s.title, h.title) AS title,
+          s.media_id,
+          s.extension,
+          s.error_message,
+          s.created_at
+        FROM worker_registration_status s
+        LEFT JOIN upload_registration_hints h
+          ON h.url = s.url
+        WHERE s.status IN ('detected', 'registering', 'error')
+          AND NOT EXISTS (
+            SELECT 1
+            FROM media
+            WHERE (
+              s.media_id IS NOT NULL
+              AND media.id = s.media_id
+            )
+              OR media.url = s.url
+              OR (
+                s.source_url IS NOT NULL
+                AND media.url = s.source_url
+              )
+          )
+          AND NOT EXISTS (
+            SELECT 1
+            FROM registered_upload_file_map m
+            WHERE (
+              s.media_id IS NOT NULL
+              AND m.media_id = s.media_id
+            )
+              OR m.stored_url = s.url
+              OR (
+                s.source_url IS NOT NULL
+                AND (
+                  m.source_url = s.source_url
+                  OR m.stored_url = s.source_url
+                )
+              )
+          )
+      ), page AS (
+        SELECT *
+        FROM eligible
+        ORDER BY
+          CASE status
+            WHEN 'registering' THEN 0
+            WHEN 'detected' THEN 1
+            WHEN 'error' THEN 2
+            ELSE 3
+          END,
+          uploaded_at DESC NULLS LAST,
+          created_at DESC,
+          url DESC
+        LIMIT $1
+        OFFSET $2
+      )
+      SELECT
+        (SELECT COUNT(*)::text FROM eligible) AS total,
+        COALESCE((
+          SELECT jsonb_agg(
+            to_jsonb(page)
+            ORDER BY
+              CASE page.status
+                WHEN 'registering' THEN 0
+                WHEN 'detected' THEN 1
+                WHEN 'error' THEN 2
+                ELSE 3
+              END,
+              page.uploaded_at DESC NULLS LAST,
+              page.created_at DESC,
+              page.url DESC
+          )
+          FROM page
+        ), '[]'::jsonb) AS uploads
+    `, [pageLimit, pageOffset]).then(({ rows }) => {
+      const row = rows[0];
+      return {
+        total: Number.parseInt(row?.total || '0', 10),
+        uploads: (row?.uploads || []).map(mapWorkerRegistrationStatusRow),
+      };
+    });
+  }, 'getUnregisteredStorageUploadsPage');
+};
+
 export const getUnregisteredStorageUploads = async (limit = 1000, offset = 0) => {
   return safelyQuery(async () => {
     await createWorkerRegistrationStatusTable();

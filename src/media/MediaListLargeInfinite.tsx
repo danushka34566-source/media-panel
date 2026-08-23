@@ -10,6 +10,7 @@ export default function MediaListLargeInfinite({
   initialOffset,
   itemsPerPage,
   sortBy,
+  sortWithPriority,
   excludeFromFeeds,
 }: {
   initialOffset: number
@@ -24,6 +25,7 @@ export default function MediaListLargeInfinite({
       initialOffset={initialOffset}
       itemsPerPage={itemsPerPage}
       sortBy={sortBy}
+      sortWithPriority={sortWithPriority}
       excludeFromFeeds={excludeFromFeeds}
       wrapMoreButtonInGrid
       loadAheadViewports={FULL_LIST_LOAD_AHEAD_VIEWPORTS}

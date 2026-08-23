@@ -3,12 +3,10 @@ import AdminProcessingTable, {
   type RegistrationItem,
 } from '@/admin/AdminProcessingTable';
 import {
-  getUnregisteredStorageUploads,
-  getUnregisteredStorageUploadsCount,
+  getUnregisteredStorageUploadsPage,
 } from '@/admin/processing/server';
 import {
-  getPendingMediaProcessing,
-  getPendingMediaProcessingCount,
+  getPendingMediaProcessingPage,
 } from '@/media/query';
 
 export const maxDuration = 60;
@@ -24,7 +22,7 @@ const getPageNumber = (page?: string | string[]) => {
 };
 
 const registrationRowToStatus = (
-  upload: Awaited<ReturnType<typeof getUnregisteredStorageUploads>>[number],
+  upload: Awaited<ReturnType<typeof getUnregisteredStorageUploadsPage>>['uploads'][number],
 ): RegistrationItem => ({
   ...(upload.status !== 'detected' && upload.status !== 'registering'
     ? { status: 'error' as const }
@@ -53,35 +51,30 @@ export default async function AdminProcessingPage({
   const registrationPage = getPageNumber(params.registrationPage);
   const processingPage = getPageNumber(params.processingPage);
   const [
-    registrationUploads,
-    registrationTotal,
-    videoProcessingUploads,
-    processingTotal,
+    registrationResult,
+    processingResult,
   ] = await Promise.all([
-    getUnregisteredStorageUploads(
+    getUnregisteredStorageUploadsPage(
       PROCESSING_PAGE_SIZE,
       (registrationPage - 1) * PROCESSING_PAGE_SIZE,
-    ).catch(() => []),
-    getUnregisteredStorageUploadsCount().catch(() => 0),
-    getPendingMediaProcessing(
+    ).catch(() => ({ uploads: [], total: 0 })),
+    getPendingMediaProcessingPage(
       PROCESSING_PAGE_SIZE,
       (processingPage - 1) * PROCESSING_PAGE_SIZE,
-    )
-      .catch(() => []),
-    getPendingMediaProcessingCount().catch(() => 0),
+    ).catch(() => ({ items: [], total: 0 })),
   ]);
 
-  const registeringUrls = registrationUploads.map(registrationRowToStatus);
+  const registeringUrls = registrationResult.uploads.map(registrationRowToStatus);
 
   return (
     <AppGrid
       contentMain={
         <AdminProcessingTable
           registering={registeringUrls}
-          registeringTotal={registrationTotal}
+          registeringTotal={registrationResult.total}
           registrationPage={registrationPage}
-          processing={videoProcessingUploads}
-          processingTotal={processingTotal}
+          processing={processingResult.items}
+          processingTotal={processingResult.total}
           processingPage={processingPage}
         />
       }

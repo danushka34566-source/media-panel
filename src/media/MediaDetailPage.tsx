@@ -6,6 +6,7 @@ import {
 } from '.';
 import { MediaSetCategory } from '../category';
 import MediaLarge from './MediaLarge';
+import MediaDetailHeroTransition from './MediaDetailHeroTransition';
 import AppGrid from '@/components/AppGrid';
 import MediaGrid from './MediaGrid';
 import TagHeader from '@/tag/TagHeader';
@@ -186,7 +187,7 @@ export default function MediaDetailPage({
           hasAiTextGeneration={AI_CONTENT_GENERATION_ENABLED}
         />}
       />
-      <div className="md:mb-8" key={photo.id}>
+      <MediaDetailHeroTransition key={photo.id}>
         <MediaLarge
           key={photo.id}
           photo={photo}
@@ -219,7 +220,7 @@ export default function MediaDetailPage({
           swipePreviousPath={swipePreviousPath}
           swipeNextPath={swipeNextPath}
         />
-      </div>
+      </MediaDetailHeroTransition>
       <AppGrid
         contentMain={<MediaGrid
           photos={photosGrid ?? photos}
