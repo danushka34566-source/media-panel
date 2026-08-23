@@ -23,6 +23,7 @@ import {
   type DetailMainVideoPlayback,
 } from './detail-video-playback';
 import PersonalFavoriteButton from './PersonalFavoriteButton';
+import { DETAIL_HERO_READY_EVENT } from './MediaDetailHeroTransition';
 
 const WIDE_GRID_ASPECT_RATIO = 16 / 9;
 const SMART_PREVIEW_ACTIVATION_EVENT = 'media-grid-smart-preview-activation';
@@ -122,12 +123,24 @@ export default function MediaGrid({
     if (!deferInitialRender || !deferKey) { return; }
 
     // Keep the first route transition frames dedicated to the hero. Release
-    // related cards after the directional animation has had time to settle;
-    // they still mount immediately afterwards and are not network-blocked.
-    const timer = window.setTimeout(() => {
+    // related cards at the actual hero boundary rather than racing a fixed
+    // timer against slower mobile decoders and server transitions.
+    const release = () => {
       setReleasedDeferKey(deferKey);
-    }, 240);
-    return () => window.clearTimeout(timer);
+    };
+    const onHeroReady = (event: Event) => {
+      const mediaId = (event as CustomEvent<{ mediaId?: string }>).detail?.mediaId;
+      if (mediaId === deferKey) { release(); }
+    };
+    window.addEventListener(DETAIL_HERO_READY_EVENT, onHeroReady);
+    // Reduced-motion mode and a cancelled transition may not emit a Framer
+    // completion callback. Keep a bounded fallback so related content never
+    // remains deferred indefinitely.
+    const timer = window.setTimeout(release, 650);
+    return () => {
+      window.removeEventListener(DETAIL_HERO_READY_EVENT, onHeroReady);
+      window.clearTimeout(timer);
+    };
   }, [deferInitialRender, deferKey]);
   useEffect(() => {
     const syncActivePreviews = (event: Event) => {
@@ -203,9 +216,9 @@ export default function MediaGrid({
       {...{ [DATA_KEY_MEDIA_GRID]: selectable, className }}
     >
       <AnimateItems
-        key={`${isWideGrid ? 'wide' : 'standard'}-${
-          isGridHighDensity ? 'high' : 'regular'
-        }`}
+        // Keep one motion tree while layout preferences hydrate. Remounting
+        // on the initial density/width update replayed the hidden scale
+        // variant and made loaded cards visibly shrink away before returning.
         onPointerDown={event => activateSmartRows(
           event.target,
           event.currentTarget,
@@ -244,16 +257,13 @@ export default function MediaGrid({
                 : 'grid-cols-2 sm:grid-cols-4 md:grid-cols-3 lg:grid-cols-4',
           'items-center',
         )}
+        // Keep the original scale entrance, while AnimateItems prevents
+        // late-inserted cards from inheriting its hidden variant.
         type={animate === false ? 'none' : undefined}
         canStart={canStart}
         duration={0.45}
         staggerDelay={0.015}
         distanceOffset={40}
-        // Keep cards visible while their images decode. A zero-opacity
-        // entrance left a black grid when the first animation frame was
-        // interrupted by a cold image request; the directional scale still
-        // provides motion without hiding the content.
-        fade={false}
         animateOnFirstLoadOnly={animateFirstLoadOnly}
         staggerOnFirstLoadOnly={staggerOnFirstLoadOnly}
         onAnimationComplete={onAnimationComplete}

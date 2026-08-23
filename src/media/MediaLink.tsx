@@ -49,7 +49,13 @@ export default function MediaLink({
           href,
           'data-media-id': photo.id,
           onClick: event => {
-            rememberMediaScrollPosition(photo.id, event.currentTarget);
+            // Next/previous detail navigation replaces the current detail
+            // route. It must not overwrite the originating grid's saved
+            // anchor with the chevron's DOM position; otherwise Back restores
+            // to the detail controls instead of the card the user opened.
+            if (!replace) {
+              rememberMediaScrollPosition(photo.id, event.currentTarget);
+            }
             if (nextMediaAnimation) {
               setNextMediaAnimation?.(nextMediaAnimation);
             }

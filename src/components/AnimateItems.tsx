@@ -64,6 +64,15 @@ function AnimateItems({
   } = useAppState();
 
   const nextMediaAnimationId = useRef<string>(undefined);
+  // A few feeds intentionally mount their motion shell before their items
+  // arrive (for example while a detail route releases related cards). If the
+  // shell has already completed its entrance animation, newly inserted items
+  // can inherit the hidden scale/translate variant and visibly shrink before
+  // settling. Keep the first item keys eligible for the entrance animation;
+  // later keys are mounted directly in their final state.
+  const initialItemKeys = useRef(new Set(
+    (itemKeys ?? items.map((_, index) => String(index))).map(String),
+  ));
 
   const prefersReducedMotion = usePrefersReducedMotion();
   
@@ -124,15 +133,20 @@ function AnimateItems({
         nextMediaAnimationId.current = getNextMediaAnimationId?.();
       }}
       onAnimationComplete={() => {
+        // Once the first entrance has settled, a removed-and-reinserted key
+        // is a late item too; do not let it replay the hidden variant.
+        initialItemKeys.current.clear();
         if (animateFromAppState) {
           clearNextMediaAnimation?.(nextMediaAnimationId.current);
         }
         onAnimationComplete?.();
       }}
     >
-      {items.map((item, index) =>
-        <motion.div
-          key={itemKeys ? itemKeys[index] : index}
+      {items.map((item, index) => {
+        const itemKey = String(itemKeys ? itemKeys[index] : index);
+        return <motion.div
+          key={itemKey}
+          initial={initialItemKeys.current.has(itemKey) ? undefined : false}
           className={classNameItem}
           variants={{
             hidden,
@@ -151,7 +165,8 @@ function AnimateItems({
           }}
         >
           {item}
-        </motion.div>)}
+        </motion.div>;
+      })}
     </motion.div>
   );
 };

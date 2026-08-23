@@ -1,9 +1,11 @@
 'use client';
 
-import { ReactNode, useRef } from 'react';
+import { ReactNode, useEffect, useRef } from 'react';
 import { motion } from 'framer-motion';
 import { useAppState } from '@/app/AppState';
 import usePrefersReducedMotion from '@/utility/usePrefersReducedMotion';
+
+export const DETAIL_HERO_READY_EVENT = 'media-detail-hero-ready';
 
 /**
  * A small directional transition for the detail hero.
@@ -14,8 +16,10 @@ import usePrefersReducedMotion from '@/utility/usePrefersReducedMotion';
  * so navigation still feels intentional without a black flash or layout jump.
  */
 export default function MediaDetailHeroTransition({
+  mediaId,
   children,
 }: {
+  mediaId: string
   children: ReactNode
 }) {
   const {
@@ -35,22 +39,42 @@ export default function MediaDetailHeroTransition({
   );
   const initialX = direction === 'left' ? distance : -distance;
 
+  useEffect(() => () => {
+    // Clear a queued directional animation if reduced-motion mode or a fast
+    // route change prevents Framer Motion from reaching its completion hook.
+    if (animationId.current) {
+      clearNextMediaAnimation?.(animationId.current);
+    }
+  }, [clearNextMediaAnimation]);
+
   return (
     <motion.div
       className="md:mb-8"
       initial={shouldAnimate ? { opacity: 1, x: initialX } : false}
       animate={{ opacity: 1, x: 0 }}
       transition={{
-        duration: Math.min(Math.max(animation.current?.duration ?? 0.2, 0.16), 0.28),
+        duration: Math.min(
+          Math.max(animation.current?.duration ?? 0.2, 0.16),
+          0.28,
+        ),
         ease: [0.22, 1, 0.36, 1],
       }}
       onAnimationStart={() => {
-        animationId.current = getNextMediaAnimationId?.();
+        if (shouldAnimate) {
+          animationId.current = getNextMediaAnimationId?.();
+        }
       }}
       onAnimationComplete={() => {
-        if (shouldAnimate) {
+        if (animationId.current) {
           clearNextMediaAnimation?.(animationId.current);
         }
+        // Related cards listen for this boundary and mount after the hero has
+        // settled, keeping their image work out of the transition's critical
+        // frames. The timer fallback in MediaGrid covers reduced-motion and
+        // browsers that skip Framer's completion callback.
+        window.dispatchEvent(new CustomEvent(DETAIL_HERO_READY_EVENT, {
+          detail: { mediaId },
+        }));
       }}
     >
       {children}

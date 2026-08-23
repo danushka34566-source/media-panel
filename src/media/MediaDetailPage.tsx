@@ -187,7 +187,7 @@ export default function MediaDetailPage({
           hasAiTextGeneration={AI_CONTENT_GENERATION_ENABLED}
         />}
       />
-      <MediaDetailHeroTransition key={photo.id}>
+      <MediaDetailHeroTransition key={photo.id} mediaId={photo.id}>
         <MediaLarge
           key={photo.id}
           photo={photo}
