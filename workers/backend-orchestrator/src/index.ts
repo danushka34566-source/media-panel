@@ -263,7 +263,7 @@ const GENERATED_MEDIA_SUFFIX_REGEX =
 const STALE_REGISTRATION_ERROR_MESSAGE =
   'Previous registration attempt stalled; queued for retry';
 const MISSING_UPLOAD_ERROR_PREFIX = 'Upload not found in storage';
-const WORKER_BUILD_ID = 'v116';
+const WORKER_BUILD_ID = 'v117';
 // A scheduled Worker must finish promptly. Drive copies can become visible
 // asynchronously, so persist the in-flight state and check again on the next
 // minute instead of polling long enough to lose the registration lease.
@@ -953,6 +953,13 @@ const storageObjectSize = async (
         signal: AbortSignal.timeout(timeoutMs),
       },
     );
+    // Drive's object route intentionally does not implement HEAD (405). The
+    // list endpoint is the authoritative metadata fallback; treating 405 as
+    // an absent object incorrectly terminalized valid registrations after the
+    // source preflight could not read a content length.
+    if (response.status === 405 || response.status === 501) {
+      return listDriveObjectSize(env, key, timeoutMs).catch(() => undefined);
+    }
     if (!response.ok) { return undefined; }
     const contentLength = response.headers.get('content-length');
     if (contentLength === null) {

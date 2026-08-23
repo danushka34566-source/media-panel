@@ -262,6 +262,14 @@ test('Drive registration I/O is deadline-bound so a scan lease cannot stick fore
     workerSource.slice(objectSizeStart, objectSizeEnd),
     /signal: AbortSignal\.timeout\(timeoutMs\)/,
   );
+  assert.match(
+    workerSource.slice(objectSizeStart, objectSizeEnd),
+    /response\.status === 405 \|\| response\.status === 501/,
+  );
+  assert.match(
+    workerSource.slice(objectSizeStart, objectSizeEnd),
+    /listDriveObjectSize\(env, key, timeoutMs\)/,
+  );
 });
 
 test('long scans keep their lease alive while hung scheduled invocations self-release', () => {
