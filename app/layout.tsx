@@ -28,6 +28,7 @@ import SelectMediaProvider from '@/admin/select/SelectMediaProvider';
 import Script from 'next/script';
 import DeferredGlobalFeatures from '@/app/DeferredGlobalFeatures';
 import IdleSessionLogout from '@/auth/IdleSessionLogout';
+import PageResumeRecovery from '@/app/PageResumeRecovery';
 import { authCachedSafe } from '@/auth/cache';
 import { getSiteAccessSettingsSafe } from '@/auth/site-access';
 
@@ -145,6 +146,7 @@ export default async function RootLayout({
                 <Analytics debug={false} />
                 <SpeedInsights debug={false} />
                 <MediaEscapeHandler />
+                <PageResumeRecovery />
                 <ToasterWithThemes />
               </ThemeProvider>
             </SelectMediaProvider>
