@@ -55,6 +55,8 @@ export type AppStateContextType = {
   // AUTH
   userEmail?: string
   userEmailEager?: string
+  userName?: string
+  userProfileImageUrl?: string
   setUserEmail?: Dispatch<SetStateAction<string | undefined>>
   isUserSignedIn?: boolean
   isUserSignedInEager?: boolean

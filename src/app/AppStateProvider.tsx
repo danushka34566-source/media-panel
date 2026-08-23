@@ -230,6 +230,12 @@ export default function AppStateProvider({
       isUserRole(auth.user.role)
     ? auth.user.role
     : undefined;
+  const userName = auth?.user?.status === 'active'
+    ? auth.user.name ?? undefined
+    : undefined;
+  const userProfileImageUrl = auth?.user?.status === 'active'
+    ? auth.user.image ?? undefined
+    : undefined;
   useEffect(() => {
     if (auth === null || authError) {
       // eslint-disable-next-line react-hooks/set-state-in-effect
@@ -473,6 +479,8 @@ export default function AppStateProvider({
         isCheckingAuth,
         userEmail,
         userEmailEager,
+        userName,
+        userProfileImageUrl,
         setUserEmail,
         isUserSignedIn,
         isUserSignedInEager,

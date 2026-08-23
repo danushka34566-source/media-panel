@@ -56,6 +56,9 @@ export default function NavClient({
     hasLoadedWithAnimations,
     isUserSignedIn,
     isCheckingAuth,
+    userEmail,
+    userName,
+    userProfileImageUrl,
     clearAuthStateAndRedirectIfNecessary,
   } = useAppState();
 
@@ -73,9 +76,19 @@ export default function NavClient({
       ? <Link href={linkOrAction}>{text}</Link>
       : <button onClick={linkOrAction} type="button">{text}</button>;
 
+  const hasHydratedUser = Boolean(
+    userEmail || userName || userProfileImageUrl,
+  );
+  const hydratedUser = hasHydratedUser
+    ? {
+        name: userName,
+        email: userEmail,
+        profileImageUrl: userProfileImageUrl,
+      }
+    : undefined;
   const effectiveUser = (
-    isSigningOut || (!isCheckingAuth && !isUserSignedIn)
-  ) ? undefined : user;
+    isSigningOut || (!isCheckingAuth && !isUserSignedIn && !hasHydratedUser)
+  ) ? undefined : user ?? hydratedUser;
   const isSignedIn = Boolean(effectiveUser?.email || effectiveUser?.name);
   const avatarLabel = effectiveUser?.name || effectiveUser?.email || 'Sign in';
 
