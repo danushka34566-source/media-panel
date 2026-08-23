@@ -86,7 +86,10 @@ export default function BackendStats() {
       const timeout = window.setTimeout(() => controller?.abort(), 25_000);
       let probe: BackendStatus;
       try {
-        const response = await fetch('/api/processing/status', {
+        // Request the bounded activity window explicitly. Older worker builds
+        // defaulted this endpoint to a single active row; without the queued
+        // rows the UI cannot fill the three-row activity preview.
+        const response = await fetch('/api/processing/status?queueLimit=20', {
           cache: 'no-store',
           signal: controller.signal,
         });

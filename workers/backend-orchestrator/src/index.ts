@@ -244,6 +244,7 @@ const envWithRuntimeSettings = (
   STALE_PROCESSING_MINUTES: String(settings.staleProcessingMinutes),
   STALE_REGISTRATION_MINUTES: String(settings.staleRegistrationMinutes),
   REGISTRATION_HISTORY_DAYS: String(settings.registrationHistoryDays),
+  BACKEND_PROCESSOR_HEARTBEAT_INTERVAL_MS: String(settings.processorHeartbeatIntervalMs),
   PROCESSOR_REGISTRATION_ENABLED: settings.processorRegistrationEnabled ? '1' : '0',
   PROCESSOR_ONLY_REGISTRATION: settings.processorOnlyRegistration ? '1' : '0',
 });
@@ -278,7 +279,7 @@ const GENERATED_MEDIA_SUFFIX_REGEX =
 const STALE_REGISTRATION_ERROR_MESSAGE =
   'Previous registration attempt stalled; queued for retry';
 const MISSING_UPLOAD_ERROR_PREFIX = 'Upload not found in storage';
-const WORKER_BUILD_ID = 'v99';
+const WORKER_BUILD_ID = 'v100';
 // A scheduled Worker must finish promptly. Drive copies can become visible
 // asynchronously, so persist the in-flight state and check again on the next
 // minute instead of polling long enough to lose the registration lease.
@@ -2984,11 +2985,20 @@ const claimRegistrationQueueRow = async (env: Env) => {
 const hasActiveRegistrationProcessor = async (env: Env) => {
   try {
     const sql = sqlForEnv(env);
+    const heartbeatIntervalMs = getNumber(
+      env.BACKEND_PROCESSOR_HEARTBEAT_INTERVAL_MS,
+      5_000,
+      { min: 1_000, max: 60_000 },
+    );
+    const presenceTimeoutSeconds = Math.max(
+      1,
+      Math.ceil(heartbeatIntervalMs * 3 / 1_000),
+    );
     const rows = await sql`
       SELECT EXISTS (
         SELECT 1
         FROM video_processor_presence
-        WHERE last_seen_at > now() - interval '2 minutes'
+        WHERE last_seen_at > now() - (${String(presenceTimeoutSeconds)} || ' seconds')::interval
           AND COALESCE(state, 'idle') <> 'stopped'
       ) AS active
     ` as unknown as Array<{ active: boolean }>;
@@ -5589,6 +5599,11 @@ const status = async (
     Math.max(Math.round(jobLimit * 2.5), 1),
     5_000,
   );
+  const runtimeSettings = await getRuntimeProcessingSettings(env);
+  const processorPresenceTimeoutSeconds = Math.max(
+    1,
+    Math.ceil(runtimeSettings.processorHeartbeatIntervalMs * 3 / 1_000),
+  );
   const sql = sqlForEnv(env);
   const [
     rows,
@@ -5609,7 +5624,7 @@ const status = async (
     sql`
       SELECT processor_id, platform, state, last_seen_at, started_at
       FROM video_processor_presence
-      WHERE last_seen_at > now() - interval '2 minutes'
+      WHERE last_seen_at > now() - (${String(processorPresenceTimeoutSeconds)} || ' seconds')::interval
       ORDER BY last_seen_at DESC
     `.catch(() => []) as Promise<Record<string, unknown>[]>,
     sql`
@@ -5692,7 +5707,6 @@ const status = async (
     total: 0,
     jobs: [],
   };
-  const runtimeSettings = await getRuntimeProcessingSettings(env);
   const registrationOwner = !runtimeSettings.processorRegistrationEnabled
     ? 'worker'
     : runtimeSettings.processorOnlyRegistration

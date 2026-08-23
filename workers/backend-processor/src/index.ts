@@ -31,7 +31,6 @@ let POLL_INTERVAL_MS = 15_000;
 let IDLE_INTERVAL_MS = 30_000;
 let CLAIM_LIMIT = 1;
 let PROCESSOR_REGISTRATION_ENABLED = false;
-const RUNTIME_CONFIG_REFRESH_INTERVAL_MS = 60_000;
 let lastRuntimeConfigLoadedAt = 0;
 const RUN_ONCE = process.env.RUN_ONCE === '1';
 let HEARTBEAT_INTERVAL_MS = 5_000;
@@ -181,7 +180,9 @@ const pullRegistrationJobs = async () => {
   // Each request claims at most one row. Parallel requests are safe because
   // the worker uses SELECT ... FOR UPDATE SKIP LOCKED; no claimed-but-unstarted
   // list can strand files as `registering` when this process stops.
-  const concurrency = Math.max(1, Math.min(CLAIM_LIMIT, 3));
+  // CLAIM_LIMIT is read from the panel-backed processorClaimLimit setting;
+  // the Worker endpoint still atomically fences every individual claim.
+  const concurrency = Math.max(1, CLAIM_LIMIT);
   const results = await Promise.allSettled(
     Array.from({ length: concurrency }, () => runRegistrationJob()),
   );
@@ -231,7 +232,12 @@ const loadRuntimeConfig = async () => {
 };
 
 const refreshRuntimeConfigIfDue = async () => {
-  if (Date.now() - lastRuntimeConfigLoadedAt < RUNTIME_CONFIG_REFRESH_INTERVAL_MS) {
+  const refreshIntervalMs = Math.max(
+    POLL_INTERVAL_MS,
+    IDLE_INTERVAL_MS,
+    HEARTBEAT_INTERVAL_MS,
+  );
+  if (Date.now() - lastRuntimeConfigLoadedAt < refreshIntervalMs) {
     return;
   }
   await loadRuntimeConfig();
@@ -948,7 +954,7 @@ const runRegistrationLoop = async () => {
         error: error instanceof Error ? error.message : String(error),
       });
     }
-    await sleep(Math.max(POLL_INTERVAL_MS, 5_000));
+    await sleep(POLL_INTERVAL_MS);
   }
 };
 
