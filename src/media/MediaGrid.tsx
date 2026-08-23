@@ -45,6 +45,7 @@ export default function MediaGrid({
   photos,
   selectedMedia,
   prioritizeInitialMedia,
+  deferInitialRender = false,
   className,
   classNameMedia,
   animate = true,
@@ -63,6 +64,10 @@ export default function MediaGrid({
   photos: Media[]
   selectedMedia?: Media
   prioritizeInitialMedia?: boolean
+  // Detail navigation should animate the primary media before mounting the
+  // related-card tree. Mounting all card images in the same commit can steal
+  // the first animation frames and make the hero appear to pause.
+  deferInitialRender?: boolean
   className?: string
   classNameMedia?: string
   animate?: boolean
@@ -85,6 +90,9 @@ export default function MediaGrid({
   } = useAppState();
   const [smartPreviewIds, setSmartPreviewIds] = useState<Set<string>>(new Set());
   const [isMainVideoPlaying, setIsMainVideoPlaying] = useState(false);
+  const [releasedDeferKey, setReleasedDeferKey] = useState<string>();
+  const deferKey = selectedMedia?.id ?? photos[0]?.id;
+  const shouldRenderRelated = !deferInitialRender || releasedDeferKey === deferKey;
   const smartActivationFrameRef = useRef<number | undefined>(undefined);
   const pendingSmartCardIdRef = useRef<string | undefined>(undefined);
   const activeSmartCardIdRef = useRef<string | undefined>(undefined);
@@ -110,6 +118,17 @@ export default function MediaGrid({
     suspendSmartPreviewsOnMainPlayback,
     isMainVideoPlaying,
   );
+  useEffect(() => {
+    if (!deferInitialRender || !deferKey) { return; }
+
+    // Keep the first route transition frames dedicated to the hero. Release
+    // related cards after the directional animation has had time to settle;
+    // they still mount immediately afterwards and are not network-blocked.
+    const timer = window.setTimeout(() => {
+      setReleasedDeferKey(deferKey);
+    }, 240);
+    return () => window.clearTimeout(timer);
+  }, [deferInitialRender, deferKey]);
   useEffect(() => {
     const syncActivePreviews = (event: Event) => {
       const { activeIds } = (
@@ -233,7 +252,7 @@ export default function MediaGrid({
         animateOnFirstLoadOnly={animateFirstLoadOnly}
         staggerOnFirstLoadOnly={staggerOnFirstLoadOnly}
         onAnimationComplete={onAnimationComplete}
-        items={photos.map((photo, index) => {
+        items={(shouldRenderRelated ? photos : []).map((photo, index) => {
           const isSelected = selectedMediaIds?.includes(photo.id) ?? false;
           return <div
             key={photo.id}
@@ -310,7 +329,7 @@ export default function MediaGrid({
               />}
           </div>;
         }).concat(additionalTile ? <>{additionalTile}</> : [])}
-        itemKeys={photos.map(photo => photo.id)
+        itemKeys={(shouldRenderRelated ? photos : []).map(photo => photo.id)
           .concat(additionalTile ? ['more'] : [])}
       />
     </div>

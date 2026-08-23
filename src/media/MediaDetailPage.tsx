@@ -232,6 +232,7 @@ export default function MediaDetailPage({
           photos={photosGrid ?? photos}
           selectedMedia={photo}
           prioritizeInitialMedia
+          deferInitialRender
           {...categoryPathParams}
           autoplaySmartPreviews
           suspendSmartPreviewsOnMainPlayback
