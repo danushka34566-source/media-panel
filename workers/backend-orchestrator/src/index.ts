@@ -257,7 +257,7 @@ const GENERATED_MEDIA_SUFFIX_REGEX =
 const STALE_REGISTRATION_ERROR_MESSAGE =
   'Previous registration attempt stalled; queued for retry';
 const MISSING_UPLOAD_ERROR_PREFIX = 'Upload not found in storage';
-const WORKER_BUILD_ID = 'v111';
+const WORKER_BUILD_ID = 'v112';
 // A scheduled Worker must finish promptly. Drive copies can become visible
 // asynchronously, so persist the in-flight state and check again on the next
 // minute instead of polling long enough to lose the registration lease.
@@ -6124,8 +6124,12 @@ export default {
     if (discoveryOnly) {
       ctx.waitUntil((async () => {
         try {
+          // A scheduled isolate has no guarantee of sharing the cache with a
+          // previous request. Always hydrate the runtime settings from the
+          // panel-backed configuration table on a cold isolate so discovery
+          // obeys the same database state as the panel and hot path.
           const settings = runtimeSettingsCache?.settings ??
-            getDefaultRuntimeProcessingSettings(scheduledEnv);
+            await getRuntimeProcessingSettings(scheduledEnv);
           if (!settings.orchestratorEnabled || !settings.registrationEnabled) {
             await logBackendActivity(scheduledEnv, {
               category: 'orchestrator',
@@ -6155,10 +6159,14 @@ export default {
       return;
     }
 
-    // The hot path must be claim -> ID -> Drive -> atomic commit. Use the
-    // last DB-backed settings cache and never open a settings connection here.
+    // The hot path remains claim -> ID -> Drive -> atomic commit. Reuse the
+    // short-lived settings cache when warm; cold isolates hydrate it once
+    // before claiming so panel changes are honored without a stale fallback.
+    // Cron invocations can start in a fresh isolate. Do not silently use
+    // deployment-time defaults (including batch size) when the panel has a
+    // newer database-backed value; hydrate the cache before claiming work.
     const settings = runtimeSettingsCache?.settings ??
-      getDefaultRuntimeProcessingSettings(scheduledEnv);
+      await getRuntimeProcessingSettings(scheduledEnv);
     if (!settings.orchestratorEnabled || !settings.registrationEnabled) {
       ctx.waitUntil(logBackendActivity(scheduledEnv, {
         category: 'orchestrator',
@@ -6244,16 +6252,16 @@ export default {
       });
     }
 
-    // Processor registration pulls must reach the atomic queue claim without
-    // first opening the general runtime-settings connection. The processor
-    // refreshes /jobs/config separately; a warm cache enforces the latest DB
-    // toggle, while a cold isolate safely defaults this optional feature off.
+    // Processor registration pulls must use the same panel-backed settings as
+    // the scheduled Worker. A processor can call this route on a cold isolate,
+    // so hydrate the short-lived cache from processing_configuration instead
+    // of silently applying deployment-time defaults.
     if (url.pathname === '/registration/jobs/run' && request.method === 'POST') {
       if (!isAuthorized(request, env.BACKEND_PROCESSOR_SHARED_SECRET)) {
         return json(401, { error: 'Unauthorized' });
       }
       const settings = runtimeSettingsCache?.settings ??
-        getDefaultRuntimeProcessingSettings(env);
+        await getRuntimeProcessingSettings(env);
       if (!settings.orchestratorEnabled || !settings.registrationEnabled ||
         !settings.processorRegistrationEnabled) {
         return json(200, { claimed: 0, registered: 0, disabled: true });
