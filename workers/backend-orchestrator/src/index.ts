@@ -257,7 +257,7 @@ const GENERATED_MEDIA_SUFFIX_REGEX =
 const STALE_REGISTRATION_ERROR_MESSAGE =
   'Previous registration attempt stalled; queued for retry';
 const MISSING_UPLOAD_ERROR_PREFIX = 'Upload not found in storage';
-const WORKER_BUILD_ID = 'v114';
+const WORKER_BUILD_ID = 'v115';
 // A scheduled Worker must finish promptly. Drive copies can become visible
 // asynchronously, so persist the in-flight state and check again on the next
 // minute instead of polling long enough to lose the registration lease.
@@ -282,11 +282,11 @@ export const REGISTRATION_SCAN_PAGE_SIZE = 100;
 // registration claim/CPU path.
 // Cloudflare Free scheduled invocations have a very small CPU budget. Keep
 // each discovery page to one bounded database upsert while the durable cursor
-// continues through the bucket over successive runs. This is throughput-safe
-// for large inventories and prevents a discovery pass from consuming the
-// registration cron's resource window.
-export const REGISTRATION_DISCOVERY_PAGE_SIZE = 25;
-export const REGISTRATION_DISCOVERY_SQL_BATCH_SIZE = 25;
+// continues through the bucket over successive runs. A single 100-row write
+// avoids the CPU and connection overhead of four 25-row writes without making
+// the storage scan less resumable.
+export const REGISTRATION_DISCOVERY_PAGE_SIZE = 100;
+export const REGISTRATION_DISCOVERY_SQL_BATCH_SIZE = 100;
 // Drive's upload-event endpoint accepts at most 100 rows. Keep the hot lane
 // at that ceiling so a burst of direct uploads cannot fall between the recent
 // window and the lexicographic cursor after the cursor has passed their keys.
