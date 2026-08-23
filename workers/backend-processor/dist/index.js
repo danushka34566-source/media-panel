@@ -696,10 +696,6 @@ const processJob = async (job) => {
 };
 const runOnce = async () => {
     await refreshRuntimeConfigIfDue();
-    // Registration pulls run alongside video processing. If the processor goes
-    // offline, these requests stop and the Worker cron remains the independent
-    // fallback; no registration row is claimed by the stopped processor.
-    const registrationPromise = pullRegistrationJobs();
     const jobs = await claimJobs();
     log('poll:claimed', {
         count: jobs.length,
@@ -713,12 +709,25 @@ const runOnce = async () => {
         }
         return processed;
     })();
-    const [processed, registered] = await Promise.all([
-        processingPromise,
-        registrationPromise,
-    ]);
-    log('poll:completed', { processed, registered });
+    const processed = await processingPromise;
+    log('poll:completed', { processed });
     return processed;
+};
+const runRegistrationLoop = async () => {
+    // Registration is deliberately independent from video processing. A long
+    // FFmpeg job must not pause registration polling; each pull still claims
+    // one row atomically and uses the panel-backed concurrency limit.
+    while (!shutdownStarted) {
+        try {
+            await pullRegistrationJobs();
+        }
+        catch (error) {
+            log('registration:loop-error', {
+                error: error instanceof Error ? error.message : String(error),
+            });
+        }
+        await sleep(Math.max(POLL_INTERVAL_MS, 5_000));
+    }
 };
 const main = async () => {
     await loadRuntimeConfig();
@@ -741,9 +750,11 @@ const main = async () => {
         ffprobePath,
     });
     if (RUN_ONCE) {
+        await pullRegistrationJobs();
         await runOnce();
         return;
     }
+    void runRegistrationLoop();
     while (true) {
         try {
             const processed = await runOnce();
