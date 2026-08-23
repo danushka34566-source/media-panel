@@ -280,6 +280,9 @@ export default function MediaLarge({
   const [canUsePiP, setCanUsePiP] = useState(false);
   const [isPiPLocked, setIsPiPLocked] = useState(false);
   const [pipLockedSrc, setPipLockedSrc] = useState<string | undefined>(undefined);
+  const [isFloatingVideo, setIsFloatingVideo] = useState(false);
+  const [floatingVideoHeight, setFloatingVideoHeight] = useState<number>();
+  const floatingVideoSentinelRef = useRef<HTMLDivElement>(null);
   const [hasTextTracks, setHasTextTracks] = useState(false);
   const [captionsOn, setCaptionsOn] = useState(false);
   const [activeCaptionIndex, setActiveCaptionIndex] = useState(0);
@@ -398,6 +401,82 @@ export default function MediaLarge({
       video?.removeEventListener('webkitendfullscreen', updateFullscreen);
     };
   }, [isFullVideoPlaying, isVideo]);
+
+  // Keep a playing full-page video available as a small docked player when
+  // its card leaves the viewport. The same video element remains mounted, so
+  // currentTime, buffered ranges, captions, and the active download continue
+  // uninterrupted. Once the original card is visible again, it returns to
+  // its normal position automatically.
+  useEffect(() => {
+    if (
+      !isVideo ||
+      !isFullVideoPlaying ||
+      !isMainVideoActuallyPlaying ||
+      isVideoFullscreen ||
+      isPiPLocked
+    ) {
+      if (isFloatingVideo) {
+        // eslint-disable-next-line react-hooks/set-state-in-effect
+        setIsFloatingVideo(false);
+        setFloatingVideoHeight(undefined);
+      }
+      return;
+    }
+    const sentinel = floatingVideoSentinelRef.current;
+    if (!sentinel || typeof IntersectionObserver === 'undefined') { return; }
+    const observer = new IntersectionObserver(([entry]) => {
+      const isVisible = Boolean(
+        entry?.isIntersecting && entry.intersectionRatio >= 0.2,
+      );
+      if (isFloatingVideo) {
+        if (isVisible) {
+          setIsFloatingVideo(false);
+          setFloatingVideoHeight(undefined);
+        }
+        return;
+      }
+      if (!isVisible) {
+        const height = ref.current?.getBoundingClientRect().height;
+        if (height && Number.isFinite(height)) {
+          setFloatingVideoHeight(height);
+        }
+        setIsFloatingVideo(true);
+      }
+    }, { threshold: [0, 0.2, 0.5] });
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, [
+    isFloatingVideo,
+    isFullVideoPlaying,
+    isMainVideoActuallyPlaying,
+    isPiPLocked,
+    isVideo,
+    isVideoFullscreen,
+  ]);
+
+  // Long full-page lists use content-visibility containment for scroll
+  // performance. Temporarily release the playing card's containment while it
+  // is docked so CSS fixed positioning remains viewport-relative.
+  useEffect(() => {
+    if (!isFloatingVideo) { return; }
+    let element = ref.current?.parentElement;
+    while (element && element !== document.body) {
+      const computed = window.getComputedStyle(element);
+      if (computed.contentVisibility === 'auto' ||
+          computed.contain.includes('paint')) {
+        const previousContentVisibility = element.style.contentVisibility;
+        const previousContain = element.style.contain;
+        element.style.contentVisibility = 'visible';
+        element.style.contain = 'none';
+        return () => {
+          element!.style.contentVisibility = previousContentVisibility;
+          element!.style.contain = previousContain;
+        };
+      }
+      element = element.parentElement;
+    }
+    return undefined;
+  }, [isFloatingVideo]);
 
   useEffect(() => {
     if (!isVideo) { return; }
@@ -1135,7 +1214,16 @@ export default function MediaLarge({
         // Always specify height to ensure fallback doesn't collapse
         areMediaMatted && 'h-[90%]',
         areMediaMatted && matteContentWidthForAspectRatio,
+        isFloatingVideo && 'z-[60] rounded-md shadow-2xl ring-1 ring-black/20',
       )}
+      style={isFloatingVideo ? {
+        position: 'fixed',
+        right: '1rem',
+        bottom: '1rem',
+        width: 'min(24rem, calc(100vw - 2rem))',
+        maxWidth: 'calc(100vw - 2rem)',
+        zIndex: 60,
+      } : undefined}
       onTouchStart={onSwipeTouchStart}
       onTouchMove={onSwipeTouchMove}
       onTouchEnd={onSwipeTouchEnd}
@@ -1519,7 +1607,14 @@ export default function MediaLarge({
   const hideFavoriteButton = isVideo && isMainVideoActuallyPlaying;
 
   const renderMediaWithFavorite = (media: ReactNode) =>
-    <div className="relative">
+    <div
+      ref={floatingVideoSentinelRef}
+      className="relative"
+      data-media-id={photo.id}
+      style={isFloatingVideo && floatingVideoHeight
+        ? { height: floatingVideoHeight }
+        : undefined}
+    >
       {media}
       <PersonalFavoriteButton
         mediaId={photo.id}

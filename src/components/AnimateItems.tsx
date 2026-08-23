@@ -138,7 +138,11 @@ function AnimateItems({
             hidden,
             show: {
               opacity: 1,
-              transform: 'translateX(0) translateY(0) scale(1)',
+              // Remove the transform after the entrance transition. Keeping
+              // an identity transform creates a containing block for fixed
+              // descendants, which would make the full-page mini player
+              // scroll away with its original card.
+              transform: 'none',
             },
           }}
           transition={{

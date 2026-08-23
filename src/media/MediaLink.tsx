@@ -45,8 +45,9 @@ export default function MediaLink({
           ref,
           className,
           href,
-          onClick: () => {
-            rememberMediaScrollPosition();
+          'data-media-id': photo.id,
+          onClick: event => {
+            rememberMediaScrollPosition(photo.id, event.currentTarget);
             if (nextMediaAnimation) {
               setNextMediaAnimation?.(nextMediaAnimation);
             }

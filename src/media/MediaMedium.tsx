@@ -104,6 +104,7 @@ export default function MediaMedium({
     <LinkWithStatus
       ref={ref}
       href={pathForMedia({ photo, ...categories })}
+      data-media-id={photo.id}
       className={clsx(
         'group',
         'active:brightness-75',
@@ -111,7 +112,7 @@ export default function MediaMedium({
         className,
       )}
       prefetch={prefetch}
-      onClick={rememberMediaScrollPosition}
+      onClick={event => rememberMediaScrollPosition(photo.id, event.currentTarget)}
       onPointerEnter={event => event.pointerType === 'mouse' && setIsHovered(true)}
       onPointerLeave={() => setIsHovered(false)}
     >

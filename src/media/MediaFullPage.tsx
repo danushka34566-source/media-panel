@@ -1,8 +1,11 @@
+'use client';
+
 import { Media } from '.';
 import { INFINITE_SCROLL_FULL_MULTIPLE } from './loading-policy';
 import MediaListLarge from './MediaListLarge';
 import MediaListLargeInfinite from './MediaListLargeInfinite';
 import { SortBy } from './sort';
+import useMediaScrollRestoration from './useMediaScrollRestoration';
 
 export default function MediaFullPage({
   photos,
@@ -15,6 +18,8 @@ export default function MediaFullPage({
   sortBy: SortBy
   sortWithPriority: boolean
 }) {
+  useMediaScrollRestoration();
+
   return (
     <div className="space-y-1">
       <MediaListLarge
