@@ -2949,29 +2949,9 @@ const claimRegistrationQueueRow = async (env: Env) => {
       queueHasRows: true,
     };
   }
-  const state = await sql`
-    SELECT EXISTS (
-      SELECT 1
-      FROM worker_registration_status
-      WHERE status IN ('detected', 'registering')
-        OR (
-          status='error'
-          AND (
-            error_message IS NULL
-            OR error_message ILIKE '%timeout%'
-            OR error_message ILIKE '%connection terminated%'
-            OR error_message ILIKE '%connection reset%'
-            OR error_message LIKE 'Drive copy failed (5%'
-            OR error_message LIKE 'Drive copy not ready:%'
-            OR error_message LIKE 'Copied destination is not readable in storage:%'
-            OR error_message LIKE 'Copied destination size mismatch:%'
-          )
-        )
-    ) AS has_rows
-  ` as unknown as Array<{ has_rows: boolean }>;
   return {
     row: undefined,
-    queueHasRows: Boolean(state[0]?.has_rows),
+    queueHasRows: false,
   };
 };
 
@@ -4175,10 +4155,11 @@ const scanAndRegisterWithLease = async (
       details: { url: claimedRegistrationRow.url },
     }).catch(() => undefined));
   }
-  // A fresh in-flight row is already owned by another invocation. Do not fall
-  // through to the registration path in that case. Discovery runs on its own
-  // cron so this hot path never spends CPU on a storage list or discovery SQL.
-  if (isScheduledRegistration && !hasScheduledQueue && queueClaim?.queueHasRows) {
+  // A scheduled invocation without a claim must finish immediately. Discovery
+  // owns the storage cursor on its separate cron, so the registration hot path
+  // never performs a bucket list or discovery SQL when the queue is empty or a
+  // different invocation owns the current claim.
+  if (isScheduledRegistration && !hasScheduledQueue) {
     return {
       registered: 0,
       registrationPasses: 0,
