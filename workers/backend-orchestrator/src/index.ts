@@ -257,7 +257,7 @@ const GENERATED_MEDIA_SUFFIX_REGEX =
 const STALE_REGISTRATION_ERROR_MESSAGE =
   'Previous registration attempt stalled; queued for retry';
 const MISSING_UPLOAD_ERROR_PREFIX = 'Upload not found in storage';
-const WORKER_BUILD_ID = 'v106';
+const WORKER_BUILD_ID = 'v107';
 // A scheduled Worker must finish promptly. Drive copies can become visible
 // asynchronously, so persist the in-flight state and check again on the next
 // minute instead of polling long enough to lose the registration lease.
@@ -273,13 +273,16 @@ const REGISTRATION_STORAGE_TIMEOUT_MS = 30_000;
 // cursor only discovers a bounded slice of new objects on each scan.
 export const REGISTRATION_SCAN_PAGE_SIZE = 100;
 // Discovery is intentionally isolated from the one-row registration cron.
-// A small page keeps a direct-upload inventory pass below the Free-plan CPU
-// budget without ever delaying a durable registration claim.
-// Keep the discovery SQL payload small enough for the Supabase pooler while
+// A bounded inventory window keeps a direct-upload pass resumable without
+// ever delaying a durable registration claim.
+// Keep each discovery SQL payload small enough for the Supabase pooler while
 // the durable continuation cursor makes large inventories resumable. The
-// discovery cron advances one bounded page at a time; it never shares the
+// discovery cron can inspect a larger storage window, but reconciles it in
+// 25-object writes so detection throughput improves without touching the
 // registration claim/CPU path.
-export const REGISTRATION_DISCOVERY_PAGE_SIZE = 25;
+export const REGISTRATION_DISCOVERY_PAGE_SIZE = 100;
+export const REGISTRATION_DISCOVERY_SQL_BATCH_SIZE = 25;
+export const REGISTRATION_DISCOVERY_RECENT_PAGE_SIZE = 25;
 export const REGISTRATION_DISCOVERY_CRON = '*/2 * * * *';
 // A Drive copy can legitimately consume most of a free Worker invocation
 // while its destination becomes visible. One attempt per scan keeps the
@@ -3308,15 +3311,17 @@ const syncDetectedStatuses = async (
 const discoverRegistrationPage = async (
   env: Env,
   objects: R2ObjectLike[],
+  queuedDeletionPrefixes?: ReadonlySet<string>,
 ) => {
-  const queuedDeletionPrefixes = await getQueuedDeletionPrefixes(env);
+  const deletionPrefixes = queuedDeletionPrefixes ??
+    await getQueuedDeletionPrefixes(env);
   const candidates = objects
     .map(object => {
       const { fileName, fileNameBase, extension } = getFileParts(object.key);
       if (
         !MEDIA_EXTENSIONS.has(extension) ||
         GENERATED_MEDIA_SUFFIX_REGEX.test(fileNameBase) ||
-        Array.from(queuedDeletionPrefixes).some(prefix =>
+        Array.from(deletionPrefixes).some(prefix =>
           deletionKeyMatchesPrefix(object.key, prefix))
       ) {
         return undefined;
@@ -3411,7 +3416,12 @@ const runRegistrationDiscoveryPage = async (
     let recent: StorageListPage = { objects: [] };
     if (isDriveStorageEnabled(env)) {
       try {
-        recent = await listRecentStoragePage(env, pageSize);
+        // The upload-time lane stays small and hot; the cursor lane below is
+        // the durable backfill for the rest of the bucket.
+        recent = await listRecentStoragePage(
+          env,
+          Math.min(pageSize, REGISTRATION_DISCOVERY_RECENT_PAGE_SIZE),
+        );
       } catch (error) {
         // The recent endpoint is an acceleration path. Keep the durable
         // cursor scan healthy if an older Drive deployment has not picked up
@@ -3425,10 +3435,23 @@ const runRegistrationDiscoveryPage = async (
     const objectsByKey = new Map<string, R2ObjectLike>();
     page.objects.forEach(object => objectsByKey.set(object.key, object));
     recent.objects.forEach(object => objectsByKey.set(object.key, object));
-    const discovered = await discoverRegistrationPage(
-      env,
-      Array.from(objectsByKey.values()),
-    );
+    const discoveryObjects = Array.from(objectsByKey.values());
+    const queuedDeletionPrefixes = await getQueuedDeletionPrefixes(env);
+    let discovered = 0;
+    for (
+      let offset = 0;
+      offset < discoveryObjects.length;
+      offset += REGISTRATION_DISCOVERY_SQL_BATCH_SIZE
+    ) {
+      discovered += await discoverRegistrationPage(
+        env,
+        discoveryObjects.slice(
+          offset,
+          offset + REGISTRATION_DISCOVERY_SQL_BATCH_SIZE,
+        ),
+        queuedDeletionPrefixes,
+      );
+    }
     await setRegistrationScanCursor(env, page.nextContinuationToken);
     console.log(JSON.stringify({
       category: 'registration',

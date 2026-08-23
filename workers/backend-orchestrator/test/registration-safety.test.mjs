@@ -196,6 +196,10 @@ test('direct-upload discovery is isolated from the registration hot path', () =>
   assert.match(workerSource, /runRegistrationDiscoveryPage/);
   assert.match(workerSource, /Scheduled registration discovery page failed/);
   assert.match(workerSource, /REGISTRATION_DISCOVERY_CRON = '.*2 \* \* \* \*'/);
+  assert.match(workerSource, /REGISTRATION_DISCOVERY_PAGE_SIZE = 100/);
+  assert.match(workerSource, /REGISTRATION_DISCOVERY_SQL_BATCH_SIZE = 25/);
+  assert.match(workerSource, /offset \+= REGISTRATION_DISCOVERY_SQL_BATCH_SIZE/);
+  assert.match(workerSource, /Math\.min\(pageSize, REGISTRATION_DISCOVERY_RECENT_PAGE_SIZE\)/);
   const discoveryStart = workerSource.indexOf('const discoverRegistrationPage');
   const discoveryEnd = workerSource.indexOf('const runRegistrationDiscoveryPage', discoveryStart);
   assert.doesNotMatch(
