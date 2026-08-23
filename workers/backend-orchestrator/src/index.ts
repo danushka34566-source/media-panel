@@ -257,7 +257,7 @@ const GENERATED_MEDIA_SUFFIX_REGEX =
 const STALE_REGISTRATION_ERROR_MESSAGE =
   'Previous registration attempt stalled; queued for retry';
 const MISSING_UPLOAD_ERROR_PREFIX = 'Upload not found in storage';
-const WORKER_BUILD_ID = 'v107';
+const WORKER_BUILD_ID = 'v108';
 // A scheduled Worker must finish promptly. Drive copies can become visible
 // asynchronously, so persist the in-flight state and check again on the next
 // minute instead of polling long enough to lose the registration lease.
@@ -283,7 +283,14 @@ export const REGISTRATION_SCAN_PAGE_SIZE = 100;
 export const REGISTRATION_DISCOVERY_PAGE_SIZE = 100;
 export const REGISTRATION_DISCOVERY_SQL_BATCH_SIZE = 25;
 export const REGISTRATION_DISCOVERY_RECENT_PAGE_SIZE = 25;
-export const REGISTRATION_DISCOVERY_CRON = '*/2 * * * *';
+// Use two alternating schedules so discovery runs once per minute without
+// sharing the registration cron. Both schedules execute the same bounded,
+// resumable page and never claim or copy a registration.
+export const REGISTRATION_DISCOVERY_CRONS = [
+  '*/2 * * * *',
+  '1-59/2 * * * *',
+] as const;
+export const REGISTRATION_DISCOVERY_CRON = REGISTRATION_DISCOVERY_CRONS[0];
 // A Drive copy can legitimately consume most of a free Worker invocation
 // while its destination becomes visible. One attempt per scan keeps the
 // lease/retry boundary below the platform execution limit; the DB queue keeps
@@ -6049,7 +6056,8 @@ export default {
     env: Env,
     ctx: ExecutionContext,
   ) {
-    const discoveryOnly = controller.cron === REGISTRATION_DISCOVERY_CRON;
+    const discoveryOnly = (REGISTRATION_DISCOVERY_CRONS as readonly string[])
+      .includes(controller.cron);
     const scheduledEnv: Env = {
       ...env,
       REGISTRATION_SCHEDULED: '1',

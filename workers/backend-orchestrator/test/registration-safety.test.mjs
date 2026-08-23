@@ -195,7 +195,10 @@ test('direct-upload discovery is isolated from the registration hot path', () =>
   assert.match(workerSource, /registered_upload_file_map/);
   assert.match(workerSource, /runRegistrationDiscoveryPage/);
   assert.match(workerSource, /Scheduled registration discovery page failed/);
-  assert.match(workerSource, /REGISTRATION_DISCOVERY_CRON = '.*2 \* \* \* \*'/);
+  assert.match(workerSource, /REGISTRATION_DISCOVERY_CRON = REGISTRATION_DISCOVERY_CRONS\[0\]/);
+  assert.match(workerSource, /REGISTRATION_DISCOVERY_CRONS = \[/);
+  assert.match(workerSource, /'1-59\/2 \* \* \* \*'/);
+  assert.match(workerSource, /REGISTRATION_DISCOVERY_CRONS[\s\S]*includes\(controller\.cron\)/);
   assert.match(workerSource, /REGISTRATION_DISCOVERY_PAGE_SIZE = 100/);
   assert.match(workerSource, /REGISTRATION_DISCOVERY_SQL_BATCH_SIZE = 25/);
   assert.match(workerSource, /offset \+= REGISTRATION_DISCOVERY_SQL_BATCH_SIZE/);
