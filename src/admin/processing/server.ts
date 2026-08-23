@@ -80,18 +80,29 @@ const ensureWorkerRegistrationStatusColumnTypes = () => query(`
   ALTER COLUMN file_name TYPE TEXT USING file_name::text
 `);
 
-const clearStaleWorkerRegistrationStatuses = () => query(`
-  UPDATE worker_registration_status
-  SET
-    status = 'detected',
-    error_message = $2,
-    updated_at = now()
-  WHERE status IN ('detected', 'registering')
-    AND updated_at < now() - ($1 || ' minutes')::interval
-`, [
-  String(STALE_REGISTRATION_MINUTES),
-  STALE_REGISTRATION_ERROR_MESSAGE,
-]);
+const clearStaleWorkerRegistrationStatuses = async () => {
+  // A detected row is queued work, not a failed attempt. Do not label an
+  // untouched backlog item as stalled just because it has waited longer than
+  // the recovery window; that made the panel show a false error forever when
+  // the worker was temporarily unavailable.
+  await query(`
+    UPDATE worker_registration_status
+    SET error_message = NULL
+    WHERE status = 'detected'
+      AND error_message = $1
+  `, [STALE_REGISTRATION_ERROR_MESSAGE]);
+
+  // Only a row that was actually claimed can be recovered as stalled.
+  return query(`
+    UPDATE worker_registration_status
+    SET
+      status = 'detected',
+      error_message = NULL,
+      updated_at = now()
+    WHERE status = 'registering'
+      AND updated_at < now() - ($1 || ' minutes')::interval
+  `, [String(STALE_REGISTRATION_MINUTES)]);
+};
 
 const clearCompletedWorkerRegistrationStatuses = () => query(`
   DELETE FROM worker_registration_status

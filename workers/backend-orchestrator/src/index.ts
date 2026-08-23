@@ -95,6 +95,7 @@ export interface Env {
   BACKEND_PROCESSOR_CLAIM_LIMIT?: string
   REGISTRATION_HINT_LOOKUPS_ENABLED?: string
   REGISTRATION_SCAN_DEADLINE_AT?: string
+  REGISTRATION_SCHEDULED?: string
 }
 
 type RuntimeProcessingSettings = {
@@ -259,7 +260,7 @@ const GENERATED_MEDIA_SUFFIX_REGEX =
 const STALE_REGISTRATION_ERROR_MESSAGE =
   'Previous registration attempt stalled; queued for retry';
 const MISSING_UPLOAD_ERROR_PREFIX = 'Upload not found in storage';
-const WORKER_BUILD_ID = 'v92';
+const WORKER_BUILD_ID = 'v93';
 // A scheduled Worker must finish promptly. Drive copies can become visible
 // asynchronously, so persist the in-flight state and check again on the next
 // minute instead of polling long enough to lose the registration lease.
@@ -1286,6 +1287,23 @@ const logBackendActivity = async (
   env: Env,
   activity: BackendActivity,
 ) => {
+  // The Free Workers CPU budget is only 10 ms per cron invocation. Opening a
+  // fresh Postgres client for every observability event can exhaust that tiny
+  // budget before registration starts. Scheduled scans still emit the full
+  // structured event to Cloudflare Logs, while interactive/manual calls keep
+  // the durable database activity history.
+  if (env.REGISTRATION_SCHEDULED === '1') {
+    console.log(JSON.stringify({
+      category: activity.category,
+      event: activity.event,
+      status: activity.status || 'info',
+      message: activity.message,
+      mediaId: activity.mediaId,
+      processorId: activity.processorId,
+      details: activity.details,
+    }));
+    return;
+  }
   try {
     await ensureBackendActivityLogTable(env);
     const sql = sqlForEnv(env);
@@ -4388,11 +4406,10 @@ const scanAndRegisterWithLease = async (
     }
   }
 
-  // Start broad cleanup only after the FIFO registration work has finished.
-  // Starting these scans before the batch lets them compete with the queue's
-  // Supabase queries and can make an otherwise healthy registration appear
-  // stalled. Scheduled cleanup is intentionally untracked so it cannot hold
-  // the next cron invocation open.
+  // Start broad cleanup only for direct/manual scans. A scheduled invocation
+  // on the free CPU tier must reserve its tiny CPU budget for registration;
+  // these table-wide repairs are non-critical and can be run from the manual
+  // maintenance endpoint without taking the cron path down.
   const deferredMaintenance = [
     ['repair_orphaned_maps', () => repairOrphanedRegisteredUploadMaps(env)],
     ['clear_resolved_statuses', () => clearResolvedRegistrationStatuses(env)],
@@ -4400,11 +4417,8 @@ const scanAndRegisterWithLease = async (
     ['retry_stale_processing', () => retryStaleProcessing(env)],
   ] as const;
   for (const [name, operation] of deferredMaintenance) {
-    const task = runMaintenance(name, operation);
-    if (waitUntil) {
-      void task;
-    } else {
-      await task;
+    if (!waitUntil) {
+      await runMaintenance(name, operation);
     }
   }
 
@@ -5354,7 +5368,11 @@ export default {
     env: Env,
     ctx: ExecutionContext,
   ) {
-    ctx.waitUntil(logBackendActivity(env, {
+    const scheduledEnv: Env = {
+      ...env,
+      REGISTRATION_SCHEDULED: '1',
+    };
+    ctx.waitUntil(logBackendActivity(scheduledEnv, {
       category: 'orchestrator',
       event: 'scheduled_triggered',
       status: 'info',
@@ -5371,7 +5389,7 @@ export default {
     // Cleanup is independent of registration. It can hit a slow database or
     // storage operation, so it must never hold the scheduled registration
     // path hostage. Keep it alive separately and start the FIFO scan now.
-    const deletionDrain = startDeletionDrain(env);
+    const deletionDrain = startDeletionDrain(scheduledEnv);
     if (deletionDrain.started) {
       ctx.waitUntil(deletionDrain.promise.catch((error) => {
         console.warn(
@@ -5387,7 +5405,7 @@ export default {
     // otherwise dispatch the safe enabled defaults after a short grace period;
     // a successful panel lookup still wins if it completes first.
     const fallbackSettings = runtimeSettingsCache?.settings ??
-      getDefaultRuntimeProcessingSettings(env);
+      getDefaultRuntimeProcessingSettings(scheduledEnv);
     let dispatched = false;
     let fallbackTimer: ReturnType<typeof setTimeout> | undefined;
     let resolveFallbackWait: (() => void) | undefined;
@@ -5396,7 +5414,7 @@ export default {
       dispatched = true;
       if (fallbackTimer) { clearTimeout(fallbackTimer); }
       resolveFallbackWait?.();
-      ctx.waitUntil(logBackendActivity(env, {
+      ctx.waitUntil(logBackendActivity(scheduledEnv, {
         category: 'orchestrator',
         event: 'scheduled_scan_dispatch',
         status: 'info',
@@ -5411,7 +5429,7 @@ export default {
         console.warn('Unable to log scheduled scan dispatch', error);
       }));
       if (!settings.orchestratorEnabled || !settings.registrationEnabled) {
-        ctx.waitUntil(logBackendActivity(env, {
+        ctx.waitUntil(logBackendActivity(scheduledEnv, {
           category: 'orchestrator',
           event: 'scheduled_scan_skipped',
           status: 'warning',
@@ -5422,13 +5440,13 @@ export default {
         return;
       }
       const scan = startScan(
-        envWithRuntimeSettings(env, settings),
+        envWithRuntimeSettings(scheduledEnv, settings),
         {
           ...{ shareInFlight: false },
           waitUntil: promise => ctx.waitUntil(promise),
         },
       );
-      ctx.waitUntil(logBackendActivity(env, {
+      ctx.waitUntil(logBackendActivity(scheduledEnv, {
         category: 'orchestrator',
         event: 'scheduled_scan_queued',
         status: 'info',
@@ -5440,7 +5458,7 @@ export default {
         console.warn('Unable to log scheduled scan queue state', error);
       }));
       if (scan.started) {
-        keepScheduledScanBounded(scan.promise, env, ctx);
+        keepScheduledScanBounded(scan.promise, scheduledEnv, ctx);
       }
     };
     // A timer created outside a waitUntil promise can be discarded as soon as
