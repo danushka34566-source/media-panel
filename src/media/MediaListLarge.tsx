@@ -34,10 +34,10 @@ export default function MediaListLarge({
           key={photo.id}
           photo={photo}
           priority={index === 0}
-          // Full-page rows mount every poster immediately; only the first two
-          // are eager network requests. The rest use native lazy loading and
-          // are already in the DOM before the reader reaches them.
-          initiallyLoadPreviewImage={index < 2}
+          // Full-page rows are intentionally image-first: the complete loaded
+          // page has its posters requested before the reader reaches them.
+          // Videos remain range/preload controlled separately by MediaLarge.
+          initiallyLoadPreviewImage
           prefetch={index < 3}
           prefetchRelatedLinks={prefetchFirstMediaLinks && index === 0}
           revalidateMedia={revalidateMedia}

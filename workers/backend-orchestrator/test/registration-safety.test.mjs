@@ -90,6 +90,13 @@ test('large registration backlogs are selected one FIFO batch at a time', () => 
   );
 });
 
+test('Drive copy failures distinguish retryable transport errors from bad credentials', () => {
+  assert.equal(isRecoverableDriveCopyError(new Error('Drive copy failed (401): Invalid API key')), false);
+  assert.equal(isRecoverableDriveCopyError(new Error('Drive copy failed (404): Source not found')), false);
+  assert.equal(isRecoverableDriveCopyError(new Error('Drive copy failed (429): Too many requests')), true);
+  assert.equal(isRecoverableDriveCopyError(new Error('fetch failed')), true);
+});
+
 test('registration scans process a bounded slice instead of one file per cron', () => {
   assert.match(workerSource, /registerBatchSize: getNumber\(env\.REGISTER_BATCH_SIZE, 2/);
   assert.match(workerSource, /maxRegisterPasses: getNumber\(env\.MAX_REGISTER_PASSES, 2/);
@@ -191,6 +198,7 @@ test('registration status and logs expose file-level queue progress', () => {
   assert.match(workerSource, /registrationJobs:/);
   assert.match(workerSource, /event: 'registration_started'/);
   assert.match(workerSource, /event: isRecoverableCopyDelay[\s\S]*?'registration_waiting_for_storage'/);
+  assert.match(workerSource, /registrationMaxAttempts/);
   assert.match(workerSource, /phase: registrationPhase/);
 });
 
@@ -321,11 +329,13 @@ test('stalled registration rows are requeued instead of left as permanent errors
   assert.match(source, /status='detected'/);
   assert.match(source, /error_message=NULL/);
   assert.match(workerSource, /Previous registration attempt stalled; queued for retry/);
-  // Transient Drive failures are also requeued by this maintenance pass. The
-  // permanent error state may therefore appear only in the recovery predicate,
-  // never as the target state of the update.
+  // Transient Drive failures are requeued only while the durable attempt
+  // counter is below the configured limit. Exhausted rows become actionable
+  // errors and require an explicit retry.
   assert.match(source, /WHERE status='error'/);
-  assert.doesNotMatch(source, /SET\s+status='error'/);
+  assert.match(source, /status='error'/);
+  assert.match(source, /attempt_count/);
+  assert.match(source, /retry it manually/);
 });
 
 test('manual retries explicitly requeue the matching registration record', () => {

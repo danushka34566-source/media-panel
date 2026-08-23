@@ -50,7 +50,7 @@ import {
   PREFIX_ALBUM,
 } from '@/app/path';
 import { createLensKey } from '@/lens';
-import { getMediaSortPreferenceAction } from '@/auth/actions';
+import { USER_DEFAULT_SORT_OPTIONS } from '@/app/config';
 
 // Table key
 export const KEY_MEDIA     = 'photos';
@@ -254,20 +254,22 @@ export const getMediaNearIdCached = (
   ...args: Parameters<typeof getMediaNearId>
 ) => {
   const [photoId, requestedOptions] = args;
-  const optionsPromise = requestedOptions.sortBy
-    ? Promise.resolve(requestedOptions)
-    : getMediaSortPreferenceAction()
-      .catch(() => null)
-      .then(sortBy => sortBy ? { ...requestedOptions, sortBy } : requestedOptions);
-  return optionsPromise
-    .then(options => {
-      const cacheKeys = [KEY_MEDIA, ...getMediaCacheKeys(options)];
-      return unstable_cache(
-        getMediaNearId,
-        cacheKeys,
-        getCacheOptions(cacheKeys),
-      )(photoId, options);
-    })
+  // Detail routes can be statically generated/ISR cached. Reading the
+  // account session here made a cache miss call `auth()` during static
+  // rendering, which Next.js correctly rejected as DYNAMIC_SERVER_USAGE.
+  // Resolve the public default in the cache key instead; account-specific
+  // sort controls still update the grid links and explicitly supplied
+  // sortBy values continue to take precedence.
+  const options = {
+    ...USER_DEFAULT_SORT_OPTIONS,
+    ...requestedOptions,
+  };
+  const cacheKeys = [KEY_MEDIA, ...getMediaCacheKeys(options)];
+  return unstable_cache(
+    getMediaNearId,
+    cacheKeys,
+    getCacheOptions(cacheKeys),
+  )(photoId, options)
     .catch(async error => {
       // Do not turn a transient related-items query failure into a broken
       // detail page. The primary item is independently readable and can

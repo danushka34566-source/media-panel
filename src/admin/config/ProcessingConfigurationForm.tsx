@@ -225,6 +225,12 @@ export default function ProcessingConfigurationForm({
           defaultValue={settings.maxRegisterPasses}
         />
         <NumberSetting
+          name="registrationMaxAttempts"
+          label="Maximum attempts per file"
+          description="Stop retrying a failed storage copy after this many attempts; use Retry to start over."
+          defaultValue={settings.registrationMaxAttempts}
+        />
+        <NumberSetting
           name="staleProcessingMinutes"
           label="Processing recovery lease"
           description="Requeue a job after heartbeats stop for this long."

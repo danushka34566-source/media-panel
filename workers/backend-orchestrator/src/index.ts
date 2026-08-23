@@ -55,6 +55,7 @@ type RegistrationStatusRow = {
   media_id?: string | null
   extension?: string | null
   error_message?: string | null
+  attempt_count?: number | null
   updated_at?: string | Date | null
 };
 
@@ -86,6 +87,7 @@ export interface Env {
   BACKEND_PROCESSOR_SHARED_SECRET?: string
   REGISTER_BATCH_SIZE?: string
   MAX_REGISTER_PASSES?: string
+  MAX_REGISTRATION_ATTEMPTS?: string
   STALE_PROCESSING_MINUTES?: string
   STALE_REGISTRATION_MINUTES?: string
   REGISTRATION_HISTORY_DAYS?: string
@@ -111,6 +113,7 @@ type RuntimeProcessingSettings = {
   videoProcessingEnabled: boolean
   registerBatchSize: number
   maxRegisterPasses: number
+  registrationMaxAttempts: number
   staleProcessingMinutes: number
   staleRegistrationMinutes: number
   registrationHistoryDays: number
@@ -181,6 +184,7 @@ const getRuntimeProcessingSettings = async (env: Env) => {
     defaults.videoProcessingEnabled = enabled('videoProcessingEnabled', true);
     defaults.registerBatchSize = number('registerBatchSize', defaults.registerBatchSize, 1, 100);
     defaults.maxRegisterPasses = number('maxRegisterPasses', defaults.maxRegisterPasses, 1, 20);
+    defaults.registrationMaxAttempts = number('registrationMaxAttempts', defaults.registrationMaxAttempts, 1, 20);
     defaults.staleProcessingMinutes = number('staleProcessingMinutes', defaults.staleProcessingMinutes, 1, 1440);
     defaults.staleRegistrationMinutes = number('staleRegistrationMinutes', defaults.staleRegistrationMinutes, 1, 1440);
     defaults.registrationHistoryDays = number('registrationHistoryDays', defaults.registrationHistoryDays, 1, 365);
@@ -203,6 +207,7 @@ const getDefaultRuntimeProcessingSettings = (env: Env): RuntimeProcessingSetting
     videoProcessingEnabled: true,
     registerBatchSize: getNumber(env.REGISTER_BATCH_SIZE, 2, { min: 1, max: 100 }),
     maxRegisterPasses: getNumber(env.MAX_REGISTER_PASSES, 2, { min: 1, max: 20 }),
+    registrationMaxAttempts: getNumber(env.MAX_REGISTRATION_ATTEMPTS, 3, { min: 1, max: 20 }),
     staleProcessingMinutes: getNumber(env.STALE_PROCESSING_MINUTES, 2, { min: 1, max: 1440 }),
     staleRegistrationMinutes: getNumber(env.STALE_REGISTRATION_MINUTES, 5, { min: 1, max: 1440 }),
     registrationHistoryDays: getNumber(env.REGISTRATION_HISTORY_DAYS, 14, { min: 1, max: 365 }),
@@ -219,6 +224,7 @@ const envWithRuntimeSettings = (
   ...env,
   REGISTER_BATCH_SIZE: String(settings.registerBatchSize),
   MAX_REGISTER_PASSES: String(settings.maxRegisterPasses),
+  MAX_REGISTRATION_ATTEMPTS: String(settings.registrationMaxAttempts),
   STALE_PROCESSING_MINUTES: String(settings.staleProcessingMinutes),
   STALE_REGISTRATION_MINUTES: String(settings.staleRegistrationMinutes),
   REGISTRATION_HISTORY_DAYS: String(settings.registrationHistoryDays),
@@ -257,7 +263,7 @@ const GENERATED_MEDIA_SUFFIX_REGEX =
 const STALE_REGISTRATION_ERROR_MESSAGE =
   'Previous registration attempt stalled; queued for retry';
 const MISSING_UPLOAD_ERROR_PREFIX = 'Upload not found in storage';
-const WORKER_BUILD_ID = 'v115';
+const WORKER_BUILD_ID = 'v116';
 // A scheduled Worker must finish promptly. Drive copies can become visible
 // asynchronously, so persist the in-flight state and check again on the next
 // minute instead of polling long enough to lose the registration lease.
@@ -1050,7 +1056,8 @@ const isDriveTimeoutLikeError = (error: unknown) => {
   return (
     message.includes('(524)') ||
     /timeout/i.test(message) ||
-    /timed out/i.test(message)
+    /timed out/i.test(message) ||
+    /fetch failed|network error|connection reset|connection terminated|econnreset|aborted/i.test(message)
   );
 };
 
@@ -1060,7 +1067,7 @@ export const isRecoverableDriveCopyError = (error: unknown) => {
     ? error.message
     : String(error ?? '');
   return (
-    /^Drive copy failed \(5\d{2}\)/i.test(message) ||
+    /^Drive copy failed \((?:408|425|429|5\d{2})\)/i.test(message) ||
     message.startsWith('Drive copy not ready:') ||
     message.startsWith('Copied destination is not readable in storage:') ||
     message.startsWith('Copied destination size mismatch:')
@@ -2743,7 +2750,6 @@ const clearTrackedRegistration = async (
 
 let registrationStatusTableReady: Promise<void> | undefined;
 const ensureRegistrationStatusTable = async (env: Env) => {
-  if (env.REGISTRATION_SCHEDULED === '1') return;
   if (!registrationStatusTableReady) {
     const sql = sqlForEnv(env);
     registrationStatusTableReady = (async () => {
@@ -2759,9 +2765,14 @@ const ensureRegistrationStatusTable = async (env: Env) => {
           media_id TEXT,
           extension TEXT,
           error_message TEXT,
+          attempt_count INTEGER NOT NULL DEFAULT 0,
           updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
           created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
         )
+      `;
+      await sql`
+        ALTER TABLE worker_registration_status
+        ADD COLUMN IF NOT EXISTS attempt_count INTEGER NOT NULL DEFAULT 0
       `;
     })();
   }
@@ -2778,6 +2789,10 @@ const clearStaleRegistrationStatuses = async (env: Env) => {
   const minutes = getNumber(env.STALE_REGISTRATION_MINUTES, 15, {
     min: 1,
     max: 24 * 60,
+  });
+  const maxAttempts = getNumber(env.MAX_REGISTRATION_ATTEMPTS, 3, {
+    min: 1,
+    max: 20,
   });
   // Remove the misleading legacy marker from rows that were never claimed.
   // Their normal state is detected, and they remain eligible for FIFO work.
@@ -2800,6 +2815,24 @@ const clearStaleRegistrationStatuses = async (env: Env) => {
     -- made an idle backlog look like every file had failed. Only recover a
     -- file that was actually claimed and left in registering.
     WHERE status='registering'
+      AND COALESCE(attempt_count, 0) < ${maxAttempts}
+      AND (
+        media_id IS NULL
+        OR updated_at < now() - (${String(minutes)} || ' minutes')::interval
+      )
+    RETURNING url
+  ` as unknown as Array<{ url: string }>;
+  const exhaustedRows = await sql`
+    UPDATE worker_registration_status
+    SET
+      status='error',
+      error_message=COALESCE(
+        NULLIF(error_message, ''),
+        ${`Registration stopped after ${maxAttempts} attempts; retry it manually`}
+      ),
+      updated_at=now()
+    WHERE status='registering'
+      AND COALESCE(attempt_count, 0) >= ${maxAttempts}
       AND (
         media_id IS NULL
         OR updated_at < now() - (${String(minutes)} || ' minutes')::interval
@@ -2816,8 +2849,15 @@ const clearStaleRegistrationStatuses = async (env: Env) => {
       error_message=NULL,
       updated_at=now()
     WHERE status='error'
+      AND COALESCE(attempt_count, 0) < ${maxAttempts}
       AND (
-        error_message LIKE 'Drive copy failed (5%'
+        error_message LIKE 'Drive copy failed (408%'
+        OR error_message LIKE 'Drive copy failed (425%'
+        OR error_message LIKE 'Drive copy failed (429%'
+        OR error_message LIKE 'Drive copy failed (408%'
+        OR error_message LIKE 'Drive copy failed (425%'
+        OR error_message LIKE 'Drive copy failed (429%'
+        OR error_message LIKE 'Drive copy failed (5%'
         OR error_message LIKE 'Drive copy not ready:%'
         OR error_message LIKE 'Copied destination is not readable in storage:%'
         OR error_message LIKE 'Copied destination size mismatch:%'
@@ -2826,7 +2866,7 @@ const clearStaleRegistrationStatuses = async (env: Env) => {
       )
     RETURNING url
   ` as unknown as Array<{ url: string }>;
-  return recoveredRows.length + transientErrorRows.length;
+  return recoveredRows.length + exhaustedRows.length + transientErrorRows.length;
 };
 
 const clearOldCompletedRegistrationStatuses = async (env: Env) => {
@@ -2878,6 +2918,10 @@ const getRegistrationStatusRows = async (env: Env, limit?: number) => {
   await ensureRegistrationStatusTable(env);
   const sql = sqlForEnv(env);
   if (limit !== undefined) {
+    const maxAttempts = getNumber(env.MAX_REGISTRATION_ATTEMPTS, 3, {
+      min: 1,
+      max: 20,
+    });
     return (await sql`
       SELECT
         url,
@@ -2890,11 +2934,13 @@ const getRegistrationStatusRows = async (env: Env, limit?: number) => {
         media_id,
         extension,
         error_message,
+        attempt_count,
         updated_at
       FROM worker_registration_status
       WHERE status='detected'
         OR (
           status='registering'
+          AND COALESCE(attempt_count, 0) < ${maxAttempts}
           AND updated_at < now() - (
             ${String(getNumber(env.STALE_REGISTRATION_MINUTES, 15, {
               min: 1,
@@ -2904,11 +2950,15 @@ const getRegistrationStatusRows = async (env: Env, limit?: number) => {
         )
         OR (
           status='error'
+          AND COALESCE(attempt_count, 0) < ${maxAttempts}
           AND (
             error_message IS NULL
             OR error_message ILIKE '%timeout%'
             OR error_message ILIKE '%connection terminated%'
             OR error_message ILIKE '%connection reset%'
+            OR error_message LIKE 'Drive copy failed (408%'
+            OR error_message LIKE 'Drive copy failed (425%'
+            OR error_message LIKE 'Drive copy failed (429%'
             OR error_message LIKE 'Drive copy failed (5%'
             OR error_message LIKE 'Drive copy not ready:%'
             OR error_message LIKE 'Copied destination is not readable in storage:%'
@@ -2928,10 +2978,11 @@ const getRegistrationStatusRows = async (env: Env, limit?: number) => {
       source_url,
       original_file_name,
       title,
-      media_id,
-      extension,
-      error_message,
-      updated_at
+        media_id,
+        extension,
+        error_message,
+        attempt_count,
+        updated_at
     FROM worker_registration_status
   `) as unknown as RegistrationStatusRow[];
 };
@@ -2950,16 +3001,34 @@ const claimRegistrationQueueRow = async (
     min: 1,
     max: 24 * 60,
   });
+  const maxAttempts = getNumber(env.MAX_REGISTRATION_ATTEMPTS, 3, {
+    min: 1,
+    max: 20,
+  });
   const concurrencyLimit = Math.max(1, Math.min(Math.round(activeRegistrationLimit), 10));
   const rows = await sql`
     WITH claim_lock AS MATERIALIZED (
       SELECT pg_advisory_xact_lock(
         hashtextextended('media-panel:registration-claim', 0)
       ) AS acquired
+    ), exhausted AS MATERIALIZED (
+      UPDATE worker_registration_status
+      SET
+        status='error',
+        error_message=COALESCE(
+          NULLIF(error_message, ''),
+          ${`Registration stopped after ${maxAttempts} attempts; retry it manually`}
+        ),
+        updated_at=now()
+      WHERE status='registering'
+        AND COALESCE(attempt_count, 0) >= ${maxAttempts}
+        AND updated_at < now() - (${String(staleMinutes)} || ' minutes')::interval
+      RETURNING url
     ), active AS MATERIALIZED (
       SELECT COUNT(*)::int AS active_count
       FROM worker_registration_status active_row
       CROSS JOIN claim_lock
+      CROSS JOIN (SELECT COUNT(*) FROM exhausted) AS reclaimed
       WHERE active_row.status='registering'
         AND active_row.updated_at >= now() -
           (${String(staleMinutes)} || ' minutes')::interval
@@ -2972,15 +3041,20 @@ const claimRegistrationQueueRow = async (
       status='detected'
         OR (
           status='registering'
+          AND COALESCE(attempt_count, 0) < ${maxAttempts}
           AND updated_at < now() - (${String(staleMinutes)} || ' minutes')::interval
         )
         OR (
           status='error'
+          AND COALESCE(attempt_count, 0) < ${maxAttempts}
           AND (
             error_message IS NULL
             OR error_message ILIKE '%timeout%'
             OR error_message ILIKE '%connection terminated%'
             OR error_message ILIKE '%connection reset%'
+            OR error_message LIKE 'Drive copy failed (408%'
+            OR error_message LIKE 'Drive copy failed (425%'
+            OR error_message LIKE 'Drive copy failed (429%'
             OR error_message LIKE 'Drive copy failed (5%'
             OR error_message LIKE 'Drive copy not ready:%'
             OR error_message LIKE 'Copied destination is not readable in storage:%'
@@ -2993,7 +3067,11 @@ const claimRegistrationQueueRow = async (
       FOR UPDATE SKIP LOCKED
     )
     UPDATE worker_registration_status AS status_row
-    SET status='registering', updated_at=now(), error_message=NULL
+    SET
+      status='registering',
+      updated_at=now(),
+      error_message=NULL,
+      attempt_count=COALESCE(status_row.attempt_count, 0) + 1
     FROM candidate
     WHERE status_row.url=candidate.url
     RETURNING
@@ -3007,6 +3085,7 @@ const claimRegistrationQueueRow = async (
       status_row.media_id,
       status_row.extension,
       status_row.error_message,
+      status_row.attempt_count,
       status_row.updated_at
   ` as unknown as RegistrationStatusRow[];
   const claimed = rows[0];
@@ -3033,6 +3112,7 @@ const getRegistrationStatusRowsByUrls = async (env: Env, urls: string[]) => {
     SELECT
       url, file_name, uploaded_at, status, source_url, original_file_name,
       title, media_id, extension, error_message, updated_at
+      , attempt_count
     FROM worker_registration_status
     WHERE url = ANY(${uniqueUrls}) OR source_url = ANY(${uniqueUrls})
   `) as unknown as RegistrationStatusRow[];
@@ -3051,6 +3131,24 @@ const setRegistrationStatus = async (
   env: Env,
   row: RegistrationStatusWrite,
 ) => upsertRegistrationStatuses(env, [row]);
+
+// Manual/recovery scans do not pass through the scheduled atomic claim. Keep
+// their attempts in the same durable counter so every entry point shares the
+// same retry guard.
+const incrementRegistrationAttempt = async (env: Env, url: string) => {
+  const sql = sqlForEnv(env);
+  const rows = await sql`
+    UPDATE worker_registration_status
+    SET
+      attempt_count=COALESCE(attempt_count, 0) + 1,
+      status='registering',
+      error_message=NULL,
+      updated_at=now()
+    WHERE url=${url} OR source_url=${url}
+    RETURNING attempt_count
+  ` as unknown as Array<{ attempt_count: number }>;
+  return Number(rows[0]?.attempt_count || 1);
+};
 
 type RegistrationStatusWrite = {
   url: string
@@ -3262,7 +3360,8 @@ const replaceRegistrationStatusUrl = async (
       title,
       media_id,
       extension,
-      NULL
+      NULL,
+      COALESCE(attempt_count, 0)
     FROM worker_registration_status
     WHERE url=${previousUrl}
     ON CONFLICT (url) DO UPDATE SET
@@ -3274,6 +3373,10 @@ const replaceRegistrationStatusUrl = async (
       title=COALESCE(EXCLUDED.title, worker_registration_status.title),
       media_id=COALESCE(EXCLUDED.media_id, worker_registration_status.media_id),
       extension=COALESCE(EXCLUDED.extension, worker_registration_status.extension),
+      attempt_count=GREATEST(
+        COALESCE(EXCLUDED.attempt_count, 0),
+        COALESCE(worker_registration_status.attempt_count, 0)
+      ),
       error_message=NULL,
       updated_at=now()
   `;
@@ -3527,6 +3630,7 @@ const requeueRegistrationStatuses = async (env: Env, urls: string[]) => {
     SET
       status='detected',
       error_message=NULL,
+      attempt_count=0,
       updated_at=now()
     WHERE url = ANY(${uniqueUrls})
       OR source_url = ANY(${uniqueUrls})
@@ -4390,6 +4494,10 @@ const scanAndRegisterWithLease = async (
     min: 1,
     max: 10,
   });
+  const maxRegistrationAttempts = getNumber(env.MAX_REGISTRATION_ATTEMPTS, 3, {
+    min: 1,
+    max: 20,
+  });
   // Use the existing panel-backed queue settings directly. They are loaded
   // from processing_configuration before the scheduled scan starts.
   const registerBatchSize = configuredRegisterBatchSize;
@@ -4900,7 +5008,20 @@ const scanAndRegisterWithLease = async (
       let registrationCommitted = false;
       let registrationPhase: 'allocating' | 'preparing' | 'committing' =
         'allocating';
+      let registrationAttemptNumber = Number(
+        existingRegistration?.attempt_count ??
+        claimedRegistrationRow?.attempt_count ??
+        0,
+      );
       try {
+        if (!hasScheduledQueue) {
+          registrationAttemptNumber = await incrementRegistrationAttempt(env, sourceUrl);
+        } else if (registrationAttemptNumber < 1) {
+          // Rows created by an older schema may have no persisted count. The
+          // scheduled claim has already reserved this attempt, so keep the
+          // in-memory value aligned without issuing another write.
+          registrationAttemptNumber = 1;
+        }
         mediaId = mediaId || await findAvailableMediaId(
           attempt => mediaIdForObject(
             env,
@@ -4944,6 +5065,9 @@ const scanAndRegisterWithLease = async (
         // size once before validating an existing generated destination;
         // comparing against undefined falsely kept retries waiting forever.
         const sourceSize = object.size ?? await storageObjectSize(env, object.key);
+        if (typeof sourceSize !== 'number' || !Number.isFinite(sourceSize) || sourceSize < 0) {
+          throw new Error(`Registration source not found in storage: ${object.key}`);
+        }
         const targetRegistrationUrl = urlForKey(env, registrationKey);
         const existingMediaForId = rows.find(row => row.id === mediaId);
         const targetRecordedAsRegistered =
@@ -5206,6 +5330,14 @@ const scanAndRegisterWithLease = async (
         const isRecoverableCopyDelay =
           isDriveStorageEnabled(env) &&
           isRecoverableDriveCopyError(error);
+        const canRetryCopy = isRecoverableCopyDelay &&
+          registrationAttemptNumber < maxRegistrationAttempts;
+        const errorText = error instanceof Error
+          ? error.message
+          : String(error ?? 'Registration failed');
+        const terminalErrorMessage = isRecoverableCopyDelay && !canRetryCopy
+          ? `Registration stopped after ${registrationAttemptNumber} attempt${registrationAttemptNumber === 1 ? '' : 's'}: ${errorText}`
+          : errorText;
         const logRegistrationIssue = isRecoverableCopyDelay
           ? console.warn
           : console.error;
@@ -5221,29 +5353,25 @@ const scanAndRegisterWithLease = async (
           url: sourceUrl,
           fileName: originalFileName,
           uploadedAt: sourceUploadedAt,
-          status: isRecoverableCopyDelay ? 'registering' : 'error',
+          status: canRetryCopy ? 'registering' : 'error',
           sourceUrl: persistedSourceUrl,
           originalFileName,
           title: registrationTitle,
           extension,
-          errorMessage: isRecoverableCopyDelay
-            ? undefined
-            : error instanceof Error
-              ? error.message
-              : String(error ?? 'Registration failed'),
-          touchUpdatedAt: isRecoverableCopyDelay ? false : undefined,
+          errorMessage: canRetryCopy
+            ? `Waiting for storage copy (attempt ${registrationAttemptNumber}/${maxRegistrationAttempts}): ${errorText}`
+            : terminalErrorMessage,
+          touchUpdatedAt: canRetryCopy ? false : undefined,
         }).catch(() => undefined);
         observe(logBackendActivity(env, {
           category: 'registration',
-          event: isRecoverableCopyDelay
+          event: isRecoverableCopyDelay && canRetryCopy
             ? 'registration_waiting_for_storage'
             : 'registration_failed',
-          status: isRecoverableCopyDelay ? 'warning' : 'error',
-          message: isRecoverableCopyDelay
-            ? `Waiting for Drive copy of ${originalFileName}`
-            : error instanceof Error
-              ? error.message
-              : String(error ?? 'Registration failed'),
+          status: canRetryCopy ? 'warning' : 'error',
+          message: canRetryCopy
+            ? `Waiting for Drive copy of ${originalFileName} (attempt ${registrationAttemptNumber}/${maxRegistrationAttempts})`
+            : terminalErrorMessage,
           mediaId,
           details: {
             phase: registrationPhase,
@@ -6065,6 +6193,7 @@ const status = async (
               media_id,
               extension,
               error_message,
+              attempt_count,
               uploaded_at,
               updated_at
             FROM worker_registration_status
@@ -6081,6 +6210,7 @@ const status = async (
                 media_id,
                 extension,
                 error_message,
+                attempt_count,
                 uploaded_at,
                 updated_at
               FROM worker_registration_status

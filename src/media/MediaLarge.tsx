@@ -1161,7 +1161,7 @@ export default function MediaLarge({
               blurCompatibilityMode={doesMediaNeedBlurCompatibility(photo)}
               priority={priority}
               loading={eagerMediaImage ? 'eager' : 'lazy'}
-              fetchPriority={eagerMediaImage ? 'high' : 'low'}
+               fetchPriority={priority ? 'high' : 'auto'}
               showLoadingIndicator
             />
             : <div
@@ -1194,7 +1194,7 @@ export default function MediaLarge({
                         aspectRatio={mediaAspectRatio}
                         alt={altTextForMedia(photo)}
                         loading={eagerMediaImage ? 'eager' : 'lazy'}
-                        fetchPriority={eagerMediaImage ? 'high' : 'low'}
+                         fetchPriority={priority ? 'high' : 'auto'}
                         onError={() => setPosterFailedMediaId(photo.id)}
                         showLoadingIndicator
                       />
@@ -1364,7 +1364,7 @@ export default function MediaLarge({
               blurCompatibilityMode={doesMediaNeedBlurCompatibility(photo)}
               priority={priority}
               loading={eagerMediaImage ? 'eager' : 'lazy'}
-              fetchPriority={eagerMediaImage ? 'high' : 'low'}
+               fetchPriority={priority ? 'high' : 'auto'}
               showLoadingIndicator
             />
               : <div

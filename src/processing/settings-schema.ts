@@ -6,6 +6,7 @@ export const PROCESSING_SETTINGS_DEFAULTS = {
   videoProcessingEnabled: true,
   registerBatchSize: 2,
   maxRegisterPasses: 2,
+  registrationMaxAttempts: 3,
   staleProcessingMinutes: 2,
   staleRegistrationMinutes: 5,
   registrationHistoryDays: 14,
@@ -23,6 +24,7 @@ export type ProcessingSettings = {
 export const PROCESSING_NUMBER_LIMITS = {
   registerBatchSize: [1, 100],
   maxRegisterPasses: [1, 20],
+  registrationMaxAttempts: [1, 20],
   staleProcessingMinutes: [1, 1_440],
   staleRegistrationMinutes: [1, 1_440],
   registrationHistoryDays: [1, 365],
