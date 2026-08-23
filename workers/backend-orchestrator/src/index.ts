@@ -5290,10 +5290,12 @@ export default {
       getDefaultRuntimeProcessingSettings(env);
     let dispatched = false;
     let fallbackTimer: ReturnType<typeof setTimeout> | undefined;
+    let resolveFallbackWait: (() => void) | undefined;
     const dispatch = (settings: RuntimeProcessingSettings) => {
       if (dispatched) { return; }
       dispatched = true;
       if (fallbackTimer) { clearTimeout(fallbackTimer); }
+      resolveFallbackWait?.();
       ctx.waitUntil(logBackendActivity(env, {
         category: 'orchestrator',
         event: 'scheduled_scan_dispatch',
@@ -5343,7 +5345,17 @@ export default {
         }));
       }
     };
-    fallbackTimer = setTimeout(() => dispatch(fallbackSettings), 1_500);
+    // A timer created outside a waitUntil promise can be discarded as soon as
+    // the scheduled handler returns. Keep the fallback timer itself alive so a
+    // slow Supabase settings socket cannot silently suppress registration.
+    const fallbackWait = new Promise<void>(resolve => {
+      resolveFallbackWait = resolve;
+      fallbackTimer = setTimeout(() => {
+        dispatch(fallbackSettings);
+        resolve();
+      }, 1_500);
+    });
+    ctx.waitUntil(fallbackWait);
     ctx.waitUntil((async () => {
       try {
         const settings = await getRuntimeProcessingSettingsForTrigger(env);
