@@ -181,6 +181,7 @@ export default function NavClient({
             ? [<nav
               key="nav"
               ref={ref}
+              data-site-header
               className={clsx(
                 'w-full flex items-center bg-main',
                 NAV_HEIGHT_CLASS,

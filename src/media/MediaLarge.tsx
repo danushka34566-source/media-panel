@@ -109,6 +109,7 @@ import {
   type DockedVideoState,
   DETAIL_VIDEO_MINIMIZE_EVENT,
   DETAIL_VIDEO_RESTORE_EVENT,
+  PERSISTENT_VIDEO_HANDOFF_READY_EVENT,
 } from './video-mini-player';
 
 const SWIPE_NAVIGATION_DISTANCE = 50;
@@ -279,11 +280,10 @@ export default function MediaLarge({
     getDockedVideo,
     getDockedVideoServerSnapshot,
   );
-  const isPersistentVideoActive = Boolean(
-    broadcastDetailVideoPlayback && dockedVideo?.mediaId === photo.id,
-  );
+  const isPersistentVideoActive = dockedVideo?.mediaId === photo.id;
   const [dockedResumeState, setDockedResumeState] =
     useState<DockedVideoState>();
+  const [isRestoringFromMini, setIsRestoringFromMini] = useState(false);
   const [isPreparingFullVideo, setIsPreparingFullVideo] = useState(false);
   const [fullVideoDeliveryUrl, setFullVideoDeliveryUrl] = useState<string>();
   const [preparedFullVideoDownloads, setPreparedFullVideoDownloads] = useState<Record<string, {
@@ -371,6 +371,7 @@ export default function MediaLarge({
     setReadyPreviewActivationId(undefined);
     setShouldUseCompatibilityPlayback(false);
     setDockedResumeState(undefined);
+    setIsRestoringFromMini(false);
   }, [photo.id]);
 
   // Warm the adjacent route payloads while the current media is visible. The
@@ -466,9 +467,8 @@ export default function MediaLarge({
           currentTime: Math.max(0, playback.currentTime),
           wasPlaying: playback.isMainVideoActuallyPlaying,
           muted: playback.muted,
+          pendingHandoff: true,
         });
-        videoRef.current?.pause();
-        setIsFullVideoPlaying(false);
       }
     }, { threshold: [0, 0.2, 0.5] });
     observer.observe(sentinel);
@@ -481,6 +481,28 @@ export default function MediaLarge({
     isVideoFullscreen,
     photo,
   ]);
+
+  useEffect(() => {
+    if (!isVideo) { return; }
+    const completeHandoff = (event: Event) => {
+      const mediaId = (event as CustomEvent<{ mediaId?: string }>).detail
+        ?.mediaId;
+      if (mediaId !== photo.id) { return; }
+      videoRef.current?.pause();
+      detailPlaybackRef.current.isFullVideoPlaying = false;
+      detailPlaybackRef.current.isMainVideoActuallyPlaying = false;
+      setIsMainVideoActuallyPlaying(false);
+      setIsFullVideoPlaying(false);
+    };
+    window.addEventListener(
+      PERSISTENT_VIDEO_HANDOFF_READY_EVENT,
+      completeHandoff,
+    );
+    return () => window.removeEventListener(
+      PERSISTENT_VIDEO_HANDOFF_READY_EVENT,
+      completeHandoff,
+    );
+  }, [isVideo, photo.id]);
 
   useEffect(() => {
     if (!isVideo) { return; }
@@ -581,7 +603,7 @@ export default function MediaLarge({
     if (docked?.mediaId === photo.id) {
       // eslint-disable-next-line react-hooks/set-state-in-effect
       setDockedResumeState(docked);
-      clearDockedVideo();
+      setIsRestoringFromMini(true);
       setIsFullVideoPlaying(true);
       setFullVideoDeliveryUrl(docked.sourceUrl);
     }
@@ -620,7 +642,9 @@ export default function MediaLarge({
     const restore = () => {
       try { video.currentTime = Math.max(0, dockedResumeState.currentTime); }
       catch { /* media may still be switching sources */ }
-      video.muted = dockedResumeState.muted;
+      video.muted = isRestoringFromMini
+        ? true
+        : dockedResumeState.muted;
       if (dockedResumeState.wasPlaying) {
         void VideoPlaybackManager.requestPlay(video).catch(() => undefined);
       }
@@ -628,7 +652,12 @@ export default function MediaLarge({
     video.addEventListener('loadedmetadata', restore, { once: true });
     if (video.readyState >= 1) { restore(); }
     return () => video.removeEventListener('loadedmetadata', restore);
-  }, [dockedResumeState, fullVideoSourceUrl, isFullVideoPlaying]);
+  }, [
+    dockedResumeState,
+    fullVideoSourceUrl,
+    isFullVideoPlaying,
+    isRestoringFromMini,
+  ]);
 
   useEffect(() => {
     if (!broadcastDetailVideoPlayback || !isVideo) { return; }
@@ -670,7 +699,6 @@ export default function MediaLarge({
   // session into the page-owned player and resume from the same position.
   useEffect(() => {
     if (
-      !broadcastDetailVideoPlayback ||
       !isVideo ||
       !isPersistentVideoActive ||
       !dockedVideo ||
@@ -680,16 +708,21 @@ export default function MediaLarge({
     if (!sentinel || typeof IntersectionObserver === 'undefined') { return; }
     const observer = new IntersectionObserver(([entry]) => {
       if (!entry?.isIntersecting || entry.intersectionRatio < 0.2) { return; }
-      setDockedResumeState(dockedVideo);
-      setFullVideoDeliveryUrl(dockedVideo.sourceUrl);
-      clearDockedVideo();
+      const latestDockedVideo = getDockedVideo() ?? dockedVideo;
+      if (latestDockedVideo.pendingHandoff) {
+        clearDockedVideo();
+        observer.disconnect();
+        return;
+      }
+      setDockedResumeState(latestDockedVideo);
+      setIsRestoringFromMini(true);
+      setFullVideoDeliveryUrl(latestDockedVideo.sourceUrl);
       setIsFullVideoPlaying(true);
       observer.disconnect();
     }, { threshold: [0.2] });
     observer.observe(sentinel);
     return () => observer.disconnect();
   }, [
-    broadcastDetailVideoPlayback,
     dockedVideo,
     isPersistentVideoActive,
     isVideo,
@@ -1477,7 +1510,7 @@ export default function MediaLarge({
                       : undefined}
                     playsInline
                     autoPlay={!isFullVideoPlaying && isPreviewActive}
-                    muted={!isFullVideoPlaying}
+                    muted={!isFullVideoPlaying || isRestoringFromMini}
                     loop={!isFullVideoPlaying}
                     controls={isFullVideoPlaying}
                     controlsList="nodownload noplaybackrate"
@@ -1530,6 +1563,14 @@ export default function MediaLarge({
                       }
                     }}
                     onPlaying={() => {
+                      if (isFullVideoPlaying && isRestoringFromMini) {
+                        const video = videoRef.current;
+                        clearDockedVideo();
+                        setIsRestoringFromMini(false);
+                        if (video) {
+                          video.muted = dockedResumeState?.muted ?? false;
+                        }
+                      }
                       if (!isFullVideoPlaying && automaticPreviewSrc) {
                         setReadyPreviewSrc(automaticPreviewSrc);
                         setReadyPreviewActivationId(previewActivationId);

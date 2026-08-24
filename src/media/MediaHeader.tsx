@@ -62,12 +62,22 @@ export default function MediaHeader({
       return;
     }
     const target = event.target as HTMLElement | null;
-    if (target?.closest('a,button,input,textarea,select')) {
+    if (target?.closest('button,input,textarea,select')) {
       pullStartRef.current = undefined;
       return;
     }
     const touch = event.touches[0];
     pullStartRef.current = { x: touch.clientX, y: touch.clientY };
+  };
+  const onTitleTouchMove = (event: TouchEvent<HTMLDivElement>) => {
+    const start = pullStartRef.current;
+    const touch = event.touches[0];
+    if (!start || !touch) { return; }
+    const deltaX = touch.clientX - start.x;
+    const deltaY = touch.clientY - start.y;
+    if (deltaY > 8 && deltaY > Math.abs(deltaX)) {
+      event.preventDefault();
+    }
   };
   const onTitleTouchEnd = (event: TouchEvent<HTMLDivElement>) => {
     const start = pullStartRef.current;
@@ -77,6 +87,7 @@ export default function MediaHeader({
     const deltaX = touch.clientX - start.x;
     const deltaY = touch.clientY - start.y;
     if (deltaY >= MINIMIZE_PULL_DISTANCE && deltaY > Math.abs(deltaX) * 1.2) {
+      event.preventDefault();
       requestDetailVideoMinimize(selectedMedia.id);
     }
   };
@@ -148,10 +159,9 @@ export default function MediaHeader({
   return (
     <div
       onTouchStart={onTitleTouchStart}
+      onTouchMove={onTitleTouchMove}
       onTouchEnd={onTitleTouchEnd}
-      className={selectedMedia && isVideoMedia(selectedMedia)
-        ? 'touch-pan-y'
-        : undefined}
+      onTouchCancel={() => { pullStartRef.current = undefined; }}
     >
       <AnimateItems
       type="bottom"
@@ -162,6 +172,8 @@ export default function MediaHeader({
           {/* Content A: Filter Set or Media Title */}
           <div className={clsx(
             'inline-flex uppercase',
+            selectedMedia && isVideoMedia(selectedMedia) &&
+              'touch-none select-none overscroll-contain',
             headerType === 'photo-set'
               ? isGridHighDensity
                 ? 'col-span-2 lg:col-span-3'

@@ -10,6 +10,7 @@ export type DockedVideoState = {
   currentTime: number
   wasPlaying: boolean
   muted: boolean
+  pendingHandoff?: boolean
 };
 
 export const DETAIL_VIDEO_MINIMIZE_EVENT = 'media-detail-video-minimize';
@@ -17,6 +18,8 @@ export const DETAIL_VIDEO_RESTORE_EVENT = 'media-detail-video-restore';
 export const PERSISTENT_VIDEO_FULLSCREEN_EVENT =
   'persistent-video-fullscreen';
 export const PERSISTENT_VIDEO_PIP_EVENT = 'persistent-video-picture-in-picture';
+export const PERSISTENT_VIDEO_HANDOFF_READY_EVENT =
+  'persistent-video-handoff-ready';
 
 export const requestDetailVideoMinimize = (mediaId: string) => {
   window.dispatchEvent(new CustomEvent(DETAIL_VIDEO_MINIMIZE_EVENT, {

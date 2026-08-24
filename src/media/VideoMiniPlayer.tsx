@@ -3,6 +3,7 @@
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
   useSyncExternalStore,
@@ -12,6 +13,8 @@ import { LuMaximize2, LuPlay, LuX } from 'react-icons/lu';
 import {
   AnimatePresence,
   motion,
+  type PanInfo,
+  useDragControls,
 } from 'framer-motion';
 import { VideoPlaybackManager } from '@/utility/VideoPlaybackManager';
 import {
@@ -22,12 +25,15 @@ import {
   updateDockedVideo,
   clearDockedVideo,
   requestDetailVideoRestore,
+  PERSISTENT_VIDEO_HANDOFF_READY_EVENT,
 } from './video-mini-player';
 
 export default function VideoMiniPlayer() {
   const router = useRouter();
+  const boundsRef = useRef<HTMLDivElement>(null);
+  const dragControls = useDragControls();
   const videoRef = useRef<HTMLVideoElement>(null);
-  const miniSwipeStartYRef = useRef<number | undefined>(undefined);
+  const miniGestureMovedRef = useRef(false);
   const resumeTimeRef = useRef<number | undefined>(undefined);
   const dockedVideo = useSyncExternalStore(
     subscribeVideoMiniPlayer,
@@ -37,6 +43,7 @@ export default function VideoMiniPlayer() {
   const [useFallbackSource, setUseFallbackSource] = useState(false);
   const [playbackError, setPlaybackError] = useState(false);
   const [playbackNeedsGesture, setPlaybackNeedsGesture] = useState(false);
+  const [headerHeight, setHeaderHeight] = useState(0);
   const source = dockedVideo && useFallbackSource && dockedVideo.fallbackUrl
     ? dockedVideo.fallbackUrl
     : dockedVideo?.sourceUrl;
@@ -98,9 +105,50 @@ export default function VideoMiniPlayer() {
     useFallbackSource,
   ]);
 
+  useLayoutEffect(() => {
+    const header = document.querySelector<HTMLElement>('[data-site-header]');
+    if (!header) { return; }
+    const update = () => {
+      const next = Math.max(0, Math.ceil(header.getBoundingClientRect().height));
+      setHeaderHeight(current => current === next ? current : next);
+    };
+    update();
+    const observer = typeof ResizeObserver === 'undefined'
+      ? undefined
+      : new ResizeObserver(update);
+    observer?.observe(header);
+    window.addEventListener('resize', update);
+    return () => {
+      observer?.disconnect();
+      window.removeEventListener('resize', update);
+    };
+  }, []);
+  const onMiniDragStart = () => {
+    miniGestureMovedRef.current = false;
+  };
+  const onMiniDrag = (
+    _: MouseEvent | TouchEvent | PointerEvent,
+    info: PanInfo,
+  ) => {
+    if (Math.hypot(info.offset.x, info.offset.y) > 6) {
+      miniGestureMovedRef.current = true;
+    }
+  };
+  const onMiniDragEnd = (
+    _: MouseEvent | TouchEvent | PointerEvent,
+    info: PanInfo,
+  ) => {
+    const shouldUnfold = info.offset.y < -56 &&
+      Math.abs(info.offset.y) > Math.abs(info.offset.x) * 1.15;
+    window.setTimeout(() => { miniGestureMovedRef.current = false; }, 0);
+    if (shouldUnfold) { openDetails(); }
+  };
+
   return (
     <div
-      className="pointer-events-none fixed inset-0 z-40"
+      ref={boundsRef}
+      className="pointer-events-none fixed inset-x-0 bottom-0 z-40"
+      style={{ top: headerHeight }}
     >
       <AnimatePresence>
         {dockedVideo && source &&
@@ -108,13 +156,22 @@ export default function VideoMiniPlayer() {
           key={dockedVideo.mediaId}
           aria-label="Playing video"
           className="pointer-events-auto absolute bottom-2 right-2
-            w-[min(19rem,calc(100vw-1rem))] overflow-hidden rounded-xl
-            border border-medium bg-main shadow-2xl ring-1 ring-black/15
+            w-[min(17rem,calc(100vw-1rem))] overflow-hidden rounded-lg
+            border border-white/15 bg-black shadow-2xl ring-1 ring-black/30
             will-change-transform sm:bottom-4 sm:right-4"
           initial={{ opacity: 0, scale: 0.92, y: 20 }}
           animate={{ opacity: 1, scale: 1, y: 0 }}
           exit={{ opacity: 0, scale: 0.92, y: 20 }}
           transition={{ type: 'spring', stiffness: 360, damping: 32 }}
+          drag
+          dragListener={false}
+          dragControls={dragControls}
+          dragConstraints={boundsRef}
+          dragElastic={0.04}
+          dragMomentum={false}
+          onDragStart={onMiniDragStart}
+          onDrag={onMiniDrag}
+          onDragEnd={onMiniDragEnd}
         >
           <div className="relative aspect-video overflow-hidden bg-black">
             <video
@@ -125,9 +182,10 @@ export default function VideoMiniPlayer() {
               src={source}
               poster={dockedVideo.posterUrl}
               controls
+              controlsList="nodownload noplaybackrate nofullscreen"
               playsInline
               autoPlay={dockedVideo.wasPlaying}
-              muted={dockedVideo.muted}
+              muted={dockedVideo.pendingHandoff ? true : dockedVideo.muted}
               preload="auto"
               onContextMenu={event => event.preventDefault()}
               onLoadedMetadata={event => {
@@ -154,6 +212,18 @@ export default function VideoMiniPlayer() {
               onPlay={() => {
                 setPlaybackNeedsGesture(false);
                 updateDockedVideo({ wasPlaying: true }, true);
+              }}
+              onPlaying={event => {
+                if (!dockedVideo.pendingHandoff) { return; }
+                window.dispatchEvent(new CustomEvent(
+                  PERSISTENT_VIDEO_HANDOFF_READY_EVENT,
+                  { detail: { mediaId: dockedVideo.mediaId } },
+                ));
+                event.currentTarget.muted = dockedVideo.muted;
+                updateDockedVideo({
+                  pendingHandoff: false,
+                  muted: dockedVideo.muted,
+                });
               }}
               onPause={event => {
                 const currentTime = event.currentTarget.currentTime;
@@ -186,6 +256,23 @@ export default function VideoMiniPlayer() {
                 setPlaybackError(true);
               }}
             />
+            <div
+              aria-label="Move mini player; swipe up to unfold"
+              role="button"
+              tabIndex={0}
+              className="absolute inset-x-0 top-0 bottom-10 z-[5]
+                cursor-grab touch-none active:cursor-grabbing"
+              onPointerDown={event => dragControls.start(event)}
+              onClick={() => {
+                if (!miniGestureMovedRef.current) { openDetails(); }
+              }}
+              onKeyDown={event => {
+                if (event.key === 'Enter' || event.key === ' ') {
+                  event.preventDefault();
+                  openDetails();
+                }
+              }}
+            />
             {playbackError && (
               <div className="absolute inset-0 z-10 flex items-center
                 justify-center bg-black/75 px-3 text-center text-xs text-white">
@@ -213,63 +300,33 @@ export default function VideoMiniPlayer() {
                 </button>
               </div>
             )}
-          </div>
-          <div
-            className="flex min-h-12 touch-pan-y select-none items-center gap-2
-              border-t border-medium bg-main px-2.5 py-2"
-            onTouchStart={event => {
-              miniSwipeStartYRef.current = event.touches.length === 1
-                ? event.touches[0].clientY
-                : undefined;
-            }}
-            onTouchEnd={event => {
-              const startY = miniSwipeStartYRef.current;
-              miniSwipeStartYRef.current = undefined;
-              const endY = event.changedTouches[0]?.clientY;
-              if (
-                typeof startY === 'number' &&
-                typeof endY === 'number' &&
-                endY - startY < -56
-              ) {
-                openDetails();
-              }
-            }}
-            onDoubleClick={openDetails}
-          >
             <button
               type="button"
+              aria-label="Unfold video player"
+              title="Unfold video player"
+              className="absolute bottom-1.5 right-1.5 z-20 inline-flex size-7
+                items-center justify-center rounded-sm bg-black/75 text-white
+                backdrop-blur-sm transition-colors hover:bg-black
+                focus-visible:outline-2 focus-visible:outline-white"
               onClick={openDetails}
-              className="min-w-0 grow text-left"
-              aria-label={`Open details for ${dockedVideo.title || 'playing video'}`}
             >
-              <span className="block truncate text-xs font-medium text-main">
-                {dockedVideo.title || 'Playing video'}
-              </span>
-              <span className="block text-[10px] text-dim">
-                Swipe up to open
-              </span>
-            </button>
-            <button
-              type="button"
-              onClick={openDetails}
-              aria-label="Open video details"
-              className="inline-flex size-8 shrink-0 items-center justify-center
-                rounded-md text-main hover:bg-dim"
-            >
-              <LuMaximize2 size={15} />
+              <LuMaximize2 size={14} strokeWidth={2} />
             </button>
             <button
               type="button"
               aria-label="Close mini player"
               title="Close mini player"
-              className="inline-flex size-8 shrink-0 items-center justify-center
-                rounded-md text-main hover:bg-dim"
+              className="absolute right-1.5 top-1.5 z-20 inline-flex size-7
+                items-center justify-center rounded-full border border-white/25
+                bg-black/80 text-white shadow-md backdrop-blur-sm
+                transition-colors hover:bg-black focus-visible:outline-2
+                focus-visible:outline-white"
               onClick={() => {
                 videoRef.current?.pause();
                 clearDockedVideo();
               }}
             >
-              <LuX size={16} />
+              <LuX size={14} strokeWidth={2.25} />
             </button>
           </div>
         </motion.aside>}
