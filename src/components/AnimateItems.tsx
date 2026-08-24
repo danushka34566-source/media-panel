@@ -33,6 +33,10 @@ interface Props extends AnimationConfig {
   // historical identity transform instead, which keeps Framer's scale
   // interpolation stable during the first hydrated render.
   removeTransformAfterAnimation?: boolean
+  // Some keyed collections (the media grid) intentionally use the original
+  // parent-controlled initial variant. This avoids a second child-level
+  // hidden state competing with the parent's stagger during first hydration.
+  inheritParentInitial?: boolean
   animateOnFirstLoadOnly?: boolean
   staggerOnFirstLoadOnly?: boolean
   onAnimationComplete?: () => void
@@ -55,6 +59,7 @@ function AnimateItems({
   animateFromAppState,
   fade = true,
   removeTransformAfterAnimation = true,
+  inheritParentInitial = false,
   animateOnFirstLoadOnly,
   staggerOnFirstLoadOnly,
   onAnimationComplete,
@@ -97,6 +102,7 @@ function AnimateItems({
   // immediately shrinking away (especially on mobile). Capture the decision
   // for this motion tree once and apply it explicitly to each child below.
   const initialShouldAnimate = useRef(shouldAnimate).current;
+  const initialShouldStagger = useRef(shouldStagger).current;
 
   const typeResolved = animateFromAppState
     ? (nextMediaAnimationInitial.current?.type ?? type)
@@ -133,9 +139,9 @@ function AnimateItems({
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerLeave={onPointerLeave}
-      initial={shouldAnimate ? 'hidden' : false}
+      initial={initialShouldAnimate ? 'hidden' : false}
       animate={canStart || IGNORE_CAN_START ? 'show' : 'hidden'}
-      variants={shouldStagger
+      variants={initialShouldStagger
         ? {
           show: {
             transition: {
@@ -165,7 +171,9 @@ function AnimateItems({
           // consumers intentionally omit itemKeys and retain the original
           // parent-inherited variant; forcing an explicit child initial state
           // there can leave the header hidden during hydration.
-          initial={itemKeys
+          initial={inheritParentInitial
+            ? initialItemKeys.current.has(itemKey) ? undefined : false
+            : itemKeys
             ? initialShouldAnimate && initialItemKeys.current.has(itemKey)
               ? 'hidden'
               : false

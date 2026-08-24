@@ -272,6 +272,11 @@ export default function MediaGrid({
         // transform. Keep that interpolation for cards; other motion shells
         // still remove transforms to preserve fixed mini-player positioning.
         removeTransformAfterAnimation={false}
+        // Keep the v80-v90 parent-controlled card entrance. Child-level
+        // `initial="hidden"` competes with the stagger during the first
+        // hydrated render and is what caused the opening cards to reverse or
+        // shrink away on mobile.
+        inheritParentInitial
         // Keep the original scale entrance, but do not blank cold cards if a
         // mobile compositor or image request interrupts the first frame.
         fade={false}
