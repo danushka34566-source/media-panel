@@ -46,6 +46,7 @@ import {
   useRef,
   useState,
   useEffect,
+  useSyncExternalStore,
   TouchEvent,
   type ReactNode,
 } from 'react';
@@ -100,6 +101,8 @@ import {
 import { getFullVideoBridgeUrl } from './full-video-bridge';
 import {
   getDockedVideo,
+  getDockedVideoServerSnapshot,
+  subscribeVideoMiniPlayer,
   setDetailVideoPageActive,
   setDockedVideo,
   DETAIL_VIDEO_MINIMIZE_EVENT,
@@ -256,6 +259,7 @@ export default function MediaLarge({
   const router = useRouter();
   const isVideo = isVideoMedia(photo);
   const ref = useRef<HTMLDivElement>(null);
+  const persistentVideoHostRef = useRef<HTMLDivElement>(null);
   const refZoomControls = useRef<ZoomControlsRef>(null);
   const refMediaRecipe = useRef<HTMLDivElement>(null);
   const refMediaFilm = useRef<HTMLDivElement>(null);
@@ -270,6 +274,12 @@ export default function MediaLarge({
   const { videoPreviewMode = 'smart' } = useAppState();
   const [isPageResuming, setIsPageResuming] = useState(false);
   const [isFullVideoPlaying, setIsFullVideoPlaying] = useState(false);
+  const dockedVideo = useSyncExternalStore(
+    subscribeVideoMiniPlayer,
+    getDockedVideo,
+    getDockedVideoServerSnapshot,
+  );
+  const isPersistentVideoActive = dockedVideo?.mediaId === photo.id;
   const [isPreparingFullVideo, setIsPreparingFullVideo] = useState(false);
   const [fullVideoDeliveryUrl, setFullVideoDeliveryUrl] = useState<string>();
   const [preparedFullVideoDownloads, setPreparedFullVideoDownloads] = useState<Record<string, {
@@ -584,6 +594,17 @@ export default function MediaLarge({
       currentTime: 0,
       wasPlaying: true,
       muted: false,
+      initialHostRect: (() => {
+        const rect = persistentVideoHostRef.current?.getBoundingClientRect();
+        return rect && rect.width > 0 && rect.height > 0
+          ? {
+            left: rect.left,
+            top: rect.top,
+            width: rect.width,
+            height: rect.height,
+          }
+          : undefined;
+      })(),
     };
     setDockedVideo(next);
     return next;
@@ -1330,11 +1351,15 @@ export default function MediaLarge({
           !isVideo && 'h-full',
           areMediaMatted && 'flex items-center justify-center',
         )}
+        ref={persistentVideoHostRef}
         data-persistent-video-host={isVideo ? photo.id : undefined}
         style={isVideo ? { aspectRatio: mediaAspectRatio } : undefined}>
           {isVideo
             ? <>
-                {!isFullVideoPlaying && (
+                {isPersistentVideoActive && (
+                  <div className="absolute inset-0 rounded-md bg-black" />
+                )}
+                {!isFullVideoPlaying && !isPersistentVideoActive && (
                   posterSrc && shouldLoadVideoPoster && !hasPosterFailed
                     ? <div
                       key={`poster-${photo.id}`}
@@ -1363,7 +1388,8 @@ export default function MediaLarge({
                       className="absolute inset-0 z-0 max-h-full w-full rounded-md bg-black"
                     />
                 )}
-                {(isFullVideoPlaying || shouldRenderPreview) &&
+                {!isPersistentVideoActive &&
+                  (isFullVideoPlaying || shouldRenderPreview) &&
                   <video
                     ref={videoRef}
                     className={clsx(
@@ -1552,7 +1578,8 @@ export default function MediaLarge({
                 style={{ aspectRatio: mediaAspectRatio }}
               />}
           {/* Removed top-left video label */}
-          {isVideo && isPiPLocked && !isFullVideoPlaying && currentVideoUrl && (
+          {isVideo && isPiPLocked && !isFullVideoPlaying &&
+            !isPersistentVideoActive && currentVideoUrl && (
             <video
               className={clsx(
                 'absolute inset-0 w-full h-full',
@@ -1569,7 +1596,7 @@ export default function MediaLarge({
               preload="metadata"
             />
           )}
-          {isVideo && !isFullVideoPlaying && (
+          {isVideo && !isFullVideoPlaying && !isPersistentVideoActive && (
             <button
               type="button"
               data-media-play-overlay="true"

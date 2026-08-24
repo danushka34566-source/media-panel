@@ -10,6 +10,12 @@ export type DockedVideoState = {
   currentTime: number
   wasPlaying: boolean
   muted: boolean
+  initialHostRect?: {
+    left: number
+    top: number
+    width: number
+    height: number
+  }
 };
 
 export const DETAIL_VIDEO_MINIMIZE_EVENT = 'media-detail-video-minimize';

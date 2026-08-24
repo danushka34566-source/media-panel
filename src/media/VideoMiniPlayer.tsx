@@ -44,11 +44,10 @@ export default function VideoMiniPlayer() {
   const [playbackError, setPlaybackError] = useState(false);
   const [playbackNeedsGesture, setPlaybackNeedsGesture] = useState(false);
   const [fullscreenMediaId, setFullscreenMediaId] = useState<string>();
-  const [hostRect, setHostRect] = useState<{
-    left: number
-    top: number
-    width: number
-    height: number
+  type HostRect = NonNullable<typeof dockedVideo>['initialHostRect'];
+  const [hostPlacement, setHostPlacement] = useState<{
+    mediaId: string
+    rect: HostRect
   }>();
   const source = dockedVideo && useFallbackSource && dockedVideo.fallbackUrl
     ? dockedVideo.fallbackUrl
@@ -161,7 +160,6 @@ export default function VideoMiniPlayer() {
   useLayoutEffect(() => {
     const mediaId = dockedVideo?.mediaId;
     if (!mediaId) {
-      setHostRect(undefined);
       return;
     }
     let frame: number | undefined;
@@ -188,7 +186,10 @@ export default function VideoMiniPlayer() {
         ? best.visibleArea / (best.rect.width * best.rect.height)
         : 0;
       if (!best || visibleRatio < 0.2) {
-        setHostRect(undefined);
+        setHostPlacement(current =>
+          current?.mediaId === mediaId && current.rect === undefined
+          ? current
+          : { mediaId, rect: undefined });
         return;
       }
       const next = {
@@ -197,13 +198,13 @@ export default function VideoMiniPlayer() {
         width: best.rect.width,
         height: best.rect.height,
       };
-      setHostRect(current => current &&
-        Math.abs(current.left - next.left) < 0.5 &&
-        Math.abs(current.top - next.top) < 0.5 &&
-        Math.abs(current.width - next.width) < 0.5 &&
-        Math.abs(current.height - next.height) < 0.5
+      setHostPlacement(current => current?.mediaId === mediaId && current.rect &&
+        Math.abs(current.rect.left - next.left) < 0.5 &&
+        Math.abs(current.rect.top - next.top) < 0.5 &&
+        Math.abs(current.rect.width - next.width) < 0.5 &&
+        Math.abs(current.rect.height - next.height) < 0.5
         ? current
-        : next);
+        : { mediaId, rect: next });
     };
     const scheduleUpdate = () => {
       if (frame === undefined) { frame = requestAnimationFrame(update); }
@@ -227,6 +228,9 @@ export default function VideoMiniPlayer() {
     };
   }, [dockedVideo?.mediaId, pathname]);
 
+  const hostRect = dockedVideo && hostPlacement?.mediaId === dockedVideo.mediaId
+    ? hostPlacement.rect
+    : dockedVideo?.initialHostRect;
   const isEmbedded = Boolean(hostRect) && !isFullscreen;
 
   return (
@@ -244,12 +248,12 @@ export default function VideoMiniPlayer() {
             isFullscreen
               ? 'inset-0 rounded-none border-0 bg-black'
               : isEmbedded
-              ? 'rounded-md'
+              ? 'rounded-md bg-black'
               : clsx(
-                'bottom-2 right-2 rounded-xl sm:bottom-4 sm:right-4',
-                'w-[min(19rem,calc(100vw-1rem))]',
-              ),
-            'border border-medium bg-main shadow-2xl ring-1 ring-black/15',
+                  'bottom-2 right-2 rounded-xl sm:bottom-4 sm:right-4',
+                  'w-[min(19rem,calc(100vw-1rem))]',
+                  'border border-medium bg-main shadow-2xl ring-1 ring-black/15',
+                ),
             'will-change-transform',
           )}
           style={isEmbedded && hostRect ? {
@@ -259,7 +263,7 @@ export default function VideoMiniPlayer() {
             height: hostRect.height,
           } : undefined}
           layout
-          initial={{ opacity: 0, scale: 0.9, y: 28 }}
+          initial={isEmbedded ? false : { opacity: 0, scale: 0.9, y: 28 }}
           animate={{ opacity: 1, scale: 1, y: 0 }}
           exit={{ opacity: 0, scale: 0.92, y: 20 }}
           transition={{ type: 'spring', stiffness: 360, damping: 32 }}

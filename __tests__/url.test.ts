@@ -27,7 +27,7 @@ describe('URL', () => {
     } as Response);
     let clickedHref = '';
     const clickMock = jest.spyOn(HTMLAnchorElement.prototype, 'click')
-      .mockImplementation(function click() {
+      .mockImplementation(function click(this: HTMLAnchorElement) {
         clickedHref = this.href;
       });
 
