@@ -73,10 +73,7 @@ export default function MediaLink({
               router.prefetch(href);
             }
           },
-          // Media details are rendered in an intercepted overlay during
-          // client navigation. Never let Next scroll the preserved feed
-          // underneath that overlay to the top.
-          scroll: scroll ?? false,
+          scroll,
           prefetch,
           replace,
         };

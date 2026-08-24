@@ -19,13 +19,6 @@ import {
 } from 'framer-motion';
 import { VideoPlaybackManager } from '@/utility/VideoPlaybackManager';
 import {
-  LuMaximize,
-  LuPause,
-  LuPlay,
-  LuVolume2,
-  LuVolumeX,
-} from 'react-icons/lu';
-import {
   getDockedVideo,
   getDockedVideoServerSnapshot,
   getActiveDetailVideoMediaId,
@@ -35,17 +28,6 @@ import {
   requestDetailVideoRestore,
   PERSISTENT_VIDEO_HANDOFF_READY_EVENT,
 } from './video-mini-player';
-
-const formatPlayerTime = (value: number) => {
-  if (!Number.isFinite(value) || value < 0) { return '0:00'; }
-  const totalSeconds = Math.floor(value);
-  const hours = Math.floor(totalSeconds / 3600);
-  const minutes = Math.floor((totalSeconds % 3600) / 60);
-  const seconds = `${totalSeconds % 60}`.padStart(2, '0');
-  return hours > 0
-    ? `${hours}:${`${minutes}`.padStart(2, '0')}:${seconds}`
-    : `${minutes}:${seconds}`;
-};
 
 export default function VideoMiniPlayer() {
   const router = useRouter();
@@ -62,7 +44,6 @@ export default function VideoMiniPlayer() {
   const gestureSessionRef = useRef(0);
   const suppressClickUntilRef = useRef(0);
   const pendingActionTimerRef = useRef<number | undefined>(undefined);
-  const controlsTimerRef = useRef<number | undefined>(undefined);
   const handoffReadyMediaRef = useRef<string | undefined>(undefined);
   const resumeTimeRef = useRef<number | undefined>(undefined);
   const dockedVideo = useSyncExternalStore(
@@ -73,11 +54,6 @@ export default function VideoMiniPlayer() {
   const [useFallbackSource, setUseFallbackSource] = useState(false);
   const [playbackError, setPlaybackError] = useState(false);
   const [headerHeight, setHeaderHeight] = useState(0);
-  const [controlsVisible, setControlsVisible] = useState(true);
-  const [isPaused, setIsPaused] = useState(true);
-  const [isMuted, setIsMuted] = useState(false);
-  const [currentTime, setCurrentTime] = useState(0);
-  const [duration, setDuration] = useState(0);
   const source = dockedVideo && useFallbackSource && dockedVideo.fallbackUrl
     ? dockedVideo.fallbackUrl
     : dockedVideo?.sourceUrl;
@@ -88,85 +64,9 @@ export default function VideoMiniPlayer() {
       `[data-media-detail-fold-panel="${dockedVideo.mediaId}"]`,
     )?.dataset.foldCommitting === 'true',
   );
-  const detailViewport = dockedVideo &&
-    getActiveDetailVideoMediaId() === dockedVideo.mediaId
-    ? Array.from(document.querySelectorAll<HTMLElement>(
-      '[data-detail-video-viewport]',
-    )).find(element =>
-      element.dataset.detailVideoViewport === dockedVideo.mediaId)
-    : undefined;
-  const detailViewportRect = detailViewport?.getBoundingClientRect();
-  const isDetailPlayerVisible = Boolean(
-    detailViewportRect &&
-    detailViewportRect.bottom > headerHeight &&
-    detailViewportRect.top < window.innerHeight &&
-    detailViewportRect.width > 40 &&
-    detailViewportRect.height > 40,
-  );
   const requestPlayback = useCallback((video: HTMLVideoElement) => {
     void VideoPlaybackManager.requestPlay(video).catch(() => undefined);
   }, []);
-  const scheduleControlsHide = useCallback(() => {
-    if (controlsTimerRef.current !== undefined) {
-      window.clearTimeout(controlsTimerRef.current);
-    }
-    controlsTimerRef.current = window.setTimeout(() => {
-      controlsTimerRef.current = undefined;
-      setControlsVisible(false);
-    }, 3200);
-  }, []);
-  const showControls = useCallback(() => {
-    setControlsVisible(true);
-    scheduleControlsHide();
-  }, [scheduleControlsHide]);
-  const toggleControls = useCallback(() => {
-    if (
-      miniActionRef.current !== 'idle' ||
-      Date.now() < suppressClickUntilRef.current
-    ) { return; }
-    setControlsVisible(current => {
-      if (current) {
-        if (controlsTimerRef.current !== undefined) {
-          window.clearTimeout(controlsTimerRef.current);
-          controlsTimerRef.current = undefined;
-        }
-        return false;
-      }
-      scheduleControlsHide();
-      return true;
-    });
-  }, [scheduleControlsHide]);
-  const togglePlayback = useCallback(() => {
-    const video = videoRef.current;
-    if (!video) { return; }
-    if (video.paused || video.ended) {
-      requestPlayback(video);
-    } else {
-      video.pause();
-    }
-    showControls();
-  }, [requestPlayback, showControls]);
-  const toggleMuted = useCallback(() => {
-    const video = videoRef.current;
-    if (!video) { return; }
-    video.muted = !video.muted;
-    updateDockedVideo({ muted: video.muted }, true);
-    setIsMuted(video.muted);
-    showControls();
-  }, [showControls]);
-  const enterFullscreen = useCallback(() => {
-    const video = videoRef.current;
-    if (!video) { return; }
-    const webkitVideo = video as HTMLVideoElement & {
-      webkitEnterFullscreen?: () => void
-    };
-    if (video.requestFullscreen) {
-      void video.requestFullscreen().catch(() => undefined);
-    } else {
-      try { webkitVideo.webkitEnterFullscreen?.(); } catch {}
-    }
-    showControls();
-  }, [showControls]);
   const signalHandoffReady = useCallback((video: HTMLVideoElement) => {
     const latest = getDockedVideo();
     const mediaId = video.dataset.mediaId;
@@ -243,18 +143,12 @@ export default function VideoMiniPlayer() {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setUseFallbackSource(false);
     setPlaybackError(false);
-    setControlsVisible(true);
-    setIsPaused(!dockedVideo?.wasPlaying);
-    setIsMuted(Boolean(dockedVideo?.muted));
-    setCurrentTime(dockedVideo?.currentTime ?? 0);
-    setDuration(0);
-    scheduleControlsHide();
     handoffReadyMediaRef.current = undefined;
     resumeTimeRef.current = dockedVideo?.currentTime;
     // Playback time is updated continuously without changing the media
     // element; only a new media id should reset the source selection.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [dockedVideo?.mediaId, scheduleControlsHide]);
+  }, [dockedVideo?.mediaId]);
 
   useEffect(() => {
     const video = videoRef.current;
@@ -509,9 +403,6 @@ export default function VideoMiniPlayer() {
     if (pendingActionTimerRef.current !== undefined) {
       window.clearTimeout(pendingActionTimerRef.current);
     }
-    if (controlsTimerRef.current !== undefined) {
-      window.clearTimeout(controlsTimerRef.current);
-    }
   }, []);
 
   return (
@@ -549,13 +440,11 @@ export default function VideoMiniPlayer() {
             // During a detail-title fold the page-owned video is the visible
             // object. Keep this element mounted and playing for handoff, but
             // do not expose a second floating player over the shrinking page.
-            visibility: isPendingDetailFold || isDetailPlayerVisible
-              ? 'hidden'
-              : 'visible',
+            visibility: isPendingDetailFold ? 'hidden' : 'visible',
           }}
           onDragStart={onMiniDragStart}
           onDrag={onMiniDrag}
-          onDragEnd={onMiniDragEnd}
+            onDragEnd={onMiniDragEnd}
           >
           <div className="relative aspect-video overflow-hidden bg-black">
             <video
@@ -565,6 +454,8 @@ export default function VideoMiniPlayer() {
               className="size-full object-contain"
               src={source}
               poster={dockedVideo.posterUrl}
+              controls
+              controlsList="nodownload noplaybackrate"
               playsInline
               autoPlay={dockedVideo.wasPlaying}
               muted={dockedVideo.pendingHandoff ? true : dockedVideo.muted}
@@ -581,12 +472,6 @@ export default function VideoMiniPlayer() {
                   catch { /* media is still changing source */ }
                 }
                 setPlaybackError(false);
-                setDuration(Number.isFinite(event.currentTarget.duration)
-                  ? event.currentTarget.duration
-                  : 0);
-                setCurrentTime(event.currentTarget.currentTime || 0);
-                setIsMuted(event.currentTarget.muted);
-                setIsPaused(event.currentTarget.paused);
                 if (dockedVideo.wasPlaying) {
                   requestPlayback(event.currentTarget);
                 }
@@ -594,11 +479,9 @@ export default function VideoMiniPlayer() {
               onTimeUpdate={event => {
                 const currentTime = event.currentTarget.currentTime;
                 resumeTimeRef.current = currentTime;
-                setCurrentTime(currentTime);
                 updateDockedVideo({ currentTime });
               }}
               onPlay={() => {
-                setIsPaused(false);
                 updateDockedVideo({ wasPlaying: true }, true);
                 const video = videoRef.current;
                 if (video) { signalHandoffReady(video); }
@@ -609,8 +492,6 @@ export default function VideoMiniPlayer() {
               onPause={event => {
                 const currentTime = event.currentTarget.currentTime;
                 resumeTimeRef.current = currentTime;
-                setCurrentTime(currentTime);
-                setIsPaused(true);
                 // Mobile browsers pause media while locking/backgrounding the
                 // page. Preserve the user's playing intent in that lifecycle
                 // pause so visibility recovery can resume without a refresh.
@@ -620,19 +501,9 @@ export default function VideoMiniPlayer() {
                 }, !document.hidden);
               }}
               onVolumeChange={event => {
-                setIsMuted(event.currentTarget.muted);
-                updateDockedVideo({ muted: event.currentTarget.muted }, true);
+                updateDockedVideo({ muted: event.currentTarget.muted });
               }}
-              onDurationChange={event => {
-                setDuration(Number.isFinite(event.currentTarget.duration)
-                  ? event.currentTarget.duration
-                  : 0);
-              }}
-              onEnded={() => {
-                setIsPaused(true);
-                updateDockedVideo({ wasPlaying: false }, true);
-                showControls();
-              }}
+              onEnded={() => updateDockedVideo({ wasPlaying: false }, true)}
               onError={() => {
                 const video = videoRef.current;
                 const currentTime = video?.currentTime;
@@ -659,20 +530,14 @@ export default function VideoMiniPlayer() {
               aria-label="Mini-player gesture surface"
               role="button"
               tabIndex={0}
-              className="absolute inset-0 z-[5] cursor-grab touch-none
-                active:cursor-grabbing"
+              className="absolute inset-x-0 top-0 z-[5] h-7 cursor-grab
+                touch-none active:cursor-grabbing"
               onPointerDown={event => {
                 if (miniActionRef.current !== 'idle') {
                   event.preventDefault();
                   return;
                 }
                 dragControls.start(event);
-              }}
-              onClick={toggleControls}
-              onDoubleClick={event => {
-                event.preventDefault();
-                if (Date.now() < suppressClickUntilRef.current) { return; }
-                openDetails();
               }}
               onPointerCancel={() => {
                 if (miniActionRef.current !== 'dragging') { return; }
@@ -686,78 +551,10 @@ export default function VideoMiniPlayer() {
                 if (event.key === 'Enter' || event.key === ' ' ||
                   event.key === 'ArrowUp') {
                   event.preventDefault();
-                  if (event.key === 'ArrowUp') {
-                    openDetails();
-                  } else {
-                    toggleControls();
-                  }
+                  openDetails();
                 }
               }}
             />
-            <div
-              className={`absolute inset-x-0 bottom-0 z-10 px-2 pb-1.5 pt-6
-                transition-opacity duration-150 bg-gradient-to-t
-                from-black/85 via-black/45 to-transparent
-                ${controlsVisible ? 'opacity-100' : 'pointer-events-none opacity-0'}`}
-              onPointerDown={event => {
-                event.stopPropagation();
-                showControls();
-              }}
-              onClick={event => event.stopPropagation()}
-            >
-              <input
-                aria-label="Seek video"
-                className="mb-1 block h-1 w-full cursor-pointer accent-white"
-                type="range"
-                min={0}
-                max={duration || 0}
-                step="0.1"
-                value={Math.min(currentTime, duration || 0)}
-                onChange={event => {
-                  const nextTime = Number(event.currentTarget.value);
-                  const video = videoRef.current;
-                  if (!video || !Number.isFinite(nextTime)) { return; }
-                  video.currentTime = nextTime;
-                  resumeTimeRef.current = nextTime;
-                  setCurrentTime(nextTime);
-                  updateDockedVideo({ currentTime: nextTime });
-                  showControls();
-                }}
-              />
-              <div className="flex items-center gap-0.5 text-white">
-                <button
-                  type="button"
-                  aria-label={isPaused ? 'Play' : 'Pause'}
-                  className="flex size-7 items-center justify-center rounded-full
-                    bg-white/10 transition-colors hover:bg-white/20"
-                  onClick={togglePlayback}
-                >
-                  {isPaused ? <LuPlay size={15} /> : <LuPause size={15} />}
-                </button>
-                <button
-                  type="button"
-                  aria-label={isMuted ? 'Unmute' : 'Mute'}
-                  className="flex size-7 items-center justify-center rounded-full
-                    transition-colors hover:bg-white/15"
-                  onClick={toggleMuted}
-                >
-                  {isMuted ? <LuVolumeX size={15} /> : <LuVolume2 size={15} />}
-                </button>
-                <span className="min-w-0 flex-1 px-1 text-[10px] tabular-nums
-                  text-white/80">
-                  {formatPlayerTime(currentTime)} / {formatPlayerTime(duration)}
-                </span>
-                <button
-                  type="button"
-                  aria-label="Fullscreen"
-                  className="flex size-7 items-center justify-center rounded-full
-                    transition-colors hover:bg-white/15"
-                  onClick={enterFullscreen}
-                >
-                  <LuMaximize size={15} />
-                </button>
-              </div>
-            </div>
             {playbackError && (
               <div className="absolute inset-0 z-10 flex items-center
                 justify-center bg-black/75 px-3 text-center text-xs text-white">
