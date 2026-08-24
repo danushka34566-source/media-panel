@@ -488,11 +488,18 @@ export default function MediaLarge({
       const mediaId = (event as CustomEvent<{ mediaId?: string }>).detail
         ?.mediaId;
       if (mediaId !== photo.id) { return; }
+      const isFolding = isDetailFoldingRef.current;
       videoRef.current?.pause();
       detailPlaybackRef.current.isFullVideoPlaying = false;
       detailPlaybackRef.current.isMainVideoActuallyPlaying = false;
       setIsMainVideoActuallyPlaying(false);
       setIsFullVideoPlaying(false);
+      if (isFolding) {
+        // Let the mini player become the playback owner before leaving the
+        // details route. This keeps the page video alive until onPlaying has
+        // confirmed the folded player is ready.
+        window.setTimeout(() => router.back(), 80);
+      }
     };
     window.addEventListener(
       PERSISTENT_VIDEO_HANDOFF_READY_EVENT,
@@ -502,7 +509,7 @@ export default function MediaLarge({
       PERSISTENT_VIDEO_HANDOFF_READY_EVENT,
       completeHandoff,
     );
-  }, [isVideo, photo.id]);
+  }, [isVideo, photo.id, router]);
 
   useEffect(() => {
     if (!isVideo) { return; }
@@ -661,12 +668,15 @@ export default function MediaLarge({
 
   useEffect(() => {
     if (!broadcastDetailVideoPlayback || !isVideo) { return; }
-    let navigationTimer: number | undefined;
     const minimize = (event: Event) => {
       const mediaId = (event as CustomEvent<{ mediaId?: string }>).detail?.mediaId;
       if (mediaId !== photo.id) { return; }
       const playback = detailPlaybackRef.current;
-      if (playback.isFullVideoPlaying && playback.sourceUrl) {
+      if (
+        playback.isFullVideoPlaying &&
+        playback.isMainVideoActuallyPlaying &&
+        playback.sourceUrl
+      ) {
         setDockedVideo({
           mediaId: photo.id,
           title: titleForMedia(photo),
@@ -675,23 +685,21 @@ export default function MediaLarge({
           fallbackUrl: fullVideoCompatibilityUrl,
           posterUrl: getMediaPosterUrl(photo),
           currentTime: Math.max(0, playback.currentTime),
-          wasPlaying: playback.isMainVideoActuallyPlaying,
+          wasPlaying: true,
           muted: playback.muted,
+          pendingHandoff: true,
         });
-        videoRef.current?.pause();
-        detailPlaybackRef.current.isFullVideoPlaying = false;
-        detailPlaybackRef.current.isMainVideoActuallyPlaying = false;
         isDetailFoldingRef.current = true;
-        setIsFullVideoPlaying(false);
+        // Do not pause or unmount the page video yet. VideoMiniPlayer will
+        // signal PERSISTENT_VIDEO_HANDOFF_READY_EVENT after its own element
+        // reaches onPlaying, then the listener above releases this owner.
+        return;
       }
-      navigationTimer = window.setTimeout(() => router.back(), 210);
+      router.back();
     };
     window.addEventListener(DETAIL_VIDEO_MINIMIZE_EVENT, minimize);
     return () => {
       window.removeEventListener(DETAIL_VIDEO_MINIMIZE_EVENT, minimize);
-      if (navigationTimer !== undefined) {
-        window.clearTimeout(navigationTimer);
-      }
     };
   }, [
     broadcastDetailVideoPlayback,

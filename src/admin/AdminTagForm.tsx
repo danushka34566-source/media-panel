@@ -2,7 +2,6 @@
 
 import { ReactNode } from 'react';
 import AdminMediaLibraryValueForm from './AdminMediaLibraryValueForm';
-import { parameterize } from '@/utility/string';
 import { PATH_ADMIN_TAGS } from '@/app/path';
 
 export default function AdminTagForm({
@@ -18,7 +17,6 @@ export default function AdminTagForm({
       sourceType="tag"
       label="Tag"
       backPath={PATH_ADMIN_TAGS}
-      normalizeValue={parameterize}
     >
       {children}
     </AdminMediaLibraryValueForm>

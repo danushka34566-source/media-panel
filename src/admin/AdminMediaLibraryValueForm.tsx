@@ -5,6 +5,7 @@ import Link from 'next/link';
 import FieldsetWithStatus from '@/components/FieldsetWithStatus';
 import { ReactNode, useMemo, useState } from 'react';
 import { useAppState } from '@/app/AppState';
+import { parameterize } from '@/utility/string';
 import {
   updateMediaLibraryValueAction,
 } from '@/media/actions';
@@ -23,21 +24,21 @@ export default function AdminMediaLibraryValueForm({
   sourceType,
   label,
   backPath,
-  normalizeValue = value => value.trim(),
   children,
 }: {
   value: string
   sourceType: MediaLibraryValueType
   label: string
   backPath: string
-  normalizeValue?: (value: string) => string
   children?: ReactNode
 }) {
   const { invalidateSwr } = useAppState();
   const [updatedValue, setUpdatedValue] = useState(value);
   const [targetType, setTargetType] = useState<MediaLibraryValueType>(sourceType);
-  const normalizedValue = useMemo(() => normalizeValue(updatedValue), [
-    normalizeValue,
+  const normalizedValue = useMemo(() => targetType === 'tag'
+    ? parameterize(updatedValue)
+    : updatedValue.trim(), [
+    targetType,
     updatedValue,
   ]);
   const targetLabel = TYPE_OPTIONS.find(item => item.value === targetType)?.label;

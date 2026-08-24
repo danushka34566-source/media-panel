@@ -650,9 +650,13 @@ export const updateMediaLibraryValueGlobally = ({
       : targetColumn === 'studio'
         ? 'studio=$2'
         : 'studio=studio';
+  // Match array-backed values through ANY rather than casting the search
+  // value to text[]. The media schema stores these columns as VARCHAR[] on
+  // existing installations, and VARCHAR[] @> text[] is not a valid
+  // PostgreSQL operator combination (which surfaced as a 500 on every save).
   const sourceWhere = sourceColumn === 'studio'
     ? 'studio=$1'
-    : `${sourceColumn} @> ARRAY[$1]::text[]`;
+    : `$1=ANY(${sourceColumn})`;
   return safelyQuery(() => query(
     `UPDATE media SET ${[...setStatements, studioStatement].join(', ')} ` +
       `WHERE ${sourceWhere}`,
