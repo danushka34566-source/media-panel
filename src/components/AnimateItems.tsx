@@ -154,8 +154,16 @@ function AnimateItems({
         const itemKey = String(itemKeys ? itemKeys[index] : index);
         return <motion.div
           key={itemKey}
-            initial={initialShouldAnimate &&
-              initialItemKeys.current.has(itemKey) ? 'hidden' : false}
+          // Keyed collections can receive late items after the parent has
+          // settled, so they need an explicit initial state. Header/nav
+          // consumers intentionally omit itemKeys and retain the original
+          // parent-inherited variant; forcing an explicit child initial state
+          // there can leave the header hidden during hydration.
+          initial={itemKeys
+            ? initialShouldAnimate && initialItemKeys.current.has(itemKey)
+              ? 'hidden'
+              : false
+            : undefined}
           className={classNameItem}
           variants={{
             hidden,
