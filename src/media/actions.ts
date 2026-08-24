@@ -25,8 +25,6 @@ import {
   getUniquePerformers,
   getUniqueStudios,
   getUniqueVideoContentTypes,
-  getUniqueRecipes,
-  getUniqueFilms,
 } from '@/media/query';
 import { MediaQueryOptions, areOptionsSensitive } from '@/db';
 import {
@@ -1422,9 +1420,6 @@ export const getMediaQuickEditDataAction = async (photoId: string) =>
       uniqueStudios,
       uniquePerformers,
       uniqueContentTypes,
-      uniqueRecipes,
-      uniqueFilms,
-      photoStorageUrls,
     ] = await Promise.all([
       getAlbumTitlesForMedia(photoId),
       getAlbumsWithMeta(),
@@ -1433,9 +1428,6 @@ export const getMediaQuickEditDataAction = async (photoId: string) =>
       getUniqueStudios(),
       getUniquePerformers(),
       getUniqueVideoContentTypes(),
-      getUniqueRecipes(),
-      getUniqueFilms(),
-      getStorageUrlsForMedia(photo),
     ]);
     return {
       photoAlbumTitles,
@@ -1445,9 +1437,6 @@ export const getMediaQuickEditDataAction = async (photoId: string) =>
       uniqueStudios,
       uniquePerformers,
       uniqueContentTypes,
-      uniqueRecipes,
-      uniqueFilms,
-      photoStorageUrls,
     };
   });
 

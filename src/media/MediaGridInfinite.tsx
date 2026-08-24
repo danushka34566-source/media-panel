@@ -1,13 +1,23 @@
 'use client';
 
-import { INFINITE_SCROLL_GRID_MULTIPLE } from '.';
+import { INFINITE_SCROLL_GRID_MULTIPLE, Media } from '.';
 import InfiniteMediaScroll from './InfiniteMediaScroll';
 import MediaGrid from './MediaGrid';
 import { ComponentProps } from 'react';
 import { SortBy } from './sort';
 
+const combineUniqueMedia = (initial: Media[], loaded: Media[]) => {
+  const seenIds = new Set<string>();
+  return [...initial, ...loaded].filter(photo => {
+    if (seenIds.has(photo.id)) { return false; }
+    seenIds.add(photo.id);
+    return true;
+  });
+};
+
 export default function MediaGridInfinite({
   cacheKey,
+  initialPhotos,
   initialOffset,
   sortBy,
   sortWithPriority,
@@ -18,6 +28,7 @@ export default function MediaGridInfinite({
   ...categories
 }: {
   cacheKey: string
+  initialPhotos?: Media[]
   initialOffset: number
   sortBy?: SortBy
   sortWithPriority?: boolean
@@ -29,6 +40,7 @@ export default function MediaGridInfinite({
       cacheKey={cacheKey}
       initialOffset={initialOffset}
       itemsPerPage={INFINITE_SCROLL_GRID_MULTIPLE}
+      coalescePages
       sortBy={sortBy}
       sortWithPriority={sortWithPriority}
       excludeFromFeeds={excludeFromFeeds}
@@ -37,7 +49,7 @@ export default function MediaGridInfinite({
     >
       {({ key, photos, onLastMediaVisible }) =>
         <MediaGrid key={key} {...{
-          photos,
+          photos: combineUniqueMedia(initialPhotos ?? [], photos),
           ...categories,
           canStart,
           onLastMediaVisible,

@@ -55,15 +55,11 @@ export default function MediaGridContainer({
             animateOnFirstLoadOnly
           />}
         <div className={GRID_SPACE_CLASSNAME}>
-          <MediaGrid {...{
-            photos,
-            ...categories,
-            animateOnFirstLoadOnly,
-            onAnimationComplete,
-          }} />
-          {count > photos.length &&
+          {count > photos.length
+            ?
             <MediaGridInfinite {...{
               cacheKey,
+              initialPhotos: photos,
               initialOffset: photos.length,
               sortBy,
               sortWithPriority,
@@ -72,6 +68,13 @@ export default function MediaGridContainer({
               ...categories,
               canStart: shouldAnimateDynamicItems,
               animateOnFirstLoadOnly,
+              onAnimationComplete,
+            }} />
+            : <MediaGrid {...{
+              photos,
+              ...categories,
+              animateOnFirstLoadOnly,
+              onAnimationComplete,
             }} />}
         </div>
       </div>}

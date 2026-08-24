@@ -37,6 +37,7 @@ export default function InfiniteMediaScroll({
   film,
   focal,
   wrapMoreButtonInGrid,
+  coalescePages = false,
   loadAheadViewports = 1,
   useCachedMedia = true,
   includeHiddenMedia,
@@ -51,6 +52,7 @@ export default function InfiniteMediaScroll({
   query?: string
   cacheKey: string
   wrapMoreButtonInGrid?: boolean
+  coalescePages?: boolean
   loadAheadViewports?: number
   useCachedMedia?: boolean
   includeHiddenMedia?: boolean
@@ -153,6 +155,11 @@ export default function InfiniteMediaScroll({
     }));
   }, [pages]);
 
+  const displayPages = useMemo(() => coalescePages
+    ? [renderedPages.flat()]
+    : renderedPages,
+  [coalescePages, renderedPages]);
+
   const isFinished = useMemo(() =>
     Boolean(pages.length > 0 && pages[pages.length - 1]!.length < itemsPerPage),
   [pages, itemsPerPage]);
@@ -231,11 +238,11 @@ export default function InfiniteMediaScroll({
 
   return (
     <>
-      {renderedPages.map((photos, index) => (
+      {displayPages.map((photos, index) => (
         children({
-          key: `${cacheKey}-${index}`,
+          key: coalescePages ? `${cacheKey}-continuous` : `${cacheKey}-${index}`,
           photos, 
-          onLastMediaVisible: index === renderedPages.length - 1
+          onLastMediaVisible: index === displayPages.length - 1
             ? advance
             : undefined,
           revalidateMedia,

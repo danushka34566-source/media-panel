@@ -15,6 +15,8 @@ export type DockedVideoState = {
 
 export const DETAIL_VIDEO_MINIMIZE_EVENT = 'media-detail-video-minimize';
 export const DETAIL_VIDEO_RESTORE_EVENT = 'media-detail-video-restore';
+export const DETAIL_VIDEO_FOLD_GESTURE_EVENT =
+  'media-detail-video-fold-gesture';
 export const PERSISTENT_VIDEO_FULLSCREEN_EVENT =
   'persistent-video-fullscreen';
 export const PERSISTENT_VIDEO_PIP_EVENT = 'persistent-video-picture-in-picture';
@@ -30,6 +32,21 @@ export const requestDetailVideoMinimize = (mediaId: string) => {
 export const requestDetailVideoRestore = (mediaId: string) => {
   window.dispatchEvent(new CustomEvent(DETAIL_VIDEO_RESTORE_EVENT, {
     detail: { mediaId },
+  }));
+};
+
+export type DetailVideoFoldGesture = {
+  mediaId: string
+  phase: 'move' | 'cancel' | 'commit'
+  deltaX: number
+  deltaY: number
+};
+
+export const updateDetailVideoFoldGesture = (
+  detail: DetailVideoFoldGesture,
+) => {
+  window.dispatchEvent(new CustomEvent(DETAIL_VIDEO_FOLD_GESTURE_EVENT, {
+    detail,
   }));
 };
 

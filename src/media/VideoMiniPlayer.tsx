@@ -9,12 +9,13 @@ import {
   useSyncExternalStore,
 } from 'react';
 import { useRouter } from 'next/navigation';
-import { LuMaximize2, LuPlay, LuX } from 'react-icons/lu';
 import {
   AnimatePresence,
+  animate,
   motion,
   type PanInfo,
   useDragControls,
+  useMotionValue,
 } from 'framer-motion';
 import { VideoPlaybackManager } from '@/utility/VideoPlaybackManager';
 import {
@@ -31,9 +32,15 @@ import {
 export default function VideoMiniPlayer() {
   const router = useRouter();
   const boundsRef = useRef<HTMLDivElement>(null);
+  const playerRef = useRef<HTMLElement>(null);
   const dragControls = useDragControls();
+  const miniX = useMotionValue(0);
+  const miniY = useMotionValue(0);
+  const miniScale = useMotionValue(1);
+  const cornerRef = useRef<'tl' | 'tr' | 'bl' | 'br'>('br');
   const videoRef = useRef<HTMLVideoElement>(null);
   const miniGestureMovedRef = useRef(false);
+  const controlsTimerRef = useRef<number | undefined>(undefined);
   const resumeTimeRef = useRef<number | undefined>(undefined);
   const dockedVideo = useSyncExternalStore(
     subscribeVideoMiniPlayer,
@@ -42,15 +49,13 @@ export default function VideoMiniPlayer() {
   );
   const [useFallbackSource, setUseFallbackSource] = useState(false);
   const [playbackError, setPlaybackError] = useState(false);
-  const [playbackNeedsGesture, setPlaybackNeedsGesture] = useState(false);
   const [headerHeight, setHeaderHeight] = useState(0);
+  const [controlsVisible, setControlsVisible] = useState(false);
   const source = dockedVideo && useFallbackSource && dockedVideo.fallbackUrl
     ? dockedVideo.fallbackUrl
     : dockedVideo?.sourceUrl;
   const requestPlayback = useCallback((video: HTMLVideoElement) => {
-    void VideoPlaybackManager.requestPlay(video)
-      .then(() => setPlaybackNeedsGesture(video.paused && !video.ended))
-      .catch(() => setPlaybackNeedsGesture(true));
+    void VideoPlaybackManager.requestPlay(video).catch(() => undefined);
   }, []);
   const openDetails = useCallback(() => {
     if (!dockedVideo) { return; }
@@ -74,7 +79,6 @@ export default function VideoMiniPlayer() {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setUseFallbackSource(false);
     setPlaybackError(false);
-    setPlaybackNeedsGesture(false);
     resumeTimeRef.current = dockedVideo?.currentTime;
     // Playback time is updated continuously without changing the media
     // element; only a new media id should reset the source selection.
@@ -123,8 +127,48 @@ export default function VideoMiniPlayer() {
       window.removeEventListener('resize', update);
     };
   }, []);
+  const snapToCorner = useCallback((preferred?: 'tl' | 'tr' | 'bl' | 'br') => {
+    const bounds = boundsRef.current?.getBoundingClientRect();
+    const player = playerRef.current;
+    if (!bounds || !player) { return; }
+    const gap = window.innerWidth >= 640 ? 16 : 8;
+    const playerWidth = player.offsetWidth;
+    const playerHeight = player.offsetHeight;
+    const baseLeft = bounds.width - playerWidth - gap;
+    const baseTop = bounds.height - playerHeight - gap;
+    const rect = player.getBoundingClientRect();
+    const corner = preferred ?? [
+      rect.left + rect.width / 2 < bounds.left + bounds.width / 2 ? 'l' : 'r',
+      rect.top + rect.height / 2 < bounds.top + bounds.height / 2 ? 't' : 'b',
+    ].reverse().join('') as 'tl' | 'tr' | 'bl' | 'br';
+    cornerRef.current = corner;
+    const targetX = corner.endsWith('l') ? gap - baseLeft : 0;
+    const targetY = corner.startsWith('t') ? gap - baseTop : 0;
+    animate(miniX, targetX, { type: 'spring', stiffness: 420, damping: 34 });
+    animate(miniY, targetY, { type: 'spring', stiffness: 420, damping: 34 });
+    animate(miniScale, 1, { type: 'spring', stiffness: 420, damping: 34 });
+  }, [miniScale, miniX, miniY]);
+  const scheduleControlsHide = useCallback(() => {
+    if (controlsTimerRef.current !== undefined) {
+      window.clearTimeout(controlsTimerRef.current);
+    }
+    controlsTimerRef.current = window.setTimeout(() => {
+      setControlsVisible(false);
+    }, 3200);
+  }, []);
+  const toggleControls = useCallback(() => {
+    if (miniGestureMovedRef.current) { return; }
+    setControlsVisible(current => {
+      const next = !current;
+      if (next) { scheduleControlsHide(); }
+      return next;
+    });
+  }, [scheduleControlsHide]);
   const onMiniDragStart = () => {
     miniGestureMovedRef.current = false;
+    if (controlsTimerRef.current !== undefined) {
+      window.clearTimeout(controlsTimerRef.current);
+    }
   };
   const onMiniDrag = (
     _: MouseEvent | TouchEvent | PointerEvent,
@@ -133,16 +177,112 @@ export default function VideoMiniPlayer() {
     if (Math.hypot(info.offset.x, info.offset.y) > 6) {
       miniGestureMovedRef.current = true;
     }
+    const isBottom = cornerRef.current.startsWith('b');
+    const inwardDistance = isBottom ? -info.offset.y : info.offset.y;
+    miniScale.set(1 + Math.min(0.12, Math.max(0, inwardDistance) / 900));
   };
   const onMiniDragEnd = (
     _: MouseEvent | TouchEvent | PointerEvent,
     info: PanInfo,
   ) => {
-    const shouldUnfold = info.offset.y < -56 &&
-      Math.abs(info.offset.y) > Math.abs(info.offset.x) * 1.15;
+    const corner = cornerRef.current;
+    const isBottom = corner.startsWith('b');
+    const isLeft = corner.endsWith('l');
+    const inwardDistance = isBottom ? -info.offset.y : info.offset.y;
+    const shouldUnfold = inwardDistance > 56 &&
+      Math.abs(info.offset.y) > Math.abs(info.offset.x) * 1.1;
+    const outwardX = isLeft ? -info.offset.x : info.offset.x;
+    const outwardY = isBottom ? info.offset.y : -info.offset.y;
+    const shouldDismiss = (
+      outwardX > 88 && Math.abs(info.offset.x) > Math.abs(info.offset.y)
+    ) || (
+      outwardY > 88 && Math.abs(info.offset.y) > Math.abs(info.offset.x)
+    );
     window.setTimeout(() => { miniGestureMovedRef.current = false; }, 0);
-    if (shouldUnfold) { openDetails(); }
+    if (shouldUnfold) {
+      animate(miniScale, 1.12, { duration: 0.12, ease: 'easeOut' });
+      window.setTimeout(openDetails, 90);
+      return;
+    }
+    if (shouldDismiss) {
+      const bounds = boundsRef.current?.getBoundingClientRect();
+      const player = playerRef.current;
+      if (bounds && player) {
+        const direction = Math.abs(info.offset.x) > Math.abs(info.offset.y)
+          ? isLeft ? -1 : 1
+          : isBottom ? 1 : -1;
+        if (Math.abs(info.offset.x) > Math.abs(info.offset.y)) {
+          animate(miniX, miniX.get() + direction * (player.offsetWidth + 40), {
+            duration: 0.16,
+          });
+        } else {
+          animate(miniY, miniY.get() + direction * (player.offsetHeight + 40), {
+            duration: 0.16,
+          });
+        }
+        animate(miniScale, 0.88, { duration: 0.16 });
+      }
+      window.setTimeout(() => {
+        videoRef.current?.pause();
+        clearDockedVideo();
+      }, 150);
+      return;
+    }
+    snapToCorner();
+    if (controlsVisible) { scheduleControlsHide(); }
   };
+
+  useEffect(() => {
+    cornerRef.current = 'br';
+    miniX.set(0);
+    miniY.set(0);
+    miniScale.set(1);
+    // A new media session starts with the unobstructed minimal player.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setControlsVisible(false);
+  }, [dockedVideo?.mediaId, miniScale, miniX, miniY]);
+
+  useEffect(() => {
+    const recover = () => {
+      if (document.hidden || !dockedVideo) { return; }
+      setControlsVisible(false);
+      window.requestAnimationFrame(() => snapToCorner(cornerRef.current));
+      const video = videoRef.current;
+      if (!video) { return; }
+      const restorePlayback = () => {
+        const latest = getDockedVideo();
+        if (!latest || latest.mediaId !== dockedVideo.mediaId) { return; }
+        try { video.currentTime = Math.max(0, latest.currentTime); } catch {}
+        if (latest.wasPlaying) { requestPlayback(video); }
+      };
+      if (
+        video.error ||
+        video.networkState === HTMLMediaElement.NETWORK_NO_SOURCE
+      ) {
+        video.addEventListener('loadedmetadata', restorePlayback, { once: true });
+        try { video.load(); } catch {}
+      } else if (video.paused && dockedVideo.wasPlaying) {
+        restorePlayback();
+      }
+    };
+    const onVisibility = () => {
+      if (!document.hidden) { recover(); }
+    };
+    window.addEventListener('pageshow', recover);
+    window.addEventListener('focus', recover);
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => {
+      window.removeEventListener('pageshow', recover);
+      window.removeEventListener('focus', recover);
+      document.removeEventListener('visibilitychange', onVisibility);
+    };
+  }, [dockedVideo, requestPlayback, snapToCorner]);
+
+  useEffect(() => () => {
+    if (controlsTimerRef.current !== undefined) {
+      window.clearTimeout(controlsTimerRef.current);
+    }
+  }, []);
 
   return (
     <div
@@ -153,6 +293,7 @@ export default function VideoMiniPlayer() {
       <AnimatePresence>
         {dockedVideo && source &&
         <motion.aside
+          ref={playerRef}
           key={dockedVideo.mediaId}
           aria-label="Playing video"
           className="pointer-events-auto absolute bottom-2 right-2
@@ -160,7 +301,7 @@ export default function VideoMiniPlayer() {
             border border-white/15 bg-black shadow-2xl ring-1 ring-black/30
             will-change-transform sm:bottom-4 sm:right-4"
           initial={{ opacity: 0, scale: 0.92, y: 20 }}
-          animate={{ opacity: 1, scale: 1, y: 0 }}
+          animate={{ opacity: 1 }}
           exit={{ opacity: 0, scale: 0.92, y: 20 }}
           transition={{ type: 'spring', stiffness: 360, damping: 32 }}
           drag
@@ -169,6 +310,7 @@ export default function VideoMiniPlayer() {
           dragConstraints={boundsRef}
           dragElastic={0.04}
           dragMomentum={false}
+          style={{ x: miniX, y: miniY, scale: miniScale }}
           onDragStart={onMiniDragStart}
           onDrag={onMiniDrag}
           onDragEnd={onMiniDragEnd}
@@ -181,7 +323,7 @@ export default function VideoMiniPlayer() {
               className="size-full object-contain"
               src={source}
               poster={dockedVideo.posterUrl}
-              controls
+              controls={controlsVisible}
               controlsList="nodownload noplaybackrate nofullscreen"
               playsInline
               autoPlay={dockedVideo.wasPlaying}
@@ -210,7 +352,6 @@ export default function VideoMiniPlayer() {
                 updateDockedVideo({ currentTime });
               }}
               onPlay={() => {
-                setPlaybackNeedsGesture(false);
                 updateDockedVideo({ wasPlaying: true }, true);
               }}
               onPlaying={event => {
@@ -257,18 +398,18 @@ export default function VideoMiniPlayer() {
               }}
             />
             <div
-              aria-label="Move mini player; swipe up to unfold"
+              aria-label="Mini-player gesture surface"
               role="button"
               tabIndex={0}
-              className="absolute inset-x-0 top-0 bottom-10 z-[5]
-                cursor-grab touch-none active:cursor-grabbing"
+              className={`absolute inset-x-0 top-0 z-[5] cursor-grab touch-none
+                active:cursor-grabbing ${controlsVisible ? 'bottom-10' : 'bottom-0'}`}
               onPointerDown={event => dragControls.start(event)}
-              onClick={() => {
-                if (!miniGestureMovedRef.current) { openDetails(); }
-              }}
+              onClick={toggleControls}
               onKeyDown={event => {
                 if (event.key === 'Enter' || event.key === ' ') {
                   event.preventDefault();
+                  toggleControls();
+                } else if (event.key === 'ArrowUp') {
                   openDetails();
                 }
               }}
@@ -279,55 +420,6 @@ export default function VideoMiniPlayer() {
                 Video unavailable. Open the media details to retry.
               </div>
             )}
-            {playbackNeedsGesture && !playbackError && dockedVideo.wasPlaying && (
-              <div className="pointer-events-none absolute inset-0 z-10 grid
-                place-items-center">
-                <button
-                  type="button"
-                  aria-label="Continue playback"
-                  className="pointer-events-auto inline-flex size-9 items-center
-                    justify-center rounded-full border border-white/30 bg-black/80
-                    text-white shadow-lg backdrop-blur-sm transition-transform
-                    hover:scale-105 focus-visible:outline-2
-                    focus-visible:outline-white"
-                  onClick={() => {
-                    const video = videoRef.current;
-                    if (!video) { return; }
-                    requestPlayback(video);
-                  }}
-                >
-                  <LuPlay size={16} fill="currentColor" />
-                </button>
-              </div>
-            )}
-            <button
-              type="button"
-              aria-label="Unfold video player"
-              title="Unfold video player"
-              className="absolute bottom-1.5 right-1.5 z-20 inline-flex size-7
-                items-center justify-center rounded-sm bg-black/75 text-white
-                backdrop-blur-sm transition-colors hover:bg-black
-                focus-visible:outline-2 focus-visible:outline-white"
-              onClick={openDetails}
-            >
-              <LuMaximize2 size={14} strokeWidth={2} />
-            </button>
-            <button
-              type="button"
-              aria-label="Close mini player"
-              title="Close mini player"
-              className="absolute right-1.5 top-1.5 z-20 inline-flex size-7
-                items-center justify-center rounded-full border border-white/25
-                bg-black/80 text-white shadow-md backdrop-blur-sm
-                transition-colors hover:bg-black focus-visible:outline-2
-                focus-visible:outline-white"
-              onClick={() => {
-                videoRef.current?.pause();
-                clearDockedVideo();
-              }}
-            >
-              <LuX size={14} strokeWidth={2.25} />
-            </button>
           </div>
         </motion.aside>}
       </AnimatePresence>

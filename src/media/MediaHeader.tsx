@@ -19,7 +19,10 @@ import ResponsiveText from '@/components/primitives/ResponsiveText';
 import { useAppState } from '@/app/AppState';
 import { GRID_GAP_CLASSNAME } from '@/components';
 import { useAppText } from '@/i18n/state/client';
-import { requestDetailVideoMinimize } from './video-mini-player';
+import {
+  requestDetailVideoMinimize,
+  updateDetailVideoFoldGesture,
+} from './video-mini-player';
 
 const MINIMIZE_PULL_DISTANCE = 64;
 
@@ -78,6 +81,12 @@ export default function MediaHeader({
     if (deltaY > 8 && deltaY > Math.abs(deltaX)) {
       event.preventDefault();
     }
+    updateDetailVideoFoldGesture({
+      mediaId: selectedMedia!.id,
+      phase: 'move',
+      deltaX,
+      deltaY: Math.max(0, deltaY),
+    });
   };
   const onTitleTouchEnd = (event: TouchEvent<HTMLDivElement>) => {
     const start = pullStartRef.current;
@@ -88,7 +97,20 @@ export default function MediaHeader({
     const deltaY = touch.clientY - start.y;
     if (deltaY >= MINIMIZE_PULL_DISTANCE && deltaY > Math.abs(deltaX) * 1.2) {
       event.preventDefault();
+      updateDetailVideoFoldGesture({
+        mediaId: selectedMedia.id,
+        phase: 'commit',
+        deltaX,
+        deltaY,
+      });
       requestDetailVideoMinimize(selectedMedia.id);
+    } else {
+      updateDetailVideoFoldGesture({
+        mediaId: selectedMedia.id,
+        phase: 'cancel',
+        deltaX,
+        deltaY: Math.max(0, deltaY),
+      });
     }
   };
 
@@ -161,7 +183,18 @@ export default function MediaHeader({
       onTouchStart={onTitleTouchStart}
       onTouchMove={onTitleTouchMove}
       onTouchEnd={onTitleTouchEnd}
-      onTouchCancel={() => { pullStartRef.current = undefined; }}
+      onTouchCancel={() => {
+        const mediaId = selectedMedia?.id;
+        pullStartRef.current = undefined;
+        if (mediaId) {
+          updateDetailVideoFoldGesture({
+            mediaId,
+            phase: 'cancel',
+            deltaX: 0,
+            deltaY: 0,
+          });
+        }
+      }}
     >
       <AnimateItems
       type="bottom"

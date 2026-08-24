@@ -229,6 +229,8 @@ export default function MediaForm({
   onFormStatusChange,
   onStorageFilesChanged,
   inlineEdit = false,
+  compactEdit = false,
+  visibleSectionNames,
   excludeFields = [],
   onCancel,
   onUpdated,
@@ -245,8 +247,8 @@ export default function MediaForm({
   uniqueStudios?: string[]
   uniquePerformers?: string[]
   uniqueContentTypes?: string[]
-  uniqueRecipes: Recipes
-  uniqueFilms: Films
+  uniqueRecipes?: Recipes
+  uniqueFilms?: Films
   aiContent?: AiContent
   shouldStripGpsData?: boolean
   onTitleChange?: (updatedTitle: string) => void
@@ -254,6 +256,8 @@ export default function MediaForm({
   onFormStatusChange?: (pending: boolean) => void
   onStorageFilesChanged?: () => Promise<void>
   inlineEdit?: boolean
+  compactEdit?: boolean
+  visibleSectionNames?: string[]
   excludeFields?: FormFields[]
   onCancel?: () => void
   onUpdated?: () => void
@@ -794,6 +798,8 @@ export default function MediaForm({
 
   const visibleSections = useMemo(() =>
     orderedSections
+      .filter(({ section }) =>
+        !visibleSectionNames || visibleSectionNames.includes(section))
       .map(section => ({
         ...section,
         fields: section.fields.filter(([key, {
@@ -812,24 +818,32 @@ export default function MediaForm({
     changedFormKeys,
     hasSubtitleManager,
     excludeFields,
+    visibleSectionNames,
   ]);
 
   const hiddenFields = useMemo(() =>
-    orderedSections.flatMap(({ fields }) =>
+    orderedSections.flatMap(({ section, fields }) =>
       fields.filter(([key, {
         hideIfEmpty,
         shouldHide,
         type,
       }]) =>
         !excludeFields.includes(key) &&
-        type === 'hidden' &&
-        !isFieldHidden(key, hideIfEmpty, shouldHide))),
+        (
+          Boolean(
+            visibleSectionNames && !visibleSectionNames.includes(section),
+          ) || (
+            type === 'hidden' &&
+            !isFieldHidden(key, hideIfEmpty, shouldHide)
+          )
+        ))),
   [
     orderedSections,
     formData,
     changedFormKeys,
     hasSubtitleManager,
     excludeFields,
+    visibleSectionNames,
   ]);
 
   const ref = useRef<HTMLDivElement>(null);
@@ -920,6 +934,7 @@ export default function MediaForm({
 
   return (
     <div className="space-y-5 max-w-[42rem] relative">
+      {!compactEdit && <>
         <div
           className={clsx(
             'flex flex-col gap-4',
@@ -997,9 +1012,10 @@ export default function MediaForm({
             </div>
           </div>
         </div>
+      </>}
         {formActionErrorMessage &&
         <ErrorNote>{formActionErrorMessage}</ErrorNote>}
-        <div className={clsx(
+        {!compactEdit && <div className={clsx(
           'sticky top-3 z-30 mx-auto w-full bg-main/92 backdrop-blur-xl',
           'border border-gray-200 dark:border-gray-700',
           'rounded-[1.4rem] px-3 py-2 shadow-md',
@@ -1032,7 +1048,7 @@ export default function MediaForm({
               </button>
             ))}
           </div>
-        </div>
+        </div>}
         <form
           action={async data => {
             try {
@@ -1081,7 +1097,7 @@ export default function MediaForm({
             />}
           {/* Fields */}
           <AnchorSections
-            className="mt-6 space-y-8"
+            className={compactEdit ? 'space-y-5' : 'mt-6 space-y-8'}
             classNameSection="scroll-mt-28"
             onSectionChange={section => {
               setActiveSection(section);
@@ -1525,7 +1541,7 @@ export default function MediaForm({
           {/* Actions */}
           <div className={clsx(
             'flex gap-3 sticky bottom-0',
-            'pb-4 md:pb-8 mt-16',
+            compactEdit ? 'pb-1 mt-6' : 'pb-4 md:pb-8 mt-16',
             'relative z-20',
           )}>
             {inlineEdit

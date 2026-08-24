@@ -180,14 +180,9 @@ export default function MediaGrid({
       {...{ [DATA_KEY_MEDIA_GRID]: selectable, className }}
     >
       <AnimateItems
-        // Preserve the actual card/image/video nodes while the two grid modes
-        // morph between layouts. Remounting created black gaps as lazy media
-        // surfaces were rebuilt; layoutDependency limits FLIP measurements to
-        // real mode/density changes instead of every preview-state update.
-        layoutItems
-        layoutDependency={`${isWideGrid ? 'wide' : 'standard'}-${
-          isGridHighDensity ? 'high' : 'regular'
-        }`}
+        // Preserve the actual card/image/video nodes while grid contents grow.
+        // The mode switch animates only visible surfaces, outside Framer's
+        // all-item projection, so long feeds remain cheap to scroll.
         onPointerDown={event => activateSmartRows(
           event.target,
           event.currentTarget,
@@ -215,7 +210,7 @@ export default function MediaGrid({
           }
         }}
         className={clsx(
-          'grid',
+          'grid grid-flow-row-dense',
           GRID_GAP_CLASSNAME,
           small
             ? 'grid-cols-3 xs:grid-cols-6'

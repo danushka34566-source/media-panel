@@ -661,6 +661,7 @@ export default function MediaLarge({
 
   useEffect(() => {
     if (!broadcastDetailVideoPlayback || !isVideo) { return; }
+    let navigationTimer: number | undefined;
     const minimize = (event: Event) => {
       const mediaId = (event as CustomEvent<{ mediaId?: string }>).detail?.mediaId;
       if (mediaId !== photo.id) { return; }
@@ -683,10 +684,15 @@ export default function MediaLarge({
         isDetailFoldingRef.current = true;
         setIsFullVideoPlaying(false);
       }
-      router.back();
+      navigationTimer = window.setTimeout(() => router.back(), 210);
     };
     window.addEventListener(DETAIL_VIDEO_MINIMIZE_EVENT, minimize);
-    return () => window.removeEventListener(DETAIL_VIDEO_MINIMIZE_EVENT, minimize);
+    return () => {
+      window.removeEventListener(DETAIL_VIDEO_MINIMIZE_EVENT, minimize);
+      if (navigationTimer !== undefined) {
+        window.clearTimeout(navigationTimer);
+      }
+    };
   }, [
     broadcastDetailVideoPlayback,
     fullVideoCompatibilityUrl,

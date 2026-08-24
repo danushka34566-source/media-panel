@@ -24,6 +24,7 @@ import YearHeader from '@/year/YearHeader';
 import RecentsHeader from '@/recents/RecentsHeader';
 import AlbumHeader from '@/album/AlbumHeader';
 import { pathForMedia } from '@/app/path';
+import MediaDetailFoldPanel from './MediaDetailFoldPanel';
 
 export default function MediaDetailPage({
   photo,
@@ -178,54 +179,56 @@ export default function MediaDetailPage({
 
   return (
     <div>
-      <AppGrid
-        className="mt-1.5 mb-6"
-        contentMain={customHeader ?? <MediaHeader
-          selectedMedia={photo}
-          photos={photos}
-          recipe={recipe}
-          hasAiTextGeneration={AI_CONTENT_GENERATION_ENABLED}
-        />}
-      />
-      <AnimateItems
-        className="md:mb-8"
-        animateFromAppState
-        removeTransformAfterAnimation
-        items={[
-          <MediaLarge
-            key={photo.id}
-            photo={photo}
-            album={album}
-            primaryTag={tag}
-            priority
-            preloadSubtitleManifest
-            broadcastDetailVideoPlayback
-            prefetchRelatedLinks
-            recent={recent}
-            year={year}
-            showTitle={Boolean(customHeader)}
-            showTitleAsH1
-            showCamera={!camera}
-            showLens={!lens}
-            showFilm={!film}
-            showRecipe={!recipe}
-            shouldShare={shouldShare}
-            shouldShareRecents={recent !== undefined}
-            shouldShareYear={year !== undefined}
-            shouldShareCamera={camera !== undefined}
-            shouldShareLens={lens !== undefined}
-            shouldShareAlbum={album !== undefined}
-            shouldShareTag={tag !== undefined}
-            shouldShareFilm={film !== undefined}
-            shouldShareRecipe={recipe !== undefined}
-            shouldShareFocalLength={focal !== undefined}
-            includeFavoriteInAdminMenu={includeFavoriteInAdminMenu}
-            showAdminKeyCommands
-            swipePreviousPath={swipePreviousPath}
-            swipeNextPath={swipeNextPath}
-          />,
-        ]}
-      />
+      <MediaDetailFoldPanel mediaId={photo.id}>
+        <AppGrid
+          className="mt-1.5 mb-6"
+          contentMain={customHeader ?? <MediaHeader
+            selectedMedia={photo}
+            photos={photos}
+            recipe={recipe}
+            hasAiTextGeneration={AI_CONTENT_GENERATION_ENABLED}
+          />}
+        />
+        <AnimateItems
+          className="md:mb-8"
+          animateFromAppState
+          removeTransformAfterAnimation
+          items={[
+            <MediaLarge
+              key={photo.id}
+              photo={photo}
+              album={album}
+              primaryTag={tag}
+              priority
+              preloadSubtitleManifest
+              broadcastDetailVideoPlayback
+              prefetchRelatedLinks
+              recent={recent}
+              year={year}
+              showTitle={Boolean(customHeader)}
+              showTitleAsH1
+              showCamera={!camera}
+              showLens={!lens}
+              showFilm={!film}
+              showRecipe={!recipe}
+              shouldShare={shouldShare}
+              shouldShareRecents={recent !== undefined}
+              shouldShareYear={year !== undefined}
+              shouldShareCamera={camera !== undefined}
+              shouldShareLens={lens !== undefined}
+              shouldShareAlbum={album !== undefined}
+              shouldShareTag={tag !== undefined}
+              shouldShareFilm={film !== undefined}
+              shouldShareRecipe={recipe !== undefined}
+              shouldShareFocalLength={focal !== undefined}
+              includeFavoriteInAdminMenu={includeFavoriteInAdminMenu}
+              showAdminKeyCommands
+              swipePreviousPath={swipePreviousPath}
+              swipeNextPath={swipeNextPath}
+            />,
+          ]}
+        />
+      </MediaDetailFoldPanel>
       <AppGrid
         contentMain={<MediaGrid
           photos={photosGrid ?? photos}

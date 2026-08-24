@@ -92,8 +92,51 @@ export const rememberMediaScrollPosition = (
 
 const findAnchor = (anchorId?: string) => {
   if (!anchorId) { return undefined; }
-  return Array.from(document.querySelectorAll<HTMLElement>('[data-media-id]'))
-    .find(element => element.dataset.mediaId === anchorId);
+  const matches = Array.from(
+    document.querySelectorAll<HTMLElement>('[data-media-id]'),
+  ).filter(element => element.dataset.mediaId === anchorId);
+  return matches.find(element =>
+    element.closest('[data-media-smart-preview-card]')) ?? matches[0];
+};
+
+export type MediaViewportAnchor = {
+  mediaId: string
+  viewportTop: number
+};
+
+export const captureMediaViewportAnchor = (): MediaViewportAnchor | undefined => {
+  const headerBottom = document.querySelector<HTMLElement>('[data-site-header]')
+    ?.getBoundingClientRect().bottom ?? 0;
+  const candidates = Array.from(
+    document.querySelectorAll<HTMLElement>(
+      '[data-media-smart-preview-card] [data-media-id]',
+    ),
+  ).filter(element => {
+    const rect = element.getBoundingClientRect();
+    return rect.width > 40 && rect.height > 40 &&
+      rect.bottom > headerBottom && rect.top < window.innerHeight;
+  });
+  const anchor = candidates.sort((a, b) => {
+    const rectA = a.getBoundingClientRect();
+    const rectB = b.getBoundingClientRect();
+    return Math.abs(rectA.top - headerBottom) -
+      Math.abs(rectB.top - headerBottom);
+  })[0];
+  const mediaId = anchor?.dataset.mediaId;
+  return anchor && mediaId
+    ? { mediaId, viewportTop: getLayoutTop(anchor) - window.scrollY }
+    : undefined;
+};
+
+export const restoreMediaViewportAnchor = (anchor?: MediaViewportAnchor) => {
+  if (!anchor) { return; }
+  const element = findAnchor(anchor.mediaId);
+  if (!element) { return; }
+  // Ignore Framer Motion's temporary FLIP transform and measure the committed
+  // grid layout. Otherwise the first animation frame can appear correct and
+  // then drift away from the user's card as the transform settles.
+  const delta = getLayoutTop(element) - window.scrollY - anchor.viewportTop;
+  if (Math.abs(delta) > 0.5) { window.scrollBy({ top: delta, behavior: 'auto' }); }
 };
 
 /**
@@ -113,14 +156,12 @@ export default function useMediaScrollRestoration(enabled = true) {
     try {
       saved = parseSavedPosition(window.sessionStorage.getItem(key));
     } catch { return; }
-    if (!saved || (saved.top <= 0 && !saved.anchorId)) { return; }
-
-    let restoring = true;
+    let restoring = Boolean(saved && (saved.top > 0 || saved.anchorId));
     let programmaticScroll = false;
     let mutationObserver: MutationObserver | undefined;
     let resizeObserver: ResizeObserver | undefined;
     const previousScrollRestoration = window.history.scrollRestoration;
-    window.history.scrollRestoration = 'manual';
+    if (restoring) { window.history.scrollRestoration = 'manual'; }
 
     const stopRestoring = () => {
       restoring = false;
@@ -187,18 +228,20 @@ export default function useMediaScrollRestoration(enabled = true) {
       saveCurrentScrollPosition(key, saved);
     };
 
-    const timeoutTimer = window.setTimeout(stopRestoring, RESTORE_TIMEOUT_MS);
+    const timeoutTimer = restoring
+      ? window.setTimeout(stopRestoring, RESTORE_TIMEOUT_MS)
+      : undefined;
     window.addEventListener('scroll', onScroll, { passive: true });
     window.addEventListener('pagehide', onPageHide, { passive: true });
-    if (typeof MutationObserver !== 'undefined') {
+    if (restoring && typeof MutationObserver !== 'undefined') {
       mutationObserver = new MutationObserver(restore);
       mutationObserver.observe(document.body, { childList: true, subtree: true });
     }
-    if (typeof ResizeObserver !== 'undefined') {
+    if (restoring && typeof ResizeObserver !== 'undefined') {
       resizeObserver = new ResizeObserver(restore);
       resizeObserver.observe(document.documentElement);
     }
-    window.requestAnimationFrame(restore);
+    if (restoring) { window.requestAnimationFrame(restore); }
 
     return () => {
       window.removeEventListener('scroll', onScroll);

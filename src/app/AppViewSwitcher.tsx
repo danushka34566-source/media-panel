@@ -14,7 +14,6 @@ import {
   NAV_SORT_CONTROL,
 } from './config';
 import AdminAppMenu from '@/admin/AdminAppMenu';
-import Spinner from '@/components/Spinner';
 import clsx from 'clsx/lite';
 import {
   ReactNode,
@@ -24,6 +23,7 @@ import {
   useRef,
   useState,
 } from 'react';
+import { flushSync } from 'react-dom';
 import useKeydownHandler from '@/utility/useKeydownHandler';
 import { usePathname, useRouter } from 'next/navigation';
 import { KEY_COMMANDS } from '@/media/key-commands';
@@ -37,12 +37,58 @@ import {
   getMediaSortPreferenceAction,
   setMediaSortPreferenceAction,
 } from '@/auth/actions';
+import {
+  captureMediaViewportAnchor,
+  restoreMediaViewportAnchor,
+} from '@/media/useMediaScrollRestoration';
 
 export type SwitcherSelection = 'full' | 'grid' | 'admin';
 
 const GAP_CLASS_RIGHT = 'mr-1.5 sm:mr-2';
 const GAP_CLASS_LEFT  = 'ml-0.5 sm:ml-1';
 const GRID_MODE_SWITCH_FEEDBACK_MS = 220;
+
+type VisibleGridCard = {
+  left: number
+  top: number
+};
+
+const captureVisibleGridCards = () => {
+  const cards = new Map<string, VisibleGridCard>();
+  document.querySelectorAll<HTMLElement>(
+    '[data-media-smart-preview-card][data-preview-id]',
+  ).forEach(element => {
+    const rect = element.getBoundingClientRect();
+    if (rect.bottom <= 0 || rect.top >= window.innerHeight) { return; }
+    const id = element.dataset.previewId;
+    if (id) { cards.set(id, { left: rect.left, top: rect.top }); }
+  });
+  return cards;
+};
+
+const animateVisibleGridCards = (previous: Map<string, VisibleGridCard>) => {
+  if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) { return; }
+  document.querySelectorAll<HTMLElement>(
+    '[data-media-smart-preview-card][data-preview-id]',
+  ).forEach(element => {
+    const id = element.dataset.previewId;
+    const from = id ? previous.get(id) : undefined;
+    if (!from) { return; }
+    const rect = element.getBoundingClientRect();
+    if (rect.bottom <= 0 || rect.top >= window.innerHeight) { return; }
+    const x = from.left - rect.left;
+    const y = from.top - rect.top;
+    if (Math.abs(x) < 0.5 && Math.abs(y) < 0.5) { return; }
+    element.getAnimations().forEach(animation => animation.cancel());
+    element.animate([
+      { transform: `translate3d(${x}px, ${y}px, 0)` },
+      { transform: 'translate3d(0, 0, 0)' },
+    ], {
+      duration: 260,
+      easing: 'cubic-bezier(0.22, 1, 0.36, 1)',
+    });
+  });
+};
 
 export default function AppViewSwitcher({
   currentSelection,
@@ -137,8 +183,17 @@ export default function AppViewSwitcher({
   const gridModeSwitchTimeoutRef =
     useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const toggleGridMode = useCallback(() => {
-    setIsGridModeSwitching(true);
-    setIsWideGrid?.(prev => !prev);
+    const viewportAnchor = captureMediaViewportAnchor();
+    const visibleCards = captureVisibleGridCards();
+    // Commit the new column layout before restoring the visible card. This
+    // prevents the same scrollTop from pointing at unrelated media when the
+    // number and height of rows changes between grid modes.
+    flushSync(() => {
+      setIsGridModeSwitching(true);
+      setIsWideGrid?.(prev => !prev);
+    });
+    restoreMediaViewportAnchor(viewportAnchor);
+    animateVisibleGridCards(visibleCards);
     if (gridModeSwitchTimeoutRef.current) {
       clearTimeout(gridModeSwitchTimeoutRef.current);
     }
@@ -192,18 +247,15 @@ export default function AppViewSwitcher({
 
   const renderItemGrid =
     <SwitcherItem
-      icon={isGridModeSwitching
-        ? <Spinner
-          size={13}
-          color={currentSelection === 'grid' ? 'text' : 'light-gray'}
-        />
-        : <IconGrid
+      icon={<motion.span
+        animate={{ scale: isGridModeSwitching ? 0.9 : 1 }}
+        transition={{ duration: 0.14, ease: 'easeOut' }}
+      >
+        <IconGrid
           includeTitle={false}
           variant={isWideGrid ? 'wide' : 'regular'}
-          className={clsx(
-            'transition-transform duration-200 ease-out',
-          )}
-        />}
+        />
+      </motion.span>}
       href={currentSelection === 'grid' ? undefined : pathGrid}
       hrefRef={refHrefGrid}
       active={currentSelection === 'grid'}

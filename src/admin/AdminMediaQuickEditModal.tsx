@@ -8,7 +8,6 @@ import { useAppState } from '@/app/AppState';
 import { Media } from '@/media';
 import {
   getMediaQuickEditDataAction,
-  getStorageUrlsForMediaAction,
 } from '@/media/actions';
 import { convertMediaToFormData } from '@/media/form';
 import MediaForm from '@/media/form/MediaForm';
@@ -34,7 +33,6 @@ export default function AdminMediaQuickEditModal({
   const [loadError, setLoadError] = useState<string>();
 
   const loadData = useCallback(async () => {
-    setLoadError(undefined);
     try {
       setData(await getMediaQuickEditDataAction(photo.id));
     } catch (error) {
@@ -44,17 +42,16 @@ export default function AdminMediaQuickEditModal({
   }, [photo.id]);
 
   useEffect(() => {
-    void loadData();
-  }, [loadData]);
-
-  const refreshStorageUrls = useCallback(async () => {
-    const photoStorageUrls = await getStorageUrlsForMediaAction(photo.id);
-    setData(current => current
-      ? {
-        ...current,
-        photoStorageUrls: photoStorageUrls ?? current.photoStorageUrls,
-      }
-      : current);
+    let cancelled = false;
+    void getMediaQuickEditDataAction(photo.id)
+      .then(result => {
+        if (!cancelled) { setData(result); }
+      })
+      .catch(error => {
+        console.error(error);
+        if (!cancelled) { setLoadError('Unable to load media details.'); }
+      });
+    return () => { cancelled = true; };
   }, [photo.id]);
 
   return (
@@ -64,15 +61,14 @@ export default function AdminMediaQuickEditModal({
       }}
       anchor="top"
       className="max-h-[calc(100dvh-1rem)]! w-[calc(100vw-1rem)]!
-        overflow-y-auto sm:w-[min(1100px,96vw)]!"
+        overflow-y-auto sm:w-[min(720px,94vw)]!"
       noPadding
     >
       <div className="p-4 sm:p-6">
         <div className="mb-5 space-y-1">
           <h2 className="text-lg font-semibold">Quick Edit</h2>
           <p className="text-sm text-dim">
-            Edit the complete {photo.mediaType === 'video' ? 'video' : 'image'}
-            {' '}details without leaving this page. Visibility stays unchanged.
+            Update the media details without leaving this page.
           </p>
         </div>
         {!data && !loadError && (
@@ -85,7 +81,14 @@ export default function AdminMediaQuickEditModal({
         {loadError && (
           <div className="space-y-3 py-8 text-center">
             <p className="text-sm text-error">{loadError}</p>
-            <button type="button" className="button" onClick={loadData}>
+            <button
+              type="button"
+              className="button"
+              onClick={() => {
+                setLoadError(undefined);
+                void loadData();
+              }}
+            >
               Retry
             </button>
           </div>
@@ -94,9 +97,9 @@ export default function AdminMediaQuickEditModal({
           <MediaForm
             type="edit"
             inlineEdit
+            compactEdit
+            visibleSectionNames={['text']}
             initialMediaForm={convertMediaToFormData(photo)}
-            photoStorageUrls={data.photoStorageUrls}
-            onStorageFilesChanged={refreshStorageUrls}
             photoAlbumTitles={data.photoAlbumTitles}
             albums={data.albums}
             uniqueTags={data.uniqueTags}
@@ -104,8 +107,6 @@ export default function AdminMediaQuickEditModal({
             uniqueStudios={data.uniqueStudios}
             uniquePerformers={data.uniquePerformers}
             uniqueContentTypes={data.uniqueContentTypes}
-            uniqueRecipes={data.uniqueRecipes}
-            uniqueFilms={data.uniqueFilms}
             excludeFields={['visibility']}
             onCancel={onClose}
             onFormStatusChange={setIsPending}
