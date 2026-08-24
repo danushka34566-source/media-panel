@@ -32,6 +32,7 @@ import { KEY_COMMANDS } from './key-commands';
 import { syncMediaConfirmText } from '@/admin/confirm';
 import { useAppText } from '@/i18n/state/client';
 import usePersonalFavorite from '@/auth/usePersonalFavorite';
+import { usePathname } from 'next/navigation';
 
 const ANIMATION_LEFT: AnimationConfig = { type: 'left', duration: 0.3 };
 const ANIMATION_RIGHT: AnimationConfig = { type: 'right', duration: 0.3 };
@@ -57,6 +58,7 @@ export default function MediaPrevNextActions({
   } = useAppState();
 
   const appText = useAppText();
+  const pathname = usePathname();
 
   const photoTitle = photo
     ? photo.title
@@ -78,7 +80,9 @@ export default function MediaPrevNextActions({
   }, [photo]);
 
   const navigateToMediaEdit = useNavigateOrRunActionWithToast({
-    pathOrAction: photo ? pathForAdminMediaEdit(photo) : undefined,
+    pathOrAction: photo
+      ? pathForAdminMediaEdit(photo, pathname)
+      : undefined,
     toastMessage: `Editing ${photoTitle} ...`,
   });
 

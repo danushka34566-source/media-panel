@@ -641,10 +641,13 @@ export const getKeywordsForMedia = (photo: Media) =>
     .filter(Boolean)
     .map(keyword => keyword.toLocaleLowerCase());
 
-export const downloadFileNameForMedia = (photo: Media) =>
-  photo.title
-    ? `${parameterize(photo.title)}.${photo.extension}`
-    : photo.url.split('/').pop() || 'download';
+export const downloadFileNameForMedia = (photo: Media) => {
+  const sourceName = photo.url.split('/').pop()?.split('?')[0]
+    ?.replace(/\.[^.]+$/, '');
+  const readableName = parameterize(photo.title || sourceName || 'media');
+  const uniqueId = parameterize(photo.id);
+  return `${readableName}-${uniqueId}.${photo.extension}`;
+};
 
 export const isMediaMedia = (photo: Media) => photo.mediaType === 'photo';
 

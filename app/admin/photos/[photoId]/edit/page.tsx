@@ -24,10 +24,17 @@ import { isVideoMedia } from '@/media';
 
 export default async function MediaEditPage({
   params,
+  searchParams,
 }: {
   params: Promise<{ photoId: string }>
+  searchParams: Promise<{ returnTo?: string }>
 }) {
   const { photoId } = await params;
+  const requestedReturnTo = (await searchParams).returnTo;
+  const returnTo = requestedReturnTo?.startsWith('/') &&
+    !requestedReturnTo.startsWith('//')
+    ? requestedReturnTo
+    : undefined;
 
   const [
     photo,
@@ -81,6 +88,7 @@ export default async function MediaEditPage({
       uniqueFilms,
       hasAiTextGeneration,
       imageThumbnailBase64,
+      returnTo,
     }} />
   );
 };

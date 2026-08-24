@@ -11,6 +11,7 @@ import {
   isPathProtected,
   isPathTag,
   isPathTagMedia,
+  pathForAdminMediaEdit,
 } from '@/app/path';
 import { TAG_PRIVATE } from '@/tag';
 
@@ -49,6 +50,13 @@ const PATH_FOCAL_LENGTH             = `/focal/${FOCAL_LENGTH_STRING}`;
 const PATH_FOCAL_LENGTH_PHOTO       = `${PATH_FOCAL_LENGTH}/${PHOTO_ID}`;
  
 describe('Paths', () => {
+  it('preserves the page that opened the media editor', () => {
+    expect(pathForAdminMediaEdit(PHOTO_ID, PATH_TAG_PHOTO)).toBe(
+      `/admin/media/${PHOTO_ID}/edit?returnTo=${encodeURIComponent(
+        PATH_TAG_PHOTO,
+      )}`,
+    );
+  });
   it('can be protected', () => {
     // Public
     expect(isPathProtected(PATH_ROOT)).toBe(false);

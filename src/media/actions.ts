@@ -25,6 +25,8 @@ import {
   getUniquePerformers,
   getUniqueStudios,
   getUniqueVideoContentTypes,
+  getUniqueRecipes,
+  getUniqueFilms,
 } from '@/media/query';
 import { MediaQueryOptions, areOptionsSensitive } from '@/db';
 import {
@@ -104,7 +106,11 @@ import {
   createAlbumsAndGetIds,
   upgradeTagToAlbum,
 } from '@/album/server';
-import { addMediaAlbumIds, getAlbumTitlesForMedia } from '@/album/query';
+import {
+  addMediaAlbumIds,
+  getAlbumTitlesForMedia,
+  getAlbumsWithMeta,
+} from '@/album/query';
 import {
   copyFile,
   deleteFile,
@@ -1370,8 +1376,7 @@ export const addUploadsAction = async ({
     return stream.value;
   });
 
-export const updateMediaAction = async (formData: FormData) =>
-  runAuthenticatedAdminServerAction(async () => {
+const updateMediaFromFormData = async (formData: FormData) => {
     const photo =
       await convertFormDataToMediaDbInsertAndLookupRecipeTitle(formData);
     const existingPhoto = await getMedia(photo.id, true);
@@ -1389,8 +1394,61 @@ export const updateMediaAction = async (formData: FormData) =>
       .then(() => propagateRecipeTitleIfNecessary(formData, photo));
 
     revalidateAllKeysAndPaths();
+    return photo;
+};
+
+export const updateMediaAction = async (formData: FormData) =>
+  runAuthenticatedAdminServerAction(async () => {
+    await updateMediaFromFormData(formData);
 
     redirect(PATH_ADMIN_MEDIA);
+  });
+
+export const updateMediaInlineAction = async (formData: FormData) =>
+  runAuthenticatedAdminServerAction(async () => {
+    const photo = await updateMediaFromFormData(formData);
+    return { success: true, title: photo.title } as const;
+  });
+
+export const getMediaQuickEditDataAction = async (photoId: string) =>
+  runAuthenticatedAdminServerAction(async () => {
+    const photo = await getMedia(photoId, true);
+    if (!photo) { throw new Error('Media not found'); }
+    const [
+      photoAlbumTitles,
+      albums,
+      uniqueTags,
+      uniqueCategories,
+      uniqueStudios,
+      uniquePerformers,
+      uniqueContentTypes,
+      uniqueRecipes,
+      uniqueFilms,
+      photoStorageUrls,
+    ] = await Promise.all([
+      getAlbumTitlesForMedia(photoId),
+      getAlbumsWithMeta(),
+      getUniqueTags(),
+      getUniqueCategories(),
+      getUniqueStudios(),
+      getUniquePerformers(),
+      getUniqueVideoContentTypes(),
+      getUniqueRecipes(),
+      getUniqueFilms(),
+      getStorageUrlsForMedia(photo),
+    ]);
+    return {
+      photoAlbumTitles,
+      albums,
+      uniqueTags,
+      uniqueCategories,
+      uniqueStudios,
+      uniquePerformers,
+      uniqueContentTypes,
+      uniqueRecipes,
+      uniqueFilms,
+      photoStorageUrls,
+    };
   });
 
 export const updateMediaQuickMetaAction = async ({

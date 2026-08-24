@@ -1,5 +1,6 @@
 import {
   descriptionForMedia,
+  downloadFileNameForMedia,
   getMediaPlaybackUrl,
   getMediaPosterUrl,
   getMediaPreviewUrl,
@@ -83,5 +84,24 @@ describe('Should generate video URLs', () => {
     expect(getMediaPreviewUrl(video)).toBeUndefined();
     expect(getMediaPlaybackUrl(video))
       .toBe('https://example.com/media/source.mp4');
+  });
+});
+
+describe('Download file names', () => {
+  it('combines the system title and file id', () => {
+    expect(downloadFileNameForMedia({
+      id: 'abc123',
+      title: 'Summer Trip',
+      extension: 'mp4',
+      url: 'https://example.com/original.mp4',
+    } as Media)).toBe('summer-trip-abc123.mp4');
+  });
+
+  it('uses the source basename when the title is empty', () => {
+    expect(downloadFileNameForMedia({
+      id: 'abc123',
+      extension: 'jpg',
+      url: 'https://example.com/My Photo.jpg?token=temporary',
+    } as Media)).toBe('my-photo-abc123.jpg');
   });
 });

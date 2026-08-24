@@ -31,6 +31,7 @@ import {
   getUniqueVideoLibraryOptionsAction,
   updateSubtitleTrackAction,
   updateMediaAction,
+  updateMediaInlineAction,
 } from '../actions';
 import SubmitButtonWithStatus from '@/components/SubmitButtonWithStatus';
 import useVideoPreviewLifecycle from '@/media/video-preview-lifecycle';
@@ -227,6 +228,10 @@ export default function MediaForm({
   onFormDataChange,
   onFormStatusChange,
   onStorageFilesChanged,
+  inlineEdit = false,
+  excludeFields = [],
+  onCancel,
+  onUpdated,
 }: {
   type?: 'create' | 'edit'
   initialMediaForm: Partial<MediaFormData>
@@ -248,6 +253,10 @@ export default function MediaForm({
   onFormDataChange?: (formData: Partial<MediaFormData>) => void,
   onFormStatusChange?: (pending: boolean) => void
   onStorageFilesChanged?: () => Promise<void>
+  inlineEdit?: boolean
+  excludeFields?: FormFields[]
+  onCancel?: () => void
+  onUpdated?: () => void
 }) {
   const router = useRouter();
   const formMode = type;
@@ -792,11 +801,18 @@ export default function MediaForm({
           shouldHide,
           type,
         }]) =>
+          !excludeFields.includes(key) &&
           type !== 'hidden' &&
           !isFieldHidden(key, hideIfEmpty, shouldHide)),
       }))
       .filter(section => section.fields.length > 0),
-  [orderedSections, formData, changedFormKeys, hasSubtitleManager]);
+  [
+    orderedSections,
+    formData,
+    changedFormKeys,
+    hasSubtitleManager,
+    excludeFields,
+  ]);
 
   const hiddenFields = useMemo(() =>
     orderedSections.flatMap(({ fields }) =>
@@ -805,9 +821,16 @@ export default function MediaForm({
         shouldHide,
         type,
       }]) =>
+        !excludeFields.includes(key) &&
         type === 'hidden' &&
         !isFieldHidden(key, hideIfEmpty, shouldHide))),
-  [orderedSections, formData, changedFormKeys, hasSubtitleManager]);
+  [
+    orderedSections,
+    formData,
+    changedFormKeys,
+    hasSubtitleManager,
+    excludeFields,
+  ]);
 
   const ref = useRef<HTMLDivElement>(null);
   const [failedThumbnailPreviewUrl, setFailedThumbnailPreviewUrl] =
@@ -1011,15 +1034,21 @@ export default function MediaForm({
           </div>
         </div>
         <form
-          action={data => (type === 'create'
-            ? createMediaAction
-            : updateMediaAction
-          )(data)
-            .catch(e => {
+          action={async data => {
+            try {
+              await (type === 'create'
+                ? createMediaAction
+                : inlineEdit
+                  ? updateMediaInlineAction
+                  : updateMediaAction
+              )(data);
+              if (inlineEdit) { onUpdated?.(); }
+            } catch (e: any) {
               if (e.message !== 'NEXT_REDIRECT') {
                 setFormActionErrorMessage(e.message);
               }
-            })}
+            }
+          }}
           onSubmit={() => {
             setFormActionErrorMessage('');
             (document.activeElement as HTMLElement)?.blur?.();
@@ -1499,12 +1528,16 @@ export default function MediaForm({
             'pb-4 md:pb-8 mt-16',
             'relative z-20',
           )}>
-            <Link
-              className="button"
-              href={type === 'edit' ? PATH_ADMIN_PHOTOS : PATH_ADMIN_UPLOADS}
-            >
-              Cancel
-            </Link>
+            {inlineEdit
+              ? <button type="button" className="button" onClick={onCancel}>
+                  Cancel
+                </button>
+              : <Link
+                className="button"
+                href={type === 'edit' ? PATH_ADMIN_PHOTOS : PATH_ADMIN_UPLOADS}
+              >
+                Cancel
+              </Link>}
             <SubmitButtonWithStatus
               icon={type === 'create' && <IconAddUpload />}
               disabled={!canFormBeSubmitted}

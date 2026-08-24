@@ -5,12 +5,13 @@ import {
   Media,
   MediaDateRangePostgres,
   formattedDateRangeForMedia,
+  isVideoMedia,
   titleForMedia,
 } from '.';
 import { MediaSetCategory } from '../category';
 import ShareButton from '@/share/ShareButton';
 import AnimateItems from '@/components/AnimateItems';
-import { Fragment, ReactNode } from 'react';
+import { Fragment, type ReactNode, type TouchEvent, useRef } from 'react';
 import DivDebugBaselineGrid from '@/components/DivDebugBaselineGrid';
 import MediaPrevNextActions from './MediaPrevNextActions';
 import MediaLink from './MediaLink';
@@ -18,6 +19,9 @@ import ResponsiveText from '@/components/primitives/ResponsiveText';
 import { useAppState } from '@/app/AppState';
 import { GRID_GAP_CLASSNAME } from '@/components';
 import { useAppText } from '@/i18n/state/client';
+import { requestDetailVideoMinimize } from './video-mini-player';
+
+const MINIMIZE_PULL_DISTANCE = 64;
 
 export default function MediaHeader({
   photos,
@@ -50,6 +54,32 @@ export default function MediaHeader({
   const { isGridHighDensity } = useAppState();
 
   const appText = useAppText();
+  const pullStartRef = useRef<{ x: number, y: number } | undefined>(undefined);
+
+  const onTitleTouchStart = (event: TouchEvent<HTMLDivElement>) => {
+    if (!selectedMedia || !isVideoMedia(selectedMedia) || event.touches.length !== 1) {
+      pullStartRef.current = undefined;
+      return;
+    }
+    const target = event.target as HTMLElement | null;
+    if (target?.closest('a,button,input,textarea,select')) {
+      pullStartRef.current = undefined;
+      return;
+    }
+    const touch = event.touches[0];
+    pullStartRef.current = { x: touch.clientX, y: touch.clientY };
+  };
+  const onTitleTouchEnd = (event: TouchEvent<HTMLDivElement>) => {
+    const start = pullStartRef.current;
+    pullStartRef.current = undefined;
+    const touch = event.changedTouches[0];
+    if (!start || !touch || !selectedMedia) { return; }
+    const deltaX = touch.clientX - start.x;
+    const deltaY = touch.clientY - start.y;
+    if (deltaY >= MINIMIZE_PULL_DISTANCE && deltaY > Math.abs(deltaX) * 1.2) {
+      requestDetailVideoMinimize(selectedMedia.id);
+    }
+  };
 
   const entityVerb = _entityVerb ?? appText.photo.photo.toLocaleUpperCase();
 
@@ -116,7 +146,14 @@ export default function MediaHeader({
     </DivDebugBaselineGrid>;
 
   return (
-    <AnimateItems
+    <div
+      onTouchStart={onTitleTouchStart}
+      onTouchEnd={onTitleTouchEnd}
+      className={selectedMedia && isVideoMedia(selectedMedia)
+        ? 'touch-pan-y'
+        : undefined}
+    >
+      <AnimateItems
       type="bottom"
       distanceOffset={10}
       animateOnFirstLoadOnly
@@ -216,6 +253,7 @@ export default function MediaHeader({
           </div>,
         )}
       </Fragment>]}
-    />
+      />
+    </div>
   );
 }

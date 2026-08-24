@@ -187,8 +187,15 @@ export const pathForAdminUploadUrl = (
   return `${PATH_ADMIN_UPLOADS}/${encodeURIComponent(url)}${queryString ? `?${queryString}` : ''}`;
 };
 
-export const pathForAdminMediaEdit = (photo: MediaOrMediaId) =>
-  `${PATH_ADMIN_MEDIA}/${getMediaId(photo)}/${EDIT}`;
+export const pathForAdminMediaEdit = (
+  photo: MediaOrMediaId,
+  returnTo?: string,
+) => {
+  const path = `${PATH_ADMIN_MEDIA}/${getMediaId(photo)}/${EDIT}`;
+  return returnTo
+    ? `${path}?returnTo=${encodeURIComponent(returnTo)}`
+    : path;
+};
 
 export const pathForAdminAlbumEdit = (album: AlbumOrAlbumSlug) =>
   `${PATH_ADMIN_ALBUMS}/${getAlbumSlug(album)}/${EDIT}`;

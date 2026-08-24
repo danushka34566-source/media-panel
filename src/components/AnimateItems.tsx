@@ -28,6 +28,8 @@ interface Props extends AnimationConfig {
   // settles. The animation itself still uses the original identity-transform
   // target so its interpolation remains identical to upstream.
   removeTransformAfterAnimation?: boolean
+  layoutItems?: boolean
+  layoutDependency?: string | number | boolean
   animateOnFirstLoadOnly?: boolean
   staggerOnFirstLoadOnly?: boolean
   onAnimationComplete?: () => void
@@ -49,6 +51,8 @@ function AnimateItems({
   distanceOffset = 20,
   animateFromAppState,
   removeTransformAfterAnimation = false,
+  layoutItems = false,
+  layoutDependency,
   animateOnFirstLoadOnly,
   staggerOnFirstLoadOnly,
   onAnimationComplete,
@@ -132,6 +136,8 @@ function AnimateItems({
       {items.map((item, index) =>
         <motion.div
           key={itemKeys ? itemKeys[index] : index}
+          layout={layoutItems}
+          layoutDependency={layoutDependency}
           className={classNameItem}
           variants={{
             hidden,

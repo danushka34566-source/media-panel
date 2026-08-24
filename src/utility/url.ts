@@ -30,16 +30,26 @@ export const downloadFileFromBrowser = async (
   url: string,
   fileName: string,
 ) => {
-  const blob = await fetch(url)
-    .then(response => response.blob());
-  const downloadUrl = window.URL.createObjectURL(blob);
+  // Ask the panel to authorize and sign the object, but never stream the file
+  // through the application host. The resulting URL points straight at the
+  // storage delivery service and expires shortly after it is created.
+  const signingUrl = `/api/media/full-video?url=${encodeURIComponent(url)}` +
+    `&download=1&filename=${encodeURIComponent(fileName)}`;
+  const response = await fetch(signingUrl, {
+    method: 'HEAD',
+    credentials: 'same-origin',
+    cache: 'no-store',
+  });
+  const directUrl = response.ok
+    ? response.headers.get('x-media-signed-download') ?? url
+    : url;
   const link = document.createElement('a');
-  link.href = downloadUrl;
+  link.href = directUrl;
   link.download = fileName;
+  link.rel = 'noopener';
   document.body.appendChild(link);
   link.click();
   document.body.removeChild(link);
-  window.URL.revokeObjectURL(downloadUrl);
 };
 
 // Necessary for useClientSearchParams to see window.location changes,

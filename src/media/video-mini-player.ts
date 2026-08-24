@@ -12,12 +12,35 @@ export type DockedVideoState = {
   muted: boolean
 };
 
+export const DETAIL_VIDEO_MINIMIZE_EVENT = 'media-detail-video-minimize';
+export const PERSISTENT_VIDEO_FULLSCREEN_EVENT =
+  'persistent-video-fullscreen';
+export const PERSISTENT_VIDEO_PIP_EVENT = 'persistent-video-picture-in-picture';
+
+export const requestDetailVideoMinimize = (mediaId: string) => {
+  window.dispatchEvent(new CustomEvent(DETAIL_VIDEO_MINIMIZE_EVENT, {
+    detail: { mediaId },
+  }));
+};
+
+export const requestPersistentVideoFullscreen = (mediaId: string) => {
+  window.dispatchEvent(new CustomEvent(PERSISTENT_VIDEO_FULLSCREEN_EVENT, {
+    detail: { mediaId },
+  }));
+};
+
+export const requestPersistentVideoPictureInPicture = (mediaId: string) => {
+  window.dispatchEvent(new CustomEvent(PERSISTENT_VIDEO_PIP_EVENT, {
+    detail: { mediaId },
+  }));
+};
+
 type Listener = () => void;
 
 const EMPTY_DOCKED_VIDEO: DockedVideoState | undefined = undefined;
 
 let dockedVideo: DockedVideoState | undefined;
-let detailVideoPageActive = false;
+let detailVideoPageMediaId: string | undefined;
 const listeners = new Set<Listener>();
 
 const notify = () => {
@@ -55,10 +78,13 @@ export const clearDockedVideo = () => {
   notify();
 };
 
-export const setDetailVideoPageActive = (active: boolean) => {
-  if (detailVideoPageActive === active) { return; }
-  detailVideoPageActive = active;
+export const setDetailVideoPageActive = (mediaId: string, active: boolean) => {
+  const next = active
+    ? mediaId
+    : detailVideoPageMediaId === mediaId ? undefined : detailVideoPageMediaId;
+  if (detailVideoPageMediaId === next) { return; }
+  detailVideoPageMediaId = next;
   notify();
 };
 
-export const isDetailVideoPageActive = () => detailVideoPageActive;
+export const getActiveDetailVideoMediaId = () => detailVideoPageMediaId;

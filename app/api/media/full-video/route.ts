@@ -23,21 +23,33 @@ const signedDownloads = new Map<string, {
   value: Promise<{ url: string }>
 }>();
 
-const getSignedDownload = (key: string) => {
-  const cached = signedDownloads.get(key);
+const getSignedDownload = (key: string, downloadName?: string) => {
+  const cacheKey = downloadName ? `${key}\u0000${downloadName}` : key;
+  const cached = signedDownloads.get(cacheKey);
   if (cached && cached.expiresAt > Date.now()) { return cached; }
-  const value = driveCreatePresignedDownload(key);
+  const value = driveCreatePresignedDownload(key, { downloadName });
   const signedDownload = {
     value,
     expiresAt: Date.now() + SIGNED_URL_TTL_MS,
   };
-  signedDownloads.set(key, signedDownload);
+  signedDownloads.set(cacheKey, signedDownload);
   void value.catch(() => {
-    if (signedDownloads.get(key)?.value === value) {
-      signedDownloads.delete(key);
+    if (signedDownloads.get(cacheKey)?.value === value) {
+      signedDownloads.delete(cacheKey);
     }
   });
   return signedDownload;
+};
+
+const requestedDownloadName = (request: NextRequest) => {
+  if (request.nextUrl.searchParams.get('download') !== '1') {
+    return undefined;
+  }
+  const value = request.nextUrl.searchParams.get('filename')
+    ?.replace(/[\u0000-\u001f\u007f]/g, '')
+    .replace(/[\\/]/g, '-')
+    .trim();
+  return value ? value.slice(0, 220) : undefined;
 };
 
 const requestUrl = (request: NextRequest) => {
@@ -66,7 +78,10 @@ export async function GET(request: NextRequest) {
 
   try {
     const key = driveKeyFromUrl(sourceUrl.toString());
-    const signed = await getSignedDownload(key).value;
+    const signed = await getSignedDownload(
+      key,
+      requestedDownloadName(request),
+    ).value;
     if (!isHlsManifestUrl(sourceUrl.toString())) {
       return NextResponse.redirect(signed.url, {
         status: 302,
@@ -114,6 +129,7 @@ export async function HEAD(request: NextRequest) {
   try {
     const signedDownload = getSignedDownload(
       driveKeyFromUrl(sourceUrl.toString()),
+      requestedDownloadName(request),
     );
     const signed = await signedDownload.value;
     return new NextResponse(null, {

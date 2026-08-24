@@ -151,13 +151,20 @@ export const driveCreatePresignedUpload = async (key: string, contentType?: stri
 };
 
 /** Create a short-lived Drive download URL without exposing the project key. */
-export const driveCreatePresignedDownload = async (key: string): Promise<{ url: string }> => {
+export const driveCreatePresignedDownload = async (
+  key: string,
+  options?: { downloadName?: string },
+): Promise<{ url: string }> => {
   const search = new URLSearchParams({
     projectId: DRIVE_PROJECT_ID,
     bucket: DRIVE_BUCKET,
     key,
     expiresInSeconds: '900',
   });
+  if (options?.downloadName) {
+    search.set('download', '1');
+    search.set('downloadName', options.downloadName);
+  }
   const response = await fetchWithTimeout(
     `${DRIVE_API_BASE_URL}/api/v1/files/download?${search.toString()}`,
     { headers: headers(), cache: 'no-store' },

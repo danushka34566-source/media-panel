@@ -34,6 +34,7 @@ export default function MediaEditPageClient({
   uniqueFilms,
   hasAiTextGeneration,
   imageThumbnailBase64,
+  returnTo,
 }: {
   photo: Media
   photoAlbumTitles: string[]
@@ -47,6 +48,7 @@ export default function MediaEditPageClient({
   uniqueFilms: Films
   hasAiTextGeneration: boolean
   imageThumbnailBase64: string
+  returnTo?: string
 }) {
   const photoForm = convertMediaToFormData(photo);
   const appText = useAppText();
@@ -85,8 +87,10 @@ export default function MediaEditPageClient({
 
   return (
     <AdminChildPage
-      backPath={PATH_ADMIN_MEDIA}
-      backLabel={isVideo ? 'Library' : appText.photo.photoPlural}
+      backPath={returnTo || PATH_ADMIN_MEDIA}
+      backLabel={returnTo
+        ? 'Back'
+        : isVideo ? 'Library' : appText.photo.photoPlural}
       breadcrumb={pending && updatedTitle
         ? updatedTitle
         : photo.title || photo.id}

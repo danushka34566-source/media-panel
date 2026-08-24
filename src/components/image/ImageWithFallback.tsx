@@ -40,15 +40,33 @@ export default function ImageWithFallback({
 
   useEffect(() => {
     const image = ref.current;
+    const syncLoadedState = () => {
+      if (isImageLoaded(image)) { setIsLoading(false); }
+    };
     if (isImageLoaded(image)) {
       // Eager offscreen images can finish before React attaches onLoad. Sync
       // from the DOM so their fallback cannot remain over a decoded image.
       // eslint-disable-next-line react-hooks/set-state-in-effect
       setIsLoading(false);
-      return;
+    } else {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setFadeFallbackTransition(true);
     }
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    setFadeFallbackTransition(true);
+
+    // Grid-mode changes resize already-mounted lazy images. Some mobile
+    // compositors decode those images during the geometry change without
+    // delivering another React load event, leaving the opaque fallback over
+    // a valid bitmap until refresh. Reconcile from the actual image element
+    // whenever its rendered box changes.
+    const resizeObserver = typeof ResizeObserver !== 'undefined'
+      ? new ResizeObserver(syncLoadedState)
+      : undefined;
+    if (image) { resizeObserver?.observe(image); }
+    window.addEventListener('pageshow', syncLoadedState);
+    return () => {
+      resizeObserver?.disconnect();
+      window.removeEventListener('pageshow', syncLoadedState);
+    };
   }, []);
 
   const getBlurClass = () => {

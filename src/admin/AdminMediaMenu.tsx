@@ -87,7 +87,7 @@ export default function AdminMediaMenu({
         size={14}
         className="translate-x-[0.5px] translate-y-[0.5px]"
       />,
-      href: pathForAdminMediaEdit(photo.id),
+      href: pathForAdminMediaEdit(photo.id, path),
       ...showKeyCommands && { keyCommand: KEY_COMMANDS.edit },
     }, {
       label: appText.admin.quickEdit,
@@ -172,6 +172,7 @@ export default function AdminMediaMenu({
     isFav,
     shouldRedirectFav,
     redirectPathOnPrivateToggle,
+    path,
     revalidateMedia,
     setIsQuickEditOpen,
   ]);

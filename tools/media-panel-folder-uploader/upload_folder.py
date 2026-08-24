@@ -333,7 +333,7 @@ class DriveClient:
     def multipart(self, payload: dict[str, Any]) -> dict[str, Any]:
         headers = {
             "Content-Type": "application/json",
-            "User-Agent": "media-panel-folder-uploader/2",
+            "User-Agent": "drive-folder-uploader/3",
             "Authorization": f"Bearer {self.api_key}",
             "X-Drive-Project": self.project_id,
             "X-Drive-Bucket": self.bucket,
@@ -362,6 +362,41 @@ class DriveClient:
         if data.get("error"):
             raise UploadError(str(data["error"]))
         return data
+
+    def object_size(self, key: str) -> int | None:
+        encoded_key = "/".join(
+            urllib.parse.quote(part, safe="") for part in key.split("/")
+        )
+        endpoint_parts = urllib.parse.urlsplit(self.endpoint)
+        url = urllib.parse.urlunsplit((
+            endpoint_parts.scheme,
+            endpoint_parts.netloc,
+            f"/api/v1/storage/object/{encoded_key}",
+            "",
+            "",
+        ))
+        request = urllib.request.Request(
+            url,
+            method="HEAD",
+            headers={
+                "User-Agent": "drive-folder-uploader/3",
+                "Authorization": f"Bearer {self.api_key}",
+                "X-Drive-Project": self.project_id,
+                "X-Drive-Bucket": self.bucket,
+            },
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=self.timeout) as response:
+                value = response.headers.get("Content-Length")
+                return int(value) if value is not None else None
+        except urllib.error.HTTPError as error:
+            if error.code == 404:
+                return None
+            raise UploadError(
+                f"Drive object verification returned HTTP {error.code}"
+            ) from error
+        except (urllib.error.URLError, TimeoutError, OSError) as error:
+            raise UploadError(f"Unable to verify Drive object: {error}") from error
 
 
 def put_part(
@@ -668,16 +703,38 @@ def upload_file(
         "parts": parts,
     }
     completion: dict[str, Any] | None = None
+    completion_error: UploadError | None = None
     for attempt in range(3):
         try:
             completion = client.multipart(completion_payload)
             break
         except UploadError as error:
+            completion_error = error
             if "HTTP 5" not in str(error) or attempt == 2:
-                raise
+                break
             time.sleep(2 ** attempt)
     if completion is None:
-        raise UploadError("Multipart completion returned no response")
+        # A storage commit may succeed before the API's audit/response layer
+        # fails. Confirm the exact object size before deciding this upload is
+        # incomplete; never guess success from a generic 500 alone.
+        verified_size = client.object_size(record["key"])
+        if verified_size != size:
+            raise completion_error or UploadError(
+                "Multipart completion returned no response"
+            )
+        completion = {
+            "ok": True,
+            "action": "complete",
+            "key": record["key"],
+            "verifiedSize": verified_size,
+            "recoveredFromAmbiguousResponse": True,
+        }
+        append_trace(
+            record,
+            "storage_completion_verified_after_error",
+            error=str(completion_error) if completion_error else None,
+            size=verified_size,
+        )
     record.update(
         status="uploaded",
         uploaded_bytes=size,
@@ -1461,10 +1518,10 @@ def launch_compact_gui() -> int:
 
 
 def launch_modern_gui() -> int:
-    """Small, rounded Windows desktop utility powered by CustomTkinter."""
+    """Drive Uploader desktop utility powered by CustomTkinter."""
     try:
         import customtkinter as ctk
-        from tkinter import filedialog, messagebox
+        from tkinter import filedialog, messagebox, ttk
     except ImportError as error:
         log(f"CustomTkinter is required for the uploader GUI: {error}")
         return 2
@@ -1477,16 +1534,18 @@ def launch_modern_gui() -> int:
     root = ctk.CTk()
     self_test = os.getenv("MEDIA_PANEL_UPLOADER_GUI_SELF_TEST") == "1"
     if self_test: root.withdraw()
-    root.title("Media Panel Upload")
-    root.geometry("760x630")
-    root.minsize(680, 540)
-    root.configure(fg_color="#171717")
+    root.title("Drive Uploader")
+    root.geometry("780x620")
+    root.minsize(660, 520)
+    root.configure(fg_color="#111111")
     root.grid_columnconfigure(0, weight=1)
     root.grid_rowconfigure(2, weight=1)
 
-    font_title = ctk.CTkFont(family="Segoe UI", size=17, weight="bold")
-    font_body = ctk.CTkFont(family="Segoe UI", size=12)
-    font_small = ctk.CTkFont(family="Segoe UI", size=11)
+    font_title = ctk.CTkFont(
+        family="Segoe UI Variable Display", size=21, weight="bold",
+    )
+    font_body = ctk.CTkFont(family="Segoe UI Variable Text", size=12)
+    font_small = ctk.CTkFont(family="Segoe UI Variable Text", size=11)
     profile_name = ctk.StringVar(value=str(credential_store.get("selected", "")))
     drive_url = ctk.StringVar(value=os.getenv("DRIVE_STORAGE_BASE_URL", ""))
     api_key = ctk.StringVar(value=os.getenv("DRIVE_STORAGE_API_KEY", ""))
@@ -1495,80 +1554,181 @@ def launch_modern_gui() -> int:
     source_folder = ctk.StringVar(value=str(settings.get("source_folder", "")))
     recursive = ctk.BooleanVar(value=bool(settings.get("recursive", True)))
     retry_forever = ctk.BooleanVar(value=bool(settings.get("retry_forever", True)))
-    part_workers = ctk.IntVar(value=int(settings.get("workers", 4)))
-    file_workers = ctk.IntVar(value=int(settings.get("file_workers", 2)))
-    part_size = ctk.IntVar(value=int(settings.get("part_size_mb", 8)))
+    part_workers = ctk.IntVar(value=int(settings.get("workers", 8)))
+    file_workers = ctk.IntVar(value=int(settings.get("file_workers", 4)))
+    part_size = ctk.IntVar(value=int(settings.get("part_size_mb", 16)))
+    maximum_speed = ctk.BooleanVar(value=bool(settings.get("maximum_speed", True)))
     status = ctk.StringVar(value="Ready")
     overall = ctk.DoubleVar(value=0)
     events: queue.Queue[tuple[str, object]] = queue.Queue()
     latest_progress: dict[str, str] = {}
     progress_lock = threading.Lock()
     child: subprocess.Popen[str] | None = None
-    rows: dict[str, tuple[ctk.CTkLabel, ctk.CTkLabel]] = {}
+    rows: dict[str, str] = {}
     progress_values: dict[str, float] = {}
-    visible_row_limit = 120
     total_files = 0
 
     header = ctk.CTkFrame(root, fg_color="transparent")
-    header.grid(row=0, column=0, sticky="ew", padx=22, pady=(18, 10)); header.grid_columnconfigure(0, weight=1)
-    ctk.CTkLabel(header, text="Media Panel Upload", font=font_title, text_color="#f5f5f5").grid(row=0, column=0, sticky="w")
-    ctk.CTkLabel(header, textvariable=status, font=font_small, text_color="#a3a3a3").grid(row=0, column=1, sticky="e")
+    header.grid(row=0, column=0, sticky="ew", padx=22, pady=(15, 10)); header.grid_columnconfigure(0, weight=1)
+    title_stack = ctk.CTkFrame(header, fg_color="transparent")
+    title_stack.grid(row=0, column=0, sticky="w")
+    ctk.CTkLabel(title_stack, text="Drive Uploader", font=font_title, text_color="#fafafa").grid(row=0, column=0, sticky="w")
+    ctk.CTkLabel(
+        title_stack,
+        text="Direct, resumable uploads to Drive storage",
+        font=font_small,
+        text_color="#8f8f8f",
+    ).grid(row=1, column=0, sticky="w", pady=(1, 0))
+    status_pill = ctk.CTkFrame(
+        header, corner_radius=14, fg_color="#1f1f1f",
+        border_width=1, border_color="#333333",
+    )
+    settings_button = ctk.CTkButton(
+        header,
+        text="Hide settings",
+        width=92,
+        height=28,
+        corner_radius=7,
+        font=font_small,
+        fg_color="#252525",
+        hover_color="#303030",
+        command=lambda: toggle_setup(),
+    )
+    settings_button.grid(row=0, column=1, sticky="e", padx=(8, 8))
+    status_pill.grid(row=0, column=2, sticky="e")
+    ctk.CTkLabel(
+        status_pill, text="●", font=ctk.CTkFont(size=9),
+        text_color="#60a5fa",
+    ).pack(side="left", padx=(10, 6), pady=5)
+    ctk.CTkLabel(
+        status_pill, textvariable=status, font=font_small,
+        text_color="#d4d4d4",
+    ).pack(side="left", padx=(0, 11), pady=5)
 
-    setup = ctk.CTkFrame(root, corner_radius=8, fg_color="#212121", border_width=1, border_color="#303030")
-    setup.grid(row=1, column=0, sticky="ew", padx=22, pady=(0, 10)); setup.grid_columnconfigure(1, weight=1)
+    setup = ctk.CTkFrame(root, corner_radius=12, fg_color="#1b1b1b", border_width=1, border_color="#303030")
+    setup.grid(row=1, column=0, sticky="ew", padx=22, pady=(0, 9)); setup.grid_columnconfigure(1, weight=1)
+    setup_visible = True
+
+    def toggle_setup(force_hidden: bool | None = None):
+        nonlocal setup_visible
+        should_show = not setup_visible if force_hidden is None else not force_hidden
+        setup_visible = should_show
+        if should_show:
+            setup.grid()
+            settings_button.configure(text="Hide settings")
+        else:
+            setup.grid_remove()
+            settings_button.configure(text="Settings")
     ctk.CTkLabel(setup, text="UPLOAD SETTINGS", font=ctk.CTkFont(family="Segoe UI", size=10, weight="bold"), text_color="#a3a3a3").grid(row=0, column=0, columnspan=3, sticky="w", padx=16, pady=(13, 8))
 
     def field(row: int, label: str, variable, secret=False):
         ctk.CTkLabel(setup, text=label, font=font_small, text_color="#b0b0b0").grid(row=row, column=0, sticky="w", padx=(16, 10), pady=4)
-        entry = ctk.CTkEntry(setup, textvariable=variable, show="•" if secret else "", height=30, corner_radius=5, font=font_small, text_color="#f5f5f5", border_color="#3a3a3a", fg_color="#191919")
+        entry = ctk.CTkEntry(setup, textvariable=variable, show="•" if secret else "", height=28, corner_radius=7, font=font_small, text_color="#f5f5f5", border_color="#3a3a3a", fg_color="#151515")
         entry.grid(row=row, column=1, columnspan=2, sticky="ew", padx=(0, 16), pady=4)
         return entry
 
     ctk.CTkLabel(setup, text="Profile", font=font_small, text_color="#b0b0b0").grid(row=1, column=0, sticky="w", padx=(16, 10), pady=4)
-    picker = ctk.CTkComboBox(setup, variable=profile_name, values=sorted(profiles) or [""], height=30, corner_radius=5, font=font_small, command=lambda _value: load_profile(), text_color="#f5f5f5", dropdown_text_color="#f5f5f5", dropdown_fg_color="#242424", fg_color="#191919", border_color="#3a3a3a", button_color="#303030")
+    picker = ctk.CTkComboBox(setup, variable=profile_name, values=sorted(profiles) or [""], height=28, corner_radius=7, font=font_small, command=lambda _value: load_profile(), text_color="#f5f5f5", dropdown_text_color="#f5f5f5", dropdown_fg_color="#242424", fg_color="#151515", border_color="#3a3a3a", button_color="#303030")
     picker.grid(row=1, column=1, sticky="ew", pady=4)
     profile_actions = ctk.CTkFrame(setup, fg_color="transparent"); profile_actions.grid(row=1, column=2, sticky="e", padx=(8, 16), pady=4)
     field(2, "Storage URL", drive_url); field(3, "API key", api_key, True); field(4, "Project ID", project_id); field(5, "Bucket", bucket)
     ctk.CTkLabel(setup, text="Source folder", font=font_small, text_color="#b0b0b0").grid(row=6, column=0, sticky="w", padx=(16, 10), pady=4)
-    folder_entry = ctk.CTkEntry(setup, textvariable=source_folder, height=30, corner_radius=5, font=font_small, text_color="#f5f5f5", border_color="#3a3a3a", fg_color="#191919")
+    folder_entry = ctk.CTkEntry(setup, textvariable=source_folder, height=28, corner_radius=7, font=font_small, text_color="#f5f5f5", border_color="#3a3a3a", fg_color="#151515")
     folder_entry.grid(row=6, column=1, sticky="ew", pady=4)
     def choose_folder():
         selected = filedialog.askdirectory(initialdir=source_folder.get() or None)
         if selected: source_folder.set(selected)
-    ctk.CTkButton(setup, text="Browse", width=76, height=30, corner_radius=5, font=font_small, fg_color="#303030", text_color="#ededed", hover_color="#3a3a3a", command=choose_folder).grid(row=6, column=2, padx=(8, 16), pady=4)
+    ctk.CTkButton(setup, text="Browse", width=76, height=28, corner_radius=7, font=font_small, fg_color="#303030", text_color="#ededed", hover_color="#3a3a3a", command=choose_folder).grid(row=6, column=2, padx=(8, 16), pady=4)
 
     divider = ctk.CTkFrame(setup, height=1, fg_color="#303030"); divider.grid(row=7, column=0, columnspan=3, sticky="ew", padx=16, pady=(9, 8))
     advanced = ctk.CTkFrame(setup, fg_color="transparent"); advanced.grid(row=8, column=0, columnspan=3, sticky="ew", padx=16, pady=(0, 13)); advanced.grid_columnconfigure(1, weight=1)
     ctk.CTkCheckBox(advanced, text="Include subfolders", variable=recursive, font=font_small, text_color="#dedede", fg_color="#2563eb", hover_color="#1d4ed8", border_color="#555555", checkbox_width=16, checkbox_height=16, corner_radius=4).grid(row=0, column=0, sticky="w")
     ctk.CTkCheckBox(advanced, text="Retry until complete", variable=retry_forever, font=font_small, text_color="#dedede", fg_color="#2563eb", hover_color="#1d4ed8", border_color="#555555", checkbox_width=16, checkbox_height=16, corner_radius=4).grid(row=0, column=1, sticky="w", padx=(16, 0))
+    ctk.CTkCheckBox(advanced, text="Maximum speed", variable=maximum_speed, font=font_small, text_color="#dedede", fg_color="#2563eb", hover_color="#1d4ed8", border_color="#555555", checkbox_width=16, checkbox_height=16, corner_radius=4).grid(row=1, column=0, columnspan=2, sticky="w", pady=(8, 0))
     def small_number(parent, text, variable, minimum, maximum, col):
         ctk.CTkLabel(parent, text=text, font=font_small, text_color="#a3a3a3").grid(row=0, column=col, padx=(13, 5))
         ctk.CTkEntry(parent, textvariable=variable, width=46, height=28, corner_radius=5, justify="center", font=font_small, text_color="#f5f5f5", border_color="#3a3a3a", fg_color="#191919").grid(row=0, column=col + 1)
     small_number(advanced, "Files", file_workers, 1, 8, 2); small_number(advanced, "Parts", part_workers, 1, 16, 4); small_number(advanced, "MB", part_size, 5, 512, 6)
 
-    transfers = ctk.CTkFrame(root, corner_radius=8, fg_color="#212121", border_width=1, border_color="#303030")
-    transfers.grid(row=2, column=0, sticky="nsew", padx=22, pady=(0, 10)); transfers.grid_columnconfigure(0, weight=1); transfers.grid_rowconfigure(1, weight=1)
+    transfers = ctk.CTkFrame(root, corner_radius=12, fg_color="#1b1b1b", border_width=1, border_color="#303030")
+    transfers.grid(row=2, column=0, sticky="nsew", padx=22, pady=(0, 9)); transfers.grid_columnconfigure(0, weight=1); transfers.grid_rowconfigure(1, weight=1)
     ctk.CTkLabel(transfers, text="TRANSFERS", font=ctk.CTkFont(family="Segoe UI", size=10, weight="bold"), text_color="#a3a3a3").grid(row=0, column=0, sticky="w", padx=16, pady=(12, 7))
-    transfer_list = ctk.CTkScrollableFrame(transfers, corner_radius=5, fg_color="#191919", height=150)
-    transfer_list.grid(row=1, column=0, sticky="nsew", padx=12, pady=(0, 12)); transfer_list.grid_columnconfigure(0, weight=1)
+    table_style = ttk.Style(root)
+    try:
+        table_style.theme_use("clam")
+    except Exception:
+        pass
+    table_style.configure(
+        "DriveUploader.Treeview",
+        background="#191919",
+        fieldbackground="#191919",
+        foreground="#ededed",
+        rowheight=27,
+        borderwidth=0,
+        relief="flat",
+        bordercolor="#191919",
+        lightcolor="#191919",
+        darkcolor="#191919",
+        font=("Segoe UI", 9),
+    )
+    table_style.layout(
+        "DriveUploader.Treeview",
+        [("Treeview.treearea", {"sticky": "nswe"})],
+    )
+    table_style.configure(
+        "DriveUploader.Treeview.Heading",
+        background="#242424",
+        foreground="#d4d4d4",
+        relief="flat",
+        borderwidth=0,
+        bordercolor="#242424",
+        lightcolor="#242424",
+        darkcolor="#242424",
+        font=("Segoe UI Semibold", 9),
+    )
+    table_style.map(
+        "DriveUploader.Treeview",
+        background=[("selected", "#17365f"), ("!selected", "#191919")],
+        foreground=[("selected", "#ffffff"), ("!selected", "#ededed")],
+    )
+    table_style.map(
+        "DriveUploader.Treeview.Heading",
+        background=[("active", "#2b2b2b"), ("!active", "#242424")],
+        foreground=[("active", "#ffffff"), ("!active", "#d4d4d4")],
+    )
+    transfer_table = ttk.Treeview(
+        transfers,
+        columns=("file", "status"),
+        show="headings",
+        selectmode="browse",
+        style="DriveUploader.Treeview",
+    )
+    transfer_table.heading("file", text="File")
+    transfer_table.heading("status", text="Status")
+    transfer_table.column("file", width=430, minwidth=180, anchor="w")
+    transfer_table.column("status", width=250, minwidth=160, anchor="e")
+    transfer_scrollbar = ctk.CTkScrollbar(
+        transfers,
+        command=transfer_table.yview,
+    )
+    transfer_table.configure(yscrollcommand=transfer_scrollbar.set)
+    transfer_table.grid(row=1, column=0, sticky="nsew", padx=(12, 4), pady=(0, 12))
+    transfer_scrollbar.grid(row=1, column=1, sticky="ns", padx=(0, 12), pady=(0, 12))
 
     def scroll_transfers_to(source: str):
         """Keep the file that just changed visible as the queue advances."""
-        canvas = getattr(transfer_list, "_parent_canvas", None)
-        if not canvas or source not in rows:
-            return
-        row_index = list(rows).index(source)
-        fraction = row_index / max(len(rows) - 1, 1)
-        root.after_idle(lambda: canvas.yview_moveto(fraction))
+        item = rows.get(source)
+        if item:
+            transfer_table.see(item)
 
-    footer = ctk.CTkFrame(root, corner_radius=0, fg_color="#212121", border_width=1, border_color="#303030")
-    footer.grid(row=3, column=0, sticky="ew"); footer.grid_columnconfigure(0, weight=1)
-    ctk.CTkProgressBar(footer, variable=overall, height=4, corner_radius=2, progress_color="#3b82f6", fg_color="#383838").grid(row=0, column=0, columnspan=3, sticky="ew", padx=22, pady=(11, 7))
-    detail = ctk.CTkLabel(footer, text="Ready to upload", font=font_small, text_color="#a3a3a3"); detail.grid(row=1, column=0, sticky="w", padx=22, pady=(0, 12))
-    start_button = ctk.CTkButton(footer, text="Start upload", width=108, height=32, corner_radius=5, font=font_small, fg_color="#2563eb", hover_color="#1d4ed8", command=lambda: start())
-    start_button.grid(row=1, column=1, padx=(8, 6), pady=(0, 12))
-    stop_button = ctk.CTkButton(footer, text="Stop", width=68, height=32, corner_radius=5, font=font_small, fg_color="#303030", text_color="#ededed", hover_color="#3a3a3a", state="disabled", command=lambda: stop())
-    stop_button.grid(row=1, column=2, padx=(0, 22), pady=(0, 12))
+    footer = ctk.CTkFrame(root, corner_radius=12, fg_color="#1b1b1b", border_width=1, border_color="#303030")
+    footer.grid(row=3, column=0, sticky="ew", padx=22, pady=(0, 16)); footer.grid_columnconfigure(0, weight=1)
+    ctk.CTkProgressBar(footer, variable=overall, height=5, corner_radius=3, progress_color="#3b82f6", fg_color="#343434").grid(row=0, column=0, columnspan=3, sticky="ew", padx=16, pady=(10, 7))
+    detail = ctk.CTkLabel(footer, text="Ready to upload", font=font_small, text_color="#a3a3a3"); detail.grid(row=1, column=0, sticky="w", padx=16, pady=(0, 10))
+    start_button = ctk.CTkButton(footer, text="Start upload", width=108, height=30, corner_radius=7, font=font_small, fg_color="#2563eb", hover_color="#1d4ed8", command=lambda: start())
+    start_button.grid(row=1, column=1, padx=(8, 6), pady=(0, 10))
+    stop_button = ctk.CTkButton(footer, text="Stop", width=64, height=30, corner_radius=7, font=font_small, fg_color="#303030", text_color="#ededed", hover_color="#3a3a3a", state="disabled", command=lambda: stop())
+    stop_button.grid(row=1, column=2, padx=(0, 16), pady=(0, 10))
 
     def load_profile():
         profile = profiles.get(profile_name.get().strip())
@@ -1594,21 +1754,11 @@ def launch_modern_gui() -> int:
             progress_values[source] = float(match.group(1))
         row = rows.get(source)
         if row:
-            row[1].configure(text=text)
+            transfer_table.item(row, values=(source, text))
         else:
-            if len(rows) >= visible_row_limit:
-                oldest_source, oldest_row = next(iter(rows.items()))
-                oldest_row[0].destroy()
-                oldest_row[1].destroy()
-                del rows[oldest_source]
-            line = ctk.CTkFrame(transfer_list, corner_radius=5, fg_color="#242424")
-            line.grid(column=0, sticky="ew", pady=2); line.grid_columnconfigure(0, weight=1)
-            filename = ctk.CTkLabel(line, text=source, anchor="w", font=font_small, text_color="#ededed")
-            filename.grid(row=0, column=0, sticky="ew", padx=10, pady=6)
-            message = ctk.CTkLabel(line, text=text, anchor="e", font=font_small, text_color="#a3a3a3")
-            message.grid(row=0, column=1, padx=10, pady=6)
-            rows[source] = (filename, message)
-        scroll_transfers_to(source)
+            rows[source] = transfer_table.insert(
+                "", "end", values=(source, text),
+            )
     def update_overall():
         percentages = list(progress_values.values())
         completed = sum(value >= 100 for value in percentages)
@@ -1616,12 +1766,28 @@ def launch_modern_gui() -> int:
         # zero, so the footer always represents the entire selected folder.
         total = max(total_files, len(rows))
         overall.set(sum(percentages) / total / 100 if total else 0)
+        active = sum(0 < value < 100 for value in percentages)
+        queued = max(0, total - completed - active)
         detail.configure(
-            text=f"{completed} / {total} complete" if total else "Preparing files",
+            text=(
+                f"{completed} / {total} complete  \u2022  "
+                f"{active} uploading  \u2022  {queued} queued"
+                if total else "Preparing files"
+            ),
         )
     def read_output(process):
         assert process.stdout is not None
-        for line in iter(process.stdout.readline, ""): events.put(("log", line))
+        for raw_line in iter(process.stdout.readline, ""):
+            line = raw_line.rstrip()
+            if line.startswith("\x1ePROGRESS\t"):
+                try:
+                    _, source, text = line.split("\t", 2)
+                except ValueError:
+                    continue
+                with progress_lock:
+                    latest_progress[source] = text
+            else:
+                events.put(("log", line))
         events.put(("finished", process.wait()))
     def start():
         nonlocal child, total_files
@@ -1629,8 +1795,14 @@ def launch_modern_gui() -> int:
         folder = Path(source_folder.get()).expanduser()
         if not folder.is_dir(): messagebox.showerror("Source folder", "Select an existing folder."); return
         if not save_profile(): return
-        workers = max(1, min(16, part_workers.get())); files = max(1, min(8, file_workers.get())); size = max(5, min(512, part_size.get()))
-        save_gui_settings({"source_folder": str(folder), "recursive": recursive.get(), "retry_forever": retry_forever.get(), "workers": workers, "file_workers": files, "part_size_mb": size})
+        workers = max(1, min(16, part_workers.get()))
+        files = max(1, min(8, file_workers.get()))
+        size = max(5, min(512, part_size.get()))
+        if maximum_speed.get():
+            workers = max(8, workers)
+            files = max(4, files)
+            size = max(16, size)
+        save_gui_settings({"source_folder": str(folder), "recursive": recursive.get(), "retry_forever": retry_forever.get(), "maximum_speed": maximum_speed.get(), "workers": workers, "file_workers": files, "part_size_mb": size})
         command = [sys.executable, "-u", str(Path(__file__).resolve()), str(folder), "--drive-url", drive_url.get().strip(), "--project-id", project_id.get().strip(), "--bucket", bucket.get().strip(), "--profile", profile_name.get().strip(), "--part-workers", str(workers), "--file-workers", str(files), "--part-size-mb", str(size), "--max-rounds", "0" if retry_forever.get() else "5"]
         if recursive.get(): command.append("--recursive")
         environment = os.environ.copy(); environment["DRIVE_STORAGE_API_KEY"] = api_key.get().strip()
@@ -1638,18 +1810,29 @@ def launch_modern_gui() -> int:
         # callback prevents Windows from marking the window as unresponsive.
         total_files = 0
         child = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace", env=environment, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
-        for child_widget in transfer_list.winfo_children(): child_widget.destroy()
+        transfer_table.delete(*transfer_table.get_children())
+        progress_values.clear()
+        toggle_setup(force_hidden=True)
         rows.clear(); overall.set(0); detail.configure(text=f"0 / {total_files} complete" if total_files else "Preparing files"); status.set("Uploading"); start_button.configure(state="disabled"); stop_button.configure(state="normal"); threading.Thread(target=read_output, args=(child,), daemon=True).start()
     def stop():
         if child and child.poll() is None: child.terminate(); status.set("Stopping")
     def poll():
         nonlocal child, total_files
         with progress_lock:
-            progress = dict(latest_progress)
-            latest_progress.clear()
+            sources = list(latest_progress)[:160]
+            progress = {
+                source: latest_progress.pop(source) for source in sources
+            }
         for source, text in progress.items():
             update_row(source, text)
+        if progress:
             update_overall()
+            active_sources = [
+                source for source, text in progress.items()
+                if not text.startswith("Ready")
+            ]
+            if active_sources:
+                scroll_transfers_to(active_sources[-1])
         try:
             for _ in range(50):
                 event, value = events.get_nowait()
@@ -1673,8 +1856,8 @@ def launch_modern_gui() -> int:
                     success = int(value) == 0; status.set("All uploaded; awaiting worker scan" if success else f"Stopped ({value})"); detail.configure(text="Completed; awaiting worker scan" if success else "Upload stopped"); overall.set(1 if success else overall.get()); start_button.configure(state="normal"); stop_button.configure(state="disabled"); child = None
         except queue.Empty:
             pass
-        root.after(100, poll)
-    root.after(100, poll)
+        root.after(50, poll)
+    root.after(50, poll)
     if self_test: root.update_idletasks(); root.destroy(); return 0
     root.mainloop(); return 0
 
