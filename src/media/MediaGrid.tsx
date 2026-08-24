@@ -92,11 +92,23 @@ export default function MediaGrid({
   const [smartPreviewIds, setSmartPreviewIds] = useState<Set<string>>(new Set());
   const [isMainVideoPlaying, setIsMainVideoPlaying] = useState(false);
   const [releasedDeferKey, setReleasedDeferKey] = useState<string>();
+  const [layoutAnimationKey, setLayoutAnimationKey] = useState(0);
+  const hasMountedLayoutRef = useRef(false);
   const deferKey = selectedMedia?.id ?? photos[0]?.id;
   const shouldRenderRelated = !deferInitialRender || releasedDeferKey === deferKey;
   const smartActivationFrameRef = useRef<number | undefined>(undefined);
   const pendingSmartCardIdRef = useRef<string | undefined>(undefined);
   const activeSmartCardIdRef = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    // The first effect run represents hydration, not a user layout change.
+    // Replaying the full entrance there was the source of the old mobile
+    // cards-shrinking-then-disappearing glitch.
+    if (!hasMountedLayoutRef.current) {
+      hasMountedLayoutRef.current = true;
+      return;
+    }
+    setLayoutAnimationKey(current => current + 1);
+  }, [isWideGrid, isGridHighDensity]);
   useEffect(() => {
     if (!suspendSmartPreviewsOnMainPlayback) { return; }
     const syncMainVideoPlayback = (event: Event) => {
@@ -219,6 +231,7 @@ export default function MediaGrid({
       {...{ [DATA_KEY_MEDIA_GRID]: selectable, className }}
     >
       <AnimateItems
+        key={layoutAnimationKey}
         // Keep one motion tree while layout preferences hydrate. Remounting
         // on the initial density/width update replayed the hidden scale
         // variant and made loaded cards visibly shrink away before returning.
