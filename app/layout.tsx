@@ -124,11 +124,14 @@ export default async function RootLayout({
                     )}>
                       <Nav />
                       <main>
-                        <div className={clsx(
-                          'min-h-[16rem] sm:min-h-[30rem]',
-                          'mb-12',
-                          'space-y-5',
-                        )}>
+                        <div
+                          data-page-content
+                          className={clsx(
+                            'min-h-[16rem] sm:min-h-[30rem]',
+                            'mb-12',
+                            'space-y-5',
+                          )}
+                        >
                           {children}
                         </div>
                       </main>

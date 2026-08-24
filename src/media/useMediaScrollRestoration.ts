@@ -46,6 +46,19 @@ const writePosition = (key: string, position: SavedScrollPosition) => {
   }
 };
 
+// Framer Motion transforms the visual card wrapper during the entrance
+// animation. offsetTop/offsetParent describe the stable layout position and
+// therefore keep the saved anchor from drifting when a user clicks mid-entry.
+const getLayoutTop = (element: HTMLElement) => {
+  let top = 0;
+  let current: HTMLElement | null = element;
+  while (current) {
+    top += current.offsetTop;
+    current = current.offsetParent as HTMLElement | null;
+  }
+  return top;
+};
+
 const saveCurrentScrollPosition = (
   key: string,
   previous?: SavedScrollPosition,
@@ -65,10 +78,15 @@ export const rememberMediaScrollPosition = (
   const key = getStorageKey();
   if (!key) { return; }
   const rect = anchor?.getBoundingClientRect();
+  const anchorOffset = anchor
+    ? getLayoutTop(anchor) - window.scrollY
+    : undefined;
   writePosition(key, {
     top: Math.max(0, Math.round(window.scrollY)),
     ...(anchorId && { anchorId }),
-    ...(rect && { anchorOffset: rect.top }),
+    ...(anchorOffset !== undefined
+      ? { anchorOffset }
+      : rect && { anchorOffset: rect.top }),
   });
 };
 

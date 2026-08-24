@@ -61,10 +61,10 @@ export default function PageResumeRecovery() {
             void root.offsetHeight;
             root.style.display = '';
             window.dispatchEvent(new Event('resize'));
-            const main = document.querySelector('main');
+            const content = document.querySelector('[data-page-content]');
             const hasRenderedContent = Boolean(
-              main && main.childElementCount > 0 &&
-              main.getBoundingClientRect().height > 0,
+              content && content.firstElementChild &&
+              content.getBoundingClientRect().height > 0,
             );
             // Do not refresh every route after a normal mobile resume. A
             // refresh recreates grid data and jumps the user to the top even
@@ -82,11 +82,11 @@ export default function PageResumeRecovery() {
             // fall back to one document reload. The guard prevents loops.
             fallbackTimer = window.setTimeout(() => {
               fallbackTimer = undefined;
-              const currentMain = document.querySelector('main');
+              const currentContent = document.querySelector('[data-page-content]');
               if (
-                !currentMain ||
-                currentMain.childElementCount === 0 ||
-                currentMain.getBoundingClientRect().height === 0
+                !currentContent ||
+                !currentContent.firstElementChild ||
+                currentContent.getBoundingClientRect().height === 0
               ) {
                 window.location.reload();
               }

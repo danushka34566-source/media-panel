@@ -264,6 +264,9 @@ export default function MediaGrid({
         duration={0.45}
         staggerDelay={0.015}
         distanceOffset={40}
+        // Keep the original scale entrance, but do not blank cold cards if a
+        // mobile compositor or image request interrupts the first frame.
+        fade={false}
         animateOnFirstLoadOnly={animateFirstLoadOnly}
         staggerOnFirstLoadOnly={staggerOnFirstLoadOnly}
         onAnimationComplete={onAnimationComplete}
