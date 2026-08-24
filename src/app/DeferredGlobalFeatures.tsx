@@ -2,6 +2,7 @@
 
 import dynamic from 'next/dynamic';
 import { useEffect, useState } from 'react';
+import DeferredCommandK from '@/cmdk/DeferredCommandK';
 
 const GlobalMediaUpload = dynamic(() => import('@/media/GlobalMediaUpload'));
 const ShareModals = dynamic(() => import('@/share/ShareModals'));
@@ -9,7 +10,6 @@ const RecipeModal = dynamic(() => import('@/recipe/RecipeModal'));
 const AdminBatchEditPanel = dynamic(
   () => import('@/admin/select/DeferredAdminBatchEditPanel'),
 );
-const CommandK = dynamic(() => import('@/cmdk/DeferredCommandK'));
 
 export default function DeferredGlobalFeatures({
   onLastUpload,
@@ -42,7 +42,7 @@ export default function DeferredGlobalFeatures({
   }, []);
 
   return <>
-    <CommandK />
+    <DeferredCommandK />
     {isReady && <>
       <GlobalMediaUpload shouldResize={false} onLastUpload={onLastUpload} />
       <ShareModals />

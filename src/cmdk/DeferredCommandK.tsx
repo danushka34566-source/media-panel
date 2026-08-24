@@ -1,11 +1,9 @@
 'use client';
 
-import dynamic from 'next/dynamic';
 import { useEffect, useState } from 'react';
 import { getCommandKDataAction } from './actions';
 import type { CommandKData } from './data';
-
-const CommandKClient = dynamic(() => import('./CommandKClient'));
+import CommandKClient from './CommandKClient';
 
 // The command surface must remain usable even when a cold database/category
 // read is unavailable. Media search is fetched only after the user types, so
