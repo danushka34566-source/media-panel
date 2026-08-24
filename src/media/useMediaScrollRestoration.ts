@@ -17,6 +17,12 @@ type SavedScrollPosition = {
 
 const getStorageKey = () => {
   if (typeof window === 'undefined') { return undefined; }
+  // Search results are intentionally ephemeral. Restoring an old search
+  // offset is more surprising than useful, especially when the query changes.
+  if (window.location.pathname === '/search' ||
+    window.location.pathname.startsWith('/search/')) {
+    return undefined;
+  }
   return `${STORAGE_PREFIX}${window.location.pathname}${window.location.search}`;
 };
 
@@ -173,13 +179,12 @@ export default function useMediaScrollRestoration(enabled = true) {
     let resizeObserver: ResizeObserver | undefined;
     const previousScrollRestoration = window.history.scrollRestoration;
     const root = document.documentElement;
-    const previousRootVisibility = root.style.visibility;
     if (restoring) {
       window.history.scrollRestoration = 'manual';
-      // A returning infinite feed may not have mounted the saved card yet.
-      // Keep that intermediate, clamped scroll position out of the paint so
-      // the user never sees the page jump through several partial positions.
-      root.style.visibility = 'hidden';
+      // Keep the restoration state observable without hiding the document.
+      // Hiding the root caused a several-second white flash while an infinite
+      // feed mounted the saved card.
+      root.dataset.mediaScrollRestoring = 'true';
     }
 
     const stopRestoring = () => {
@@ -188,7 +193,7 @@ export default function useMediaScrollRestoration(enabled = true) {
       mutationObserver?.disconnect();
       resizeObserver?.disconnect();
       window.history.scrollRestoration = previousScrollRestoration;
-      root.style.visibility = previousRootVisibility;
+      delete root.dataset.mediaScrollRestoring;
       lastProgrammaticTarget = undefined;
     };
 
@@ -288,7 +293,13 @@ export default function useMediaScrollRestoration(enabled = true) {
       resizeObserver = new ResizeObserver(restore);
       resizeObserver.observe(document.documentElement);
     }
-    if (restoring) { window.requestAnimationFrame(restore); }
+    if (restoring) {
+      // Correct the already-rendered server page synchronously whenever the
+      // anchor is present, then keep observers only for pages that need more
+      // infinite-scroll content.
+      restore();
+      window.requestAnimationFrame(restore);
+    }
 
     return () => {
       window.removeEventListener('scroll', onScroll);

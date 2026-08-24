@@ -246,7 +246,9 @@ export default function MediaGrid({
                 aspectRatio: isWideGrid
                   ? WIDE_GRID_ASPECT_RATIO
                   : GRID_ASPECT_RATIO,
-              },
+                },
+              contentVisibility: 'auto',
+              containIntrinsicSize: '320px',
             }}
           >
             <MediaMedium

@@ -58,6 +58,9 @@ const captureVisibleGridCards = () => {
   document.querySelectorAll<HTMLElement>(
     '[data-media-smart-preview-card][data-preview-id]',
   ).forEach(element => {
+    // Framer's entrance transforms and the mode-switch FLIP animation must
+    // never own the same transform at the same time.
+    element.getAnimations().forEach(animation => animation.cancel());
     const rect = element.getBoundingClientRect();
     if (rect.bottom <= 0 || rect.top >= window.innerHeight) { return; }
     const id = element.dataset.previewId;
@@ -68,24 +71,32 @@ const captureVisibleGridCards = () => {
 
 const animateVisibleGridCards = (previous: Map<string, VisibleGridCard>) => {
   if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) { return; }
-  document.querySelectorAll<HTMLElement>(
-    '[data-media-smart-preview-card][data-preview-id]',
-  ).forEach(element => {
-    const id = element.dataset.previewId;
-    const from = id ? previous.get(id) : undefined;
-    if (!from) { return; }
-    const rect = element.getBoundingClientRect();
-    if (rect.bottom <= 0 || rect.top >= window.innerHeight) { return; }
-    const x = from.left - rect.left;
-    const y = from.top - rect.top;
-    if (Math.abs(x) < 0.5 && Math.abs(y) < 0.5) { return; }
-    element.getAnimations().forEach(animation => animation.cancel());
-    element.animate([
-      { transform: `translate3d(${x}px, ${y}px, 0)` },
-      { transform: 'translate3d(0, 0, 0)' },
-    ], {
-      duration: 260,
-      easing: 'cubic-bezier(0.22, 1, 0.36, 1)',
+  // Wait for the browser to commit the new grid columns, then perform one
+  // read/animate pass. Measuring immediately after flushSync can still read
+  // the old grid track sizes on mobile browsers.
+  window.requestAnimationFrame(() => {
+    window.requestAnimationFrame(() => {
+      document.querySelectorAll<HTMLElement>(
+        '[data-media-smart-preview-card][data-preview-id]',
+      ).forEach(element => {
+        const id = element.dataset.previewId;
+        const from = id ? previous.get(id) : undefined;
+        if (!from) { return; }
+        const rect = element.getBoundingClientRect();
+        if (rect.bottom <= 0 || rect.top >= window.innerHeight) { return; }
+        const x = from.left - rect.left;
+        const y = from.top - rect.top;
+        if (Math.abs(x) < 0.5 && Math.abs(y) < 0.5) { return; }
+        element.getAnimations().forEach(animation => animation.cancel());
+        element.animate([
+          { transform: `translate3d(${x}px, ${y}px, 0)` },
+          { transform: 'translate3d(0, 0, 0)' },
+        ], {
+          duration: 260,
+          easing: 'cubic-bezier(0.22, 1, 0.36, 1)',
+          fill: 'both',
+        });
+      });
     });
   });
 };
@@ -185,6 +196,7 @@ export default function AppViewSwitcher({
   const toggleGridMode = useCallback(() => {
     const viewportAnchor = captureMediaViewportAnchor();
     const visibleCards = captureVisibleGridCards();
+    document.documentElement.dataset.gridModeSwitching = 'true';
     // Commit the new column layout before restoring the visible card. This
     // prevents the same scrollTop from pointing at unrelated media when the
     // number and height of rows changes between grid modes.
@@ -199,6 +211,7 @@ export default function AppViewSwitcher({
     }
     gridModeSwitchTimeoutRef.current = setTimeout(() => {
       setIsGridModeSwitching(false);
+      delete document.documentElement.dataset.gridModeSwitching;
       gridModeSwitchTimeoutRef.current = undefined;
     }, GRID_MODE_SWITCH_FEEDBACK_MS);
   }, [setIsWideGrid]);
@@ -206,6 +219,7 @@ export default function AppViewSwitcher({
   useEffect(() => () => {
     if (gridModeSwitchTimeoutRef.current) {
       clearTimeout(gridModeSwitchTimeoutRef.current);
+      delete document.documentElement.dataset.gridModeSwitching;
     }
   }, []);
   

@@ -38,7 +38,7 @@ export default function InfiniteMediaScroll({
   focal,
   wrapMoreButtonInGrid,
   coalescePages = false,
-  loadAheadViewports = 1,
+  loadAheadViewports = 2,
   useCachedMedia = true,
   includeHiddenMedia,
   includeMissingStorageStatus,
@@ -134,6 +134,7 @@ export default function InfiniteMediaScroll({
 
   const buttonContainerRef = useRef<HTMLDivElement>(null);
   const loadingPageRef = useRef(false);
+  const queuedAdvanceRef = useRef(false);
   const [isMoreButtonVisible, setIsMoreButtonVisible] = useState(false);
   
   const isLoadingOrValidating = isLoading || isValidating;
@@ -167,10 +168,15 @@ export default function InfiniteMediaScroll({
   const advance = useCallback(() => {
     if (
       error ||
-      isFinished ||
-      isLoadingOrValidating ||
-      loadingPageRef.current
+      isFinished
     ) {
+      return;
+    }
+    // A fast gesture can cross the sentinel while the previous page is still
+    // in flight. Keep one bounded request queued instead of dropping the
+    // signal and leaving the user at the end of the rendered feed.
+    if (isLoadingOrValidating || loadingPageRef.current) {
+      queuedAdvanceRef.current = true;
       return;
     }
     loadingPageRef.current = true;
@@ -178,8 +184,12 @@ export default function InfiniteMediaScroll({
   }, [error, isFinished, isLoadingOrValidating, setSize, pages.length]);
 
   useEffect(() => {
-    if (!isLoadingOrValidating) { loadingPageRef.current = false; }
-  }, [isLoadingOrValidating]);
+    if (isLoadingOrValidating) { return; }
+    const hadQueuedAdvance = queuedAdvanceRef.current;
+    queuedAdvanceRef.current = false;
+    loadingPageRef.current = false;
+    if (hadQueuedAdvance && !isFinished && !error) { advance(); }
+  }, [advance, error, isFinished, isLoadingOrValidating]);
 
   const retryFailedPage = useCallback(() => {
     loadingPageRef.current = true;
@@ -212,10 +222,10 @@ export default function InfiniteMediaScroll({
   });
 
   useEffect(() => {
-    if (isMoreButtonVisible && !isFinished && !isLoadingOrValidating) {
+    if (isMoreButtonVisible && !isFinished) {
       advance();
     }
-  }, [advance, isFinished, isLoadingOrValidating, isMoreButtonVisible]);
+  }, [advance, isFinished, isMoreButtonVisible]);
 
   const renderMoreButton =
     <div ref={buttonContainerRef}>

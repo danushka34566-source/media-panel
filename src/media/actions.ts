@@ -134,6 +134,7 @@ import { storeUploadedSubtitles } from './storage/server';
 import { isVirtualStorageVideoId } from './storage/virtual';
 import { getStorageUrlsForMedia } from './storage';
 import { withPostgresAdvisoryLock } from '@/platforms/postgres';
+import { mapWithConcurrency } from '@/utility/concurrency';
 import {
   hasProcessingOrchestrator,
   triggerDeletionOrchestrator,
@@ -1922,7 +1923,7 @@ export const renameMediaRecipeGloballyAction = async (formData: FormData) =>
 
 export const deleteUploadsAction = async (urls: string[]) =>
   runAuthenticatedAdminServerAction(async () => {
-    await Promise.all(urls.map(async url => {
+    await mapWithConcurrency(urls, 4, async url => {
       try {
         await deleteFile(url);
       } catch (error) {
@@ -1933,7 +1934,7 @@ export const deleteUploadsAction = async (urls: string[]) =>
       } finally {
         await clearWorkerRegistrationStatusForUrl(url);
       }
-    }));
+    });
     if (urls.length > 1) {
       // Only refresh state when deleting multiple uploads
       revalidateAdminPaths();
@@ -2354,7 +2355,11 @@ export const deleteSubtitleAction = async (formData: FormData) =>
     const previousTracks = await readSubtitleManifestTracks(fileNameBase);
     const all = await getCurrentStorageUrlsForPrefix(fileNameBase).catch(() => []);
     const targets = all.filter(({ fileName: fn }) => fn.toLowerCase() === fileName.toLowerCase());
-    await Promise.all(targets.map(({ url }) => deleteFile(url).catch(() => undefined)));
+    await mapWithConcurrency(
+      targets,
+      4,
+      ({ url }) => deleteFile(url).catch(() => undefined),
+    );
     await rebuildSubtitleManifest(fileNameBase, previousTracks);
     after(revalidateAllKeysAndPaths);
     return;
@@ -2382,10 +2387,10 @@ export const updateSubtitleTrackAction = async (formData: FormData) =>
         candidate.toLowerCase() === newFileName.toLowerCase());
       if (collision) { throw new Error('A subtitle track already uses that language code.'); }
       const targets = all.filter(({ fileName: fn }) => fn.toLowerCase() === fileName.toLowerCase());
-      await Promise.all(targets.map(async ({ url }) => {
+      await mapWithConcurrency(targets, 4, async ({ url }) => {
         const copied = await copyFile(url, newFileName);
         if (copied) { await deleteFile(url); }
-      }));
+      });
     }
     await rebuildSubtitleManifest(fileNameBase, previousTracks, {
       [newFileName.toLowerCase()]: { lang: newLang, label: newLabel },
@@ -2433,7 +2438,11 @@ export const deleteStorageAssetAction = async (formData: FormData) =>
     // Delete this asset across all configured storages
     const all = await getCurrentStorageUrlsForPrefix(fileNameBase).catch(() => []);
     const targets = all.filter(({ fileName }) => fileName.toLowerCase() === assetFileName.toLowerCase());
-    await Promise.all(targets.map(({ url }) => deleteFile(url).catch(() => undefined)));
+    await mapWithConcurrency(
+      targets,
+      4,
+      ({ url }) => deleteFile(url).catch(() => undefined),
+    );
     // If deleting a subtitle, rebuild manifest
     if (/-subtitles(\.[a-zA-Z0-9_-]+)?\.vtt$/i.test(assetFileName)) {
       await rebuildSubtitleManifest(fileNameBase, previousSubtitleTracks);

@@ -8,7 +8,7 @@ import {
 import { MediaSetCategory } from '../category';
 import MediaLarge from './MediaLarge';
 import AppGrid from '@/components/AppGrid';
-import MediaGrid from './MediaGrid';
+import MediaDetailRelated from './MediaDetailRelated';
 import TagHeader from '@/tag/TagHeader';
 import CameraHeader from '@/camera/CameraHeader';
 import FilmHeader from '@/film/FilmHeader';
@@ -24,6 +24,7 @@ import YearHeader from '@/year/YearHeader';
 import RecentsHeader from '@/recents/RecentsHeader';
 import AlbumHeader from '@/album/AlbumHeader';
 import { pathForMedia } from '@/app/path';
+import MediaDetailScrollReset from './MediaDetailScrollReset';
 
 export default function MediaDetailPage({
   photo,
@@ -178,6 +179,7 @@ export default function MediaDetailPage({
 
   return (
     <div>
+      <MediaDetailScrollReset />
       <AppGrid
         className="mt-1.5 mb-6"
         contentMain={customHeader ?? <MediaHeader
@@ -208,7 +210,7 @@ export default function MediaDetailPage({
             recipe={recipe}
             focal={focal}
             priority
-            preloadSubtitleManifest
+            preloadSubtitleManifest={false}
             broadcastDetailVideoPlayback
             prefetchRelatedLinks
             recent={recent}
@@ -236,15 +238,10 @@ export default function MediaDetailPage({
           />,
         ]}
       />
-      <AppGrid
-        contentMain={<MediaGrid
-          photos={photosGrid ?? photos}
-          selectedMedia={photo}
-          {...categoryPathParams}
-          autoplaySmartPreviews
-          suspendSmartPreviewsOnMainPlayback
-          animateOnFirstLoadOnly
-        />}
+      <MediaDetailRelated
+        photos={photosGrid ?? photos}
+        selectedMedia={photo}
+        {...categoryPathParams}
       />
     </div>
   );

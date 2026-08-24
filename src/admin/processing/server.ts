@@ -2,6 +2,7 @@ import { type StorageListResponse } from '@/platforms/storage';
 import { safelyQuery } from '@/db/query';
 import { query } from '@/platforms/postgres';
 import { unstable_cache } from 'next/cache';
+import { mapWithConcurrency } from '@/utility/concurrency';
 import {
   createUploadRegistrationHintsTable,
   clearUploadRegistrationHintForUrl,
@@ -578,7 +579,7 @@ export const clearWorkerRegistrationStatusForUrl = async (url: string) =>
       [url],
     );
     if (hintUrls.length > 0) {
-      await Promise.all(hintUrls.map(clearUploadRegistrationHintForUrl));
+      await mapWithConcurrency(hintUrls, 4, clearUploadRegistrationHintForUrl);
     } else {
       await clearUploadRegistrationHintForUrl(url);
     }
@@ -603,7 +604,7 @@ export const clearWorkerRegistrationTrackingForMedia = async ({
       (urls ?? []).filter((url): url is string => Boolean(url)),
     ));
 
-    const statusRows = await Promise.all(uniqueUrls.map(url => query<{
+    const statusRows = await mapWithConcurrency(uniqueUrls, 4, url => query<{
       url: string | null
       source_url: string | null
     }>(
@@ -613,9 +614,9 @@ export const clearWorkerRegistrationTrackingForMedia = async ({
         WHERE url = $1 OR source_url = $1
       `,
       [url],
-    ).then(({ rows }) => rows))).then(results => results.flat());
+    ).then(({ rows }) => rows)).then(results => results.flat());
 
-    const mapRows = await Promise.all(uniqueUrls.map(url => query<{
+    const mapRows = await mapWithConcurrency(uniqueUrls, 4, url => query<{
       stored_url: string | null
       source_url: string | null
     }>(
@@ -625,7 +626,7 @@ export const clearWorkerRegistrationTrackingForMedia = async ({
         WHERE stored_url = $1 OR source_url = $1
       `,
       [url],
-    ).then(({ rows }) => rows))).then(results => results.flat());
+    ).then(({ rows }) => rows)).then(results => results.flat());
 
     const hintUrls = Array.from(new Set([
       ...uniqueUrls,
@@ -652,23 +653,23 @@ export const clearWorkerRegistrationTrackingForMedia = async ({
       );
     }
 
-    await Promise.all(uniqueUrls.map(url => query(
+    await mapWithConcurrency(uniqueUrls, 4, url => query(
       `
         DELETE FROM worker_registration_status
         WHERE url = $1 OR source_url = $1
       `,
       [url],
-    )));
+    ));
 
-    await Promise.all(uniqueUrls.map(url => query(
+    await mapWithConcurrency(uniqueUrls, 4, url => query(
       `
         DELETE FROM registered_upload_file_map
         WHERE stored_url = $1 OR source_url = $1
       `,
       [url],
-    )));
+    ));
 
     if (hintUrls.length > 0) {
-      await Promise.all(hintUrls.map(clearUploadRegistrationHintForUrl));
+      await mapWithConcurrency(hintUrls, 4, clearUploadRegistrationHintForUrl);
     }
   }, 'clearWorkerRegistrationTrackingForMedia');

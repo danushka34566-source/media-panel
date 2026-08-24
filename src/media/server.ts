@@ -4,6 +4,7 @@ import {
   getCurrentStorageUrlsForPrefix,
   getFileNamePartsFromStorageUrl,
 } from '@/platforms/storage';
+import { mapWithConcurrency } from '@/utility/concurrency';
 import { getStorageUrlsForMedia } from './storage';
 import { convertFormDataToMediaDbInsert } from '@/media/form';
 import {
@@ -394,7 +395,7 @@ export const deleteMediaAndFiles = async (
   await deleteMedia(photoId);
 
   if (urlsToDelete.length > 0) {
-    await Promise.all(urlsToDelete.map(url => deleteFile(url)));
+    await mapWithConcurrency(urlsToDelete, 4, url => deleteFile(url));
   }
 
   if (fileNameBase) {
@@ -402,7 +403,11 @@ export const deleteMediaAndFiles = async (
     const remainingAfterPrefixDelete = await getCurrentStorageUrlsForPrefix(fileNameBase)
       .catch(() => []);
     if (remainingAfterPrefixDelete.length > 0) {
-      await Promise.all(remainingAfterPrefixDelete.map(({ url }) => deleteFile(url)));
+      await mapWithConcurrency(
+        remainingAfterPrefixDelete,
+        4,
+        ({ url }) => deleteFile(url),
+      );
       const remainingAfterRetry = await getCurrentStorageUrlsForPrefix(fileNameBase)
         .catch(() => []);
       if (remainingAfterRetry.length > 0) {

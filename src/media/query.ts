@@ -50,6 +50,7 @@ import {
   getCurrentStorageUrlsForPrefix,
   getFileNamePartsFromStorageUrl,
 } from '@/platforms/storage';
+import { mapWithConcurrency } from '@/utility/concurrency';
 
 const parseMediaRowsSafely = (
   rows: MediaDb[],
@@ -231,7 +232,7 @@ const attachMissingStorageStatus = async (photos: Media[]) =>
       ));
 
       const existingUrlsByFileNameBase = new Map<string, Set<string> | undefined>();
-      await Promise.all(uniqueFileNameBases.map(async fileNameBase => {
+      await mapWithConcurrency(uniqueFileNameBases, 4, async fileNameBase => {
         try {
           const storageUrls = await getCurrentStorageUrlsForPrefix(fileNameBase);
           existingUrlsByFileNameBase.set(
@@ -245,7 +246,7 @@ const attachMissingStorageStatus = async (photos: Media[]) =>
           });
           existingUrlsByFileNameBase.set(fileNameBase, undefined);
         }
-      }));
+      });
 
       return reconciledPhotos.map(photo => {
         const missingStorageError = getMissingStorageErrorForMedia(

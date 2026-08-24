@@ -23,6 +23,7 @@ import {
   UNIQUE_MEDIA_NAMES,
 } from '@/app/config';
 import { getProcessingConnectionSettingsSafe } from '@/processing/connection-settings';
+import { mapWithConcurrency } from '@/utility/concurrency';
 
 const VIDEO_EXTENSIONS = new Set([
   'mp4', 'mkv', 'mov', 'm4v', 'webm', 'avi', 'ts', 'm2ts', 'mts',
@@ -697,15 +698,18 @@ const convertUploadToMediaInternal = async ({
       if (prefix) {
         const staleFiles =
           await getCurrentStorageUrlsForPrefix(prefix).catch(() => []);
-        await Promise.all(staleFiles
-          .filter(item => {
+        const filesToDelete = staleFiles.filter(item => {
             const { fileNameBase } = getFileNamePartsFromStorageUrl(item.url);
             return (
               fileNameBase === prefix ||
               fileNameBase.startsWith(`${prefix}-`)
             );
-          })
-          .map(({ url }) => deleteFile(url).catch(() => undefined)));
+          });
+        await mapWithConcurrency(
+          filesToDelete,
+          4,
+          ({ url }) => deleteFile(url).catch(() => undefined),
+        );
       }
     }
   };
@@ -716,7 +720,7 @@ const convertUploadToMediaInternal = async ({
     if (!originBase || originBase === fileNameBase) { return; }
 
     const existing = await getCurrentStorageUrlsForPrefix(originBase).catch(() => []);
-    await Promise.all(existing.map(async ({ url: existingUrl }) => {
+    await mapWithConcurrency(existing, 4, async ({ url: existingUrl }) => {
       const { fileName: existingFileName } =
         getFileNamePartsFromStorageUrl(existingUrl);
       if (existingFileName.toLowerCase() === uploadFileName.toLowerCase()) {
@@ -732,7 +736,7 @@ const convertUploadToMediaInternal = async ({
         () => moveFile(existingUrl, destinationFileName),
         { label: `rename storage sidecar ${destinationFileName}`, attempts: 2 },
       ).catch(() => undefined);
-    }));
+    });
   };
 
   const shouldTransferOnlyVideo =

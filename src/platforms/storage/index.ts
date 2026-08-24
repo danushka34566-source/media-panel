@@ -26,6 +26,7 @@ import {
   isUrlFromDrive,
   isDriveStorageConfigured,
 } from './drive-gateway';
+import { mapWithConcurrency } from '@/utility/concurrency';
 import { PATH_API_PRESIGNED_URL } from '@/app/path';
 import type { OnUploadProgressCallback } from './types';
 
@@ -361,7 +362,7 @@ export const deleteFile = (url: string) => {
 
 export const deleteFilesWithPrefix = async (prefix: string) => {
   const urls = await getCurrentStorageUrlsForPrefix(prefix);
-  return Promise.all(urls.map(({ url }) => deleteFile(url)));
+  return mapWithConcurrency(urls, 4, ({ url }) => deleteFile(url));
 };
 
 const getExistingStorageUrlForFileName = async (
