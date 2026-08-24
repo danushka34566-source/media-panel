@@ -201,7 +201,19 @@ export const pathForAdminAlbumEdit = (album: AlbumOrAlbumSlug) =>
   `${PATH_ADMIN_ALBUMS}/${getAlbumSlug(album)}/${EDIT}`;
 
 export const pathForAdminTagEdit = (tag: string) =>
-  `${PATH_ADMIN_TAGS}/${tag}/${EDIT}`;
+  `${PATH_ADMIN_TAGS}/${encodeURIComponent(tag)}/${EDIT}`;
+
+export const pathForAdminCategoryEdit = (category: string) =>
+  `${PATH_ADMIN_CATEGORIES}/${encodeURIComponent(category)}/${EDIT}`;
+
+export const pathForAdminStudioEdit = (studio: string) =>
+  `${PATH_ADMIN_STUDIOS}/${encodeURIComponent(studio)}/${EDIT}`;
+
+export const pathForAdminPerformerEdit = (performer: string) =>
+  `${PATH_ADMIN_PERFORMERS}/${encodeURIComponent(performer)}/${EDIT}`;
+
+export const pathForAdminContentTypeEdit = (contentType: string) =>
+  `${PATH_ADMIN_CONTENT_TYPES}/${encodeURIComponent(contentType)}/${EDIT}`;
 
 export const pathForAdminRecipeEdit = (recipe: string) =>
   `${PATH_ADMIN_RECIPES}/${recipe}/${EDIT}`;

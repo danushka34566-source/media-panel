@@ -5,12 +5,14 @@ import DeleteFormButton from '@/admin/DeleteFormButton';
 import { clsx } from 'clsx/lite';
 import AdminBadge from './AdminBadge';
 import Authorized from '@/auth/Authorized';
+import EditButton from './EditButton';
 
 export default async function AdminVideoLibraryValueTable({
   items,
   valueKey,
   label,
   deleteAction,
+  editPath,
 }: {
   items: {
     value: string
@@ -20,6 +22,7 @@ export default async function AdminVideoLibraryValueTable({
   valueKey: string
   label: string
   deleteAction: (formData: FormData) => Promise<unknown>
+  editPath: (value: string) => string
 }) {
   return (
     <AdminTable>
@@ -41,6 +44,7 @@ export default async function AdminVideoLibraryValueTable({
               'flex flex-nowrap',
               'gap-2 sm:gap-3 items-center',
             )}>
+              <EditButton path={editPath(value)} />
               <Authorized capability="delete"><FormWithConfirm
                 action={deleteAction}
                 confirmText={`Remove "${value}" from all media ${label}?`}

@@ -9,6 +9,12 @@ import {
   deleteMediaStudioGlobally,
   updateMedia,
   renameMediaTagGlobally,
+  renameMediaCategoryGlobally,
+  renameMediaStudioGlobally,
+  renameMediaPerformerGlobally,
+  renameMediaContentTypeGlobally,
+  updateMediaLibraryValueGlobally,
+  type MediaLibraryValueType,
   getMedia,
   addTagsToMedia,
   getUniqueTags,
@@ -45,6 +51,7 @@ import {
   revalidateTagsKey,
 } from '@/media/cache';
 import {
+  PATH_ADMIN_CATEGORIES,
   PATH_ADMIN_CONTENT_TYPES,
   PATH_ADMIN_MEDIA,
   PATH_ADMIN_PERFORMERS,
@@ -1724,6 +1731,105 @@ export const renameMediaTagGloballyAction = async (formData: FormData) =>
       redirect(PATH_ADMIN_TAGS);
     }
   });
+
+const LIBRARY_VALUE_TYPES: MediaLibraryValueType[] = [
+  'tag', 'category', 'studio', 'performer', 'contentType',
+];
+
+const pathForLibraryValueType = (type: MediaLibraryValueType) => ({
+  tag: PATH_ADMIN_TAGS,
+  category: PATH_ADMIN_CATEGORIES,
+  studio: PATH_ADMIN_STUDIOS,
+  performer: PATH_ADMIN_PERFORMERS,
+  contentType: PATH_ADMIN_CONTENT_TYPES,
+}[type]);
+
+const renameLibraryValue = async ({
+  formData,
+  valueKey,
+  updatedValueKey,
+  rename,
+  revalidate,
+  redirectPath,
+}: {
+  formData: FormData
+  valueKey: string
+  updatedValueKey: string
+  rename: (value: string, updatedValue: string) => Promise<unknown>
+  revalidate: () => void
+  redirectPath: string
+}) => {
+  const value = String(formData.get(valueKey) ?? '').trim();
+  const updatedValue = String(formData.get(updatedValueKey) ?? '').trim();
+  if (value && updatedValue && value !== updatedValue) {
+    await rename(value, updatedValue);
+    revalidateMediaKey();
+    revalidate();
+    revalidateAdminPaths();
+    redirect(redirectPath);
+  }
+};
+
+export const updateMediaLibraryValueAction = async (formData: FormData) =>
+  runAuthenticatedAdminServerAction(async () => {
+    const sourceType = String(formData.get('sourceType') ?? '') as MediaLibraryValueType;
+    const targetType = String(formData.get('targetType') ?? '') as MediaLibraryValueType;
+    const value = String(formData.get('value') ?? '').trim();
+    const updatedValue = String(formData.get('updatedValue') ?? '').trim();
+    if (
+      !LIBRARY_VALUE_TYPES.includes(sourceType) ||
+      !LIBRARY_VALUE_TYPES.includes(targetType) ||
+      !value || !updatedValue
+    ) { return; }
+    await updateMediaLibraryValueGlobally({
+      sourceType,
+      targetType,
+      value,
+      updatedValue,
+    });
+    revalidateAllKeysAndPaths();
+    redirect(pathForLibraryValueType(targetType));
+  });
+
+export const renameMediaCategoryGloballyAction = async (formData: FormData) =>
+  runAuthenticatedAdminServerAction(() => renameLibraryValue({
+    formData,
+    valueKey: 'category',
+    updatedValueKey: 'updatedCategory',
+    rename: renameMediaCategoryGlobally,
+    revalidate: revalidateCategoriesKey,
+    redirectPath: PATH_ADMIN_CATEGORIES,
+  }));
+
+export const renameMediaStudioGloballyAction = async (formData: FormData) =>
+  runAuthenticatedAdminServerAction(() => renameLibraryValue({
+    formData,
+    valueKey: 'studio',
+    updatedValueKey: 'updatedStudio',
+    rename: renameMediaStudioGlobally,
+    revalidate: revalidateStudiosKey,
+    redirectPath: PATH_ADMIN_STUDIOS,
+  }));
+
+export const renameMediaPerformerGloballyAction = async (formData: FormData) =>
+  runAuthenticatedAdminServerAction(() => renameLibraryValue({
+    formData,
+    valueKey: 'performer',
+    updatedValueKey: 'updatedPerformer',
+    rename: renameMediaPerformerGlobally,
+    revalidate: revalidatePerformersKey,
+    redirectPath: PATH_ADMIN_PERFORMERS,
+  }));
+
+export const renameMediaContentTypeGloballyAction = async (formData: FormData) =>
+  runAuthenticatedAdminServerAction(() => renameLibraryValue({
+    formData,
+    valueKey: 'contentType',
+    updatedValueKey: 'updatedContentType',
+    rename: renameMediaContentTypeGlobally,
+    revalidate: revalidateContentTypesKey,
+    redirectPath: PATH_ADMIN_CONTENT_TYPES,
+  }));
 
 export const upgradeTagToAlbumAction = async (tag: string) =>
   runAuthenticatedAdminServerAction(async () =>

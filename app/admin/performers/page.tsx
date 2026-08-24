@@ -2,6 +2,7 @@ import AdminVideoLibraryValueTable from '@/admin/AdminVideoLibraryValueTable';
 import AppGrid from '@/components/AppGrid';
 import { getUniquePerformersWithMeta } from '@/media/query';
 import { deleteMediaPerformerGloballyFormAction } from '@/media/actions';
+import { pathForAdminPerformerEdit } from '@/app/path';
 
 export default async function AdminPerformersPage() {
   const performers = await getUniquePerformersWithMeta().catch(() => []);
@@ -16,6 +17,7 @@ export default async function AdminPerformersPage() {
               valueKey="performer"
               label="performer entries"
               deleteAction={deleteMediaPerformerGloballyFormAction}
+              editPath={pathForAdminPerformerEdit}
             />
           </div>
         </div>}

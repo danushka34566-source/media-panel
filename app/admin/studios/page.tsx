@@ -2,6 +2,7 @@ import AdminVideoLibraryValueTable from '@/admin/AdminVideoLibraryValueTable';
 import AppGrid from '@/components/AppGrid';
 import { getUniqueStudiosWithMeta } from '@/media/query';
 import { deleteMediaStudioGloballyFormAction } from '@/media/actions';
+import { pathForAdminStudioEdit } from '@/app/path';
 
 export default async function AdminStudiosPage() {
   const studios = await getUniqueStudiosWithMeta().catch(() => []);
@@ -16,6 +17,7 @@ export default async function AdminStudiosPage() {
               valueKey="studio"
               label="studio entries"
               deleteAction={deleteMediaStudioGloballyFormAction}
+              editPath={pathForAdminStudioEdit}
             />
           </div>
         </div>}

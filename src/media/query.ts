@@ -565,6 +565,101 @@ export const renameMediaTagGlobally = (tag: string, updatedTag: string) =>
     WHERE ${tag}=ANY(tags)
   `, 'renameMediaTagGlobally');
 
+export const renameMediaCategoryGlobally = (
+  category: string,
+  updatedCategory: string,
+) => safelyQuery(() => sql`
+  UPDATE media
+  SET categories=ARRAY_REPLACE(categories, ${category}, ${updatedCategory})
+  WHERE ${category}=ANY(categories)
+`, 'renameMediaCategoryGlobally');
+
+export const renameMediaStudioGlobally = (
+  studio: string,
+  updatedStudio: string,
+) => safelyQuery(() => sql`
+  UPDATE media
+  SET studio=${updatedStudio}
+  WHERE studio=${studio}
+`, 'renameMediaStudioGlobally');
+
+export const renameMediaPerformerGlobally = (
+  performer: string,
+  updatedPerformer: string,
+) => safelyQuery(() => sql`
+  UPDATE media
+  SET performers=ARRAY_REPLACE(performers, ${performer}, ${updatedPerformer})
+  WHERE ${performer}=ANY(performers)
+`, 'renameMediaPerformerGlobally');
+
+export const renameMediaContentTypeGlobally = (
+  contentType: string,
+  updatedContentType: string,
+) => safelyQuery(() => sql`
+  UPDATE media
+  SET content_type=ARRAY_REPLACE(content_type, ${contentType}, ${updatedContentType})
+  WHERE ${contentType}=ANY(content_type)
+`, 'renameMediaContentTypeGlobally');
+
+export type MediaLibraryValueType =
+  | 'tag'
+  | 'category'
+  | 'studio'
+  | 'performer'
+  | 'contentType';
+
+const mediaLibraryArrayColumns = {
+  tag: 'tags',
+  category: 'categories',
+  performer: 'performers',
+  contentType: 'content_type',
+} as const;
+
+const mediaLibraryColumn = (type: MediaLibraryValueType) =>
+  type === 'studio' ? 'studio' : mediaLibraryArrayColumns[type];
+
+export const updateMediaLibraryValueGlobally = ({
+  sourceType,
+  targetType,
+  value,
+  updatedValue,
+}: {
+  sourceType: MediaLibraryValueType
+  targetType: MediaLibraryValueType
+  value: string
+  updatedValue: string
+}) => {
+  const sourceColumn = mediaLibraryColumn(sourceType);
+  const targetColumn = mediaLibraryColumn(targetType);
+  const arrayColumns = ['tags', 'categories', 'performers', 'content_type'];
+  const setStatements = arrayColumns.map(column => {
+    const isSource = sourceColumn === column;
+    const isTarget = targetColumn === column;
+    if (!isSource && !isTarget) { return `${column}=${column}`; }
+    if (isSource && isTarget) {
+      return `${column}=array_append(array_remove(array_remove(` +
+        `COALESCE(${column}, '{}'), $1), $2), $2)`;
+    }
+    if (isSource) { return `${column}=array_remove(${column}, $1)`; }
+    return `${column}=array_append(array_remove(COALESCE(${column}, '{}'), $2), $2)`;
+  });
+  const studioStatement = sourceColumn === 'studio' && targetColumn === 'studio'
+    ? 'studio=$2'
+    : sourceColumn === 'studio'
+      ? 'studio=NULL'
+      : targetColumn === 'studio'
+        ? 'studio=$2'
+        : 'studio=studio';
+  const sourceWhere = sourceColumn === 'studio'
+    ? 'studio=$1'
+    : `${sourceColumn} @> ARRAY[$1]::text[]`;
+  return safelyQuery(() => query(
+    `UPDATE media SET ${[...setStatements, studioStatement].join(', ')} ` +
+      `WHERE ${sourceWhere}`,
+    [value, updatedValue],
+  ), 'updateMediaLibraryValueGlobally');
+};
+
 export const addTagsToMedia = (tags: string[], photoIds: string[]) =>
   safelyQuery(() => query(`
     UPDATE media 

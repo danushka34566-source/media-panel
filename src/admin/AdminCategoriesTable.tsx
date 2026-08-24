@@ -6,6 +6,8 @@ import { clsx } from 'clsx/lite';
 import AdminBadge from './AdminBadge';
 import { deleteMediaCategoryGloballyFormAction } from '@/media/actions';
 import Authorized from '@/auth/Authorized';
+import EditButton from './EditButton';
+import { pathForAdminCategoryEdit } from '@/app/path';
 
 type CategoryWithMeta = {
   category: string
@@ -38,6 +40,7 @@ export default async function AdminCategoriesTable({
               'flex flex-nowrap',
               'gap-2 sm:gap-3 items-center',
             )}>
+              <EditButton path={pathForAdminCategoryEdit(category)} />
               <Authorized capability="delete"><FormWithConfirm
                 action={deleteMediaCategoryGloballyFormAction}
                 confirmText={`Remove "${category}" from all media?`}

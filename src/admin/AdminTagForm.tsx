@@ -1,13 +1,9 @@
 'use client';
 
-import SubmitButtonWithStatus from '@/components/SubmitButtonWithStatus';
-import Link from 'next/link';
-import { PATH_ADMIN_TAGS } from '@/app/path';
-import FieldsetWithStatus from '@/components/FieldsetWithStatus';
-import { ReactNode, useMemo, useState } from 'react';
-import { renameMediaTagGloballyAction } from '@/media/actions';
+import { ReactNode } from 'react';
+import AdminMediaLibraryValueForm from './AdminMediaLibraryValueForm';
 import { parameterize } from '@/utility/string';
-import { useAppState } from '@/app/AppState';
+import { PATH_ADMIN_TAGS } from '@/app/path';
 
 export default function AdminTagForm({
   tag,
@@ -16,58 +12,15 @@ export default function AdminTagForm({
   tag: string
   children?: ReactNode
 }) {
-  const { invalidateSwr } = useAppState();
-
-  const [updatedTagRaw, setUpdatedTagRaw] = useState(tag);
-
-  const updatedTag = useMemo(() =>
-    parameterize(updatedTagRaw)
-  , [updatedTagRaw]);
-
-  const isFormValid = (
-    updatedTag &&
-    updatedTag !== tag
-  );
-
   return (
-    <form
-      action={renameMediaTagGloballyAction}
-      className="space-y-8"
+    <AdminMediaLibraryValueForm
+      value={tag}
+      sourceType="tag"
+      label="Tag"
+      backPath={PATH_ADMIN_TAGS}
+      normalizeValue={parameterize}
     >
-      <FieldsetWithStatus
-        label="New Tag Name"
-        value={updatedTagRaw}
-        onChange={setUpdatedTagRaw}
-      />
-      {/* Form data: tag to be replaced */}
-      <input
-        name="tag"
-        value={tag}
-        hidden
-        readOnly
-      />
-      {/* Form data: updated tag */}
-      <input
-        name="updatedTag"
-        value={updatedTag}
-        hidden
-        readOnly
-      />
       {children}
-      <div className="flex gap-3">
-        <Link
-          className="button"
-          href={PATH_ADMIN_TAGS}
-        >
-          Cancel
-        </Link>
-        <SubmitButtonWithStatus
-          disabled={!isFormValid}
-          onFormSubmit={invalidateSwr}
-        >
-          Update
-        </SubmitButtonWithStatus>
-      </div>
-    </form>
+    </AdminMediaLibraryValueForm>
   );
 }

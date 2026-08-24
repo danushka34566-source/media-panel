@@ -2,6 +2,7 @@ import AdminVideoLibraryValueTable from '@/admin/AdminVideoLibraryValueTable';
 import AppGrid from '@/components/AppGrid';
 import { getUniqueVideoContentTypesWithMeta } from '@/media/query';
 import { deleteMediaContentTypeGloballyFormAction } from '@/media/actions';
+import { pathForAdminContentTypeEdit } from '@/app/path';
 
 export default async function AdminContentTypesPage() {
   const contentTypes = await getUniqueVideoContentTypesWithMeta().catch(() => []);
@@ -16,6 +17,7 @@ export default async function AdminContentTypesPage() {
               valueKey="contentType"
               label="content type entries"
               deleteAction={deleteMediaContentTypeGloballyFormAction}
+              editPath={pathForAdminContentTypeEdit}
             />
           </div>
         </div>}
