@@ -75,7 +75,12 @@ def _derive_title(file_name: str) -> str:
 def _is_generated_artifact(key: str) -> bool:
     name = Path(key).name.casefold()
     return bool(
-        re.match(r"^\d{12}-(?:poster|preview)\.[a-z0-9]+$", name)
+        # Unique media registrations use the twelve-digit media ID as the
+        # stored filename. Keep these generated destinations out of the
+        # "untracked upload" report when a copy is still being committed.
+        re.match(r"^\d{12}\.[a-z0-9]+$", name)
+        or
+        re.match(r"^\d{12}-(?:poster|preview|stream|sm|md|lg)\.[a-z0-9]+$", name)
         or name.endswith(".m3u8")
         or re.match(r"^\d{12}-segment-", name)
         or re.match(r"^\d{12}-hls-", name)
@@ -248,13 +253,8 @@ class DriveObjectAudit:
         self.timeout = max(1, timeout)
         self.retries = max(0, retries)
 
-    def list_inventory(self) -> dict[str, int | None]:
-        """Read one authenticated bucket inventory before falling back to HEADs."""
-        query = urllib.parse.urlencode({
-            "projectId": self.project_id,
-            "bucket": self.bucket,
-            "limit": "10000",
-        })
+    def _get_json(self, params: dict[str, str]) -> dict[str, Any]:
+        query = urllib.parse.urlencode(params)
         url = f"{self.origin}/api/v1/storage/list?{query}"
         headers = {
             "Authorization": f"Bearer {self.api_key}",
@@ -270,26 +270,69 @@ class DriveObjectAudit:
                     timeout=self.timeout,
                 ) as response:
                     payload = json.loads(response.read().decode("utf-8"))
-                objects = payload.get("objects", []) if isinstance(payload, dict) else []
-                inventory: dict[str, int | None] = {}
-                for item in objects:
-                    if not isinstance(item, dict):
-                        continue
-                    key = str(item.get("key") or item.get("fileName") or "").strip()
-                    if not key:
-                        continue
-                    raw_size = item.get("size")
-                    try:
-                        size = int(raw_size) if raw_size is not None else None
-                    except (TypeError, ValueError):
-                        size = None
-                    inventory[key] = size
-                return inventory
+                if not isinstance(payload, dict):
+                    raise ValueError("Drive list response was not an object")
+                return payload
             except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError, OSError, ValueError) as error:
                 last_error = error
             if attempt < self.retries:
                 time.sleep(min(2 ** attempt, 8))
         raise UploadError(f"Drive inventory request failed: {last_error}")
+
+    @staticmethod
+    def _objects_from_page(payload: dict[str, Any]) -> dict[str, int | None]:
+        objects = payload.get("objects", [])
+        inventory: dict[str, int | None] = {}
+        if not isinstance(objects, list):
+            return inventory
+        for item in objects:
+            if not isinstance(item, dict):
+                continue
+            key = str(item.get("key") or item.get("fileName") or "").strip()
+            if not key:
+                continue
+            raw_size = item.get("size")
+            try:
+                size = int(raw_size) if raw_size is not None else None
+            except (TypeError, ValueError):
+                size = None
+            inventory[key] = size
+        return inventory
+
+    def list_inventory(self, prefix: str | None = None) -> dict[str, int | None]:
+        """Read the complete authenticated bucket inventory page by page.
+
+        Never infer that an object is missing from a truncated legacy response.
+        The paged endpoint is capped at 1,000 objects per request and returns a
+        continuation token, so this remains correct for buckets with millions
+        of objects as well as the small common case.
+        """
+        inventory: dict[str, int | None] = {}
+        continuation: str | None = None
+        seen_tokens: set[str] = set()
+        while True:
+            params = {
+                "projectId": self.project_id,
+                "bucket": self.bucket,
+                "paged": "1",
+                "limit": "1000",
+            }
+            if prefix:
+                params["prefix"] = prefix
+            if continuation:
+                params["continuationToken"] = continuation
+            payload = self._get_json(params)
+            inventory.update(self._objects_from_page(payload))
+            raw_next = payload.get("nextContinuationToken")
+            next_token = str(raw_next).strip() if raw_next else ""
+            if not next_token:
+                return inventory
+            if next_token in seen_tokens:
+                raise UploadError(
+                    "Drive inventory returned a repeated continuation token"
+                )
+            seen_tokens.add(next_token)
+            continuation = next_token
 
     def head(self, key: str) -> dict[str, Any]:
         encoded = "/".join(urllib.parse.quote(part, safe="") for part in key.split("/"))
@@ -311,6 +354,27 @@ class DriveObjectAudit:
             except urllib.error.HTTPError as error:
                 if error.code == 404:
                     return {"state": "missing", "status": 404, "size": None}
+                if error.code in {405, 501}:
+                    # Some deployed Drive revisions do not expose HEAD on the
+                    # authenticated API route. Exact-prefix listing is the
+                    # authoritative fallback; never treat 405 as a missing
+                    # object.
+                    try:
+                        inventory = self.list_inventory(prefix=key)
+                        if key in inventory:
+                            return {
+                                "state": "present",
+                                "status": 200,
+                                "size": inventory[key],
+                            }
+                        return {"state": "missing", "status": 404, "size": None}
+                    except UploadError as fallback_error:
+                        return {
+                            "state": "error",
+                            "status": error.code,
+                            "size": None,
+                            "error": str(fallback_error),
+                        }
                 last_error = error
             except (urllib.error.URLError, TimeoutError, OSError, ValueError) as error:
                 last_error = error
@@ -364,14 +428,15 @@ def _check_record(
             remote = drive.head(key)
         result.update({"remote": remote.get("state", "error"), "remote_status": remote.get("status"), "remote_size": remote.get("size")})
         name_key = result["original_file_name"].strip().casefold()
+        name_matches = registration_snapshot.get("by_name", {}).get(name_key, [])
+        status_name_matches = registration_snapshot.get("status_by_name", {}).get(name_key, [])
+        if name_matches or status_name_matches:
+            # A filename/title is useful evidence for a human report, but it
+            # is not an identity key: two uploads can legitimately share it.
+            result["name_match_count"] = len(name_matches)
+            result["status_name_match_count"] = len(status_name_matches)
         mapped = registration_snapshot.get("by_source", {}).get(key)
-        if mapped is None:
-            same_name = registration_snapshot.get("by_name", {}).get(name_key, [])
-            mapped = same_name[0] if len(same_name) == 1 else None
         status_row = registration_snapshot.get("status_by_source", {}).get(key)
-        if status_row is None:
-            same_name_status = registration_snapshot.get("status_by_name", {}).get(name_key, [])
-            status_row = same_name_status[0] if len(same_name_status) == 1 else None
         if status_row:
             result["registration_status"] = status_row.get("status")
             result["title"] = status_row.get("title") or (mapped or {}).get("title") or result["derived_title"]
@@ -402,7 +467,11 @@ def _check_record(
                 result["registered_media_id"] = mapped.get("media_id")
                 result["registered_key"] = stored_key or None
             elif status_row and status_row.get("status") in {"detected", "registering", "error"}:
-                result["classification"] = "registration_in_progress"
+                # The queue row proves only that the worker knew about the
+                # source. It does not prove the source still exists. Keep this
+                # distinct so a missing upload cannot be silently suppressed
+                # from recovery just because a stale status row remains.
+                result["classification"] = "missing_source_in_queue"
             else:
                 result["classification"] = "missing_remote_unmapped"
         else:
@@ -433,6 +502,7 @@ def _print_report(report: dict[str, Any]) -> None:
         f"Audited {report['audited']} completed upload record(s): "
         f"{counts.get('registered', 0)} registered, "
         f"{counts.get('registration_in_progress', 0)} in progress, "
+        f"{counts.get('missing_source_in_queue', 0)} missing source queued, "
         f"{counts.get('unregistered_present', 0)} unregistered in Drive, "
         f"{counts.get('registered_source_removed', 0)} source files cleaned after registration, "
         f"{counts.get('missing_remote_unmapped', 0)} missing/unmapped, "
@@ -443,7 +513,8 @@ def _print_report(report: dict[str, Any]) -> None:
     )
     for item in report["records"]:
         if item["classification"] in {
-            "missing_remote_unmapped", "registered_copy_missing", "size_mismatch",
+            "missing_remote_unmapped", "missing_source_in_queue",
+            "registered_copy_missing", "size_mismatch",
             "remote_check_error",
         }:
             extra = item.get("error") or f"remote={item.get('remote_size')} expected={item.get('expected_size')}"
@@ -585,7 +656,7 @@ def main() -> int:
             print(f"{item['classification']}: {item['source']}")
     if args.reupload:
         allowed_missing = {"missing_remote_unmapped"} if args.allow_unmapped_reupload else set()
-        recoverable = [item for item in results if item["classification"] in ({"registered_copy_missing", "size_mismatch"} | allowed_missing) and item["local"] == "match"]
+        recoverable = [item for item in results if item["classification"] in ({"registered_copy_missing", "missing_source_in_queue", "size_mismatch"} | allowed_missing) and item["local"] == "match"]
         if not recoverable:
             print("No confirmed missing or size-mismatched local files need re-upload.")
         else:

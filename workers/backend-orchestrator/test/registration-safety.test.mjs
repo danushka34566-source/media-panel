@@ -132,6 +132,34 @@ test('generic registration status upsert keeps target and select columns aligned
   assert.doesNotMatch(source, /error_message,\s*attempt_count\s*\)\s*SELECT/);
 });
 
+test('scheduled registration skips schema DDL on the hot path', () => {
+  const start = workerSource.indexOf('const ensureRegistrationStatusTable');
+  const end = workerSource.indexOf('const clearStaleRegistrationStatuses', start);
+  const source = workerSource.slice(start, end);
+  assert.match(source, /if \(env\.REGISTRATION_SCHEDULED === '1'\) return/);
+});
+
+test('terminal registration errors re-enter a bounded retry cycle automatically', () => {
+  const start = workerSource.indexOf('const claimRegistrationQueueRow');
+  const end = workerSource.indexOf('const getRegistrationStatusRowsByUrls', start);
+  const source = workerSource.slice(start, end);
+  assert.match(source, /status='error'[\s\S]*?COALESCE\(attempt_count, 0\) >= \$\{maxAttempts\}[\s\S]*?COALESCE\(updated_at, created_at, TIMESTAMP 'epoch'\)/);
+  assert.match(source, /candidate\.was_terminal_retry/);
+  assert.match(source, /attempt_count=CASE[\s\S]*?THEN 1/);
+  assert.match(source, /error_message LIKE 'Drive copy failed \(5%'/);
+  assert.doesNotMatch(source, /error_message LIKE 'Drive copy failed \(403%'/);
+  assert.match(source, /Registration source not found in storage/);
+  const discoveryStart = workerSource.indexOf('const discoverRegistrationPage');
+  const discoveryEnd = workerSource.indexOf('const runRegistrationDiscoveryPage', discoveryStart);
+  const discovery = workerSource.slice(discoveryStart, discoveryEnd);
+  assert.match(discovery, /status='error'/);
+  assert.match(discovery, /attempt_count=0/);
+  assert.match(discovery, /status='detected'/);
+  assert.match(discovery, /s\.url=i\.url OR s\.source_url=i\.url/);
+  assert.match(discovery, /s\.error_message LIKE 'Drive copy failed \(5%'/);
+  assert.doesNotMatch(discovery, /s\.error_message LIKE 'Drive copy failed \(403%'/);
+});
+
 test('registration scans process a bounded slice instead of one file per cron', () => {
   assert.match(workerSource, /registerBatchSize: getNumber\(env\.REGISTER_BATCH_SIZE, 2/);
   assert.match(workerSource, /maxRegisterPasses: getNumber\(env\.MAX_REGISTER_PASSES, 2/);

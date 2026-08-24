@@ -45,6 +45,7 @@ const createWorkerRegistrationStatusTable = () => query(`
     media_id TEXT,
     extension TEXT,
     error_message TEXT,
+    attempt_count INTEGER NOT NULL DEFAULT 0,
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
   )
@@ -71,7 +72,8 @@ const ensureWorkerRegistrationStatusColumns = () => query(`
   ADD COLUMN IF NOT EXISTS title TEXT,
   ADD COLUMN IF NOT EXISTS media_id TEXT,
   ADD COLUMN IF NOT EXISTS extension TEXT,
-  ADD COLUMN IF NOT EXISTS error_message TEXT
+  ADD COLUMN IF NOT EXISTS error_message TEXT,
+  ADD COLUMN IF NOT EXISTS attempt_count INTEGER NOT NULL DEFAULT 0
 `);
 
 const ensureWorkerRegistrationStatusColumnTypes = () => query(`

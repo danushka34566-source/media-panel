@@ -16,6 +16,7 @@ export type BackendJobStatus = {
 
 export type BackendRegistrationStatus = {
   url?: string
+  source_url?: string
   file_name?: string
   original_file_name?: string
   title?: string

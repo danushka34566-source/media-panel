@@ -18,6 +18,7 @@ import ScoreCardContainer from '@/components/ScoreCardContainer';
 import ScoreCardRow from '@/components/ScoreCardRow';
 import BackendLogsModal from './BackendLogsModal';
 import BackendQueueModal from './BackendQueueModal';
+import AdminRegistrationRetryButton from '../AdminRegistrationRetryButton';
 import {
   INITIAL_BACKEND_STATUS_STATE,
   getBackendStatusSnapshot,
@@ -412,6 +413,13 @@ export default function BackendStats() {
                 )}>
                   {status}
                 </span>
+                {status === 'error' && job.url &&
+                  <AdminRegistrationRetryButton
+                    url={job.url}
+                    sourceUrl={job.source_url}
+                    originalFileName={job.original_file_name || job.file_name}
+                    title={job.title}
+                  />}
               </div>
               <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-dim">
                 {job.extension && <span>{job.extension.toUpperCase()}</span>}

@@ -266,7 +266,7 @@ const GENERATED_MEDIA_SUFFIX_REGEX =
 const STALE_REGISTRATION_ERROR_MESSAGE =
   'Previous registration attempt stalled; queued for retry';
 const MISSING_UPLOAD_ERROR_PREFIX = 'Upload not found in storage';
-const WORKER_BUILD_ID = 'v118';
+const WORKER_BUILD_ID = 'v119';
 // A scheduled Worker must finish promptly. Drive copies can become visible
 // asynchronously, so persist the in-flight state and check again on the next
 // minute instead of polling long enough to lose the registration lease.
@@ -2785,6 +2785,10 @@ const clearTrackedRegistration = async (
 
 let registrationStatusTableReady: Promise<void> | undefined;
 const ensureRegistrationStatusTable = async (env: Env) => {
+  // Scheduled cron invocations must not spend their tiny CPU budget on DDL.
+  // The panel's processing schema setup creates and migrates this table before
+  // the worker runs; manual/API paths retain the idempotent safety net.
+  if (env.REGISTRATION_SCHEDULED === '1') return;
   if (!registrationStatusTableReady) {
     const sql = sqlForEnv(env);
     registrationStatusTableReady = (async () => {
@@ -2993,10 +2997,18 @@ const getRegistrationStatusRows = async (env: Env, limit?: number) => {
             OR error_message LIKE 'Drive copy failed (425%'
             OR error_message LIKE 'Drive copy failed (429%'
             OR error_message LIKE 'Drive copy failed (5%'
+            OR error_message LIKE 'Registration stopped after %: Drive copy failed (408%'
+            OR error_message LIKE 'Registration stopped after %: Drive copy failed (425%'
+            OR error_message LIKE 'Registration stopped after %: Drive copy failed (429%'
+            OR error_message LIKE 'Registration stopped after %: Drive copy failed (5%'
             OR error_message LIKE 'Drive copy not ready:%'
+            OR error_message LIKE 'Registration stopped after %: Drive copy not ready:%'
             OR error_message LIKE 'Drive source metadata unavailable%'
+            OR error_message LIKE 'Registration stopped after %: Drive source metadata unavailable%'
             OR error_message LIKE 'Copied destination is not readable in storage:%'
+            OR error_message LIKE 'Registration stopped after %: Copied destination is not readable in storage:%'
             OR error_message LIKE 'Copied destination size mismatch:%'
+            OR error_message LIKE 'Registration stopped after %: Copied destination size mismatch:%'
           )
         )
       ORDER BY uploaded_at ASC NULLS LAST, updated_at ASC, url ASC
@@ -3074,7 +3086,13 @@ const claimRegistrationQueueRow = async (
           status='registering'
           AND COALESCE(updated_at, created_at, TIMESTAMP 'epoch') < now() -
             (${String(staleMinutes)} || ' minutes')::interval
-        ) AS was_stale_retry
+        ) AS was_stale_retry,
+        (
+          status='error'
+          AND COALESCE(attempt_count, 0) >= ${maxAttempts}
+          AND COALESCE(updated_at, created_at, TIMESTAMP 'epoch') < now() -
+            (${String(staleMinutes)} || ' minutes')::interval
+        ) AS was_terminal_retry
       FROM worker_registration_status
       CROSS JOIN active
       WHERE active.active_count < ${concurrencyLimit}
@@ -3098,10 +3116,49 @@ const claimRegistrationQueueRow = async (
             OR error_message LIKE 'Drive copy failed (425%'
             OR error_message LIKE 'Drive copy failed (429%'
             OR error_message LIKE 'Drive copy failed (5%'
+            OR error_message LIKE 'Registration stopped after %: Drive copy failed (408%'
+            OR error_message LIKE 'Registration stopped after %: Drive copy failed (425%'
+            OR error_message LIKE 'Registration stopped after %: Drive copy failed (429%'
+            OR error_message LIKE 'Registration stopped after %: Drive copy failed (5%'
             OR error_message LIKE 'Drive copy not ready:%'
+            OR error_message LIKE 'Registration stopped after %: Drive copy not ready:%'
             OR error_message LIKE 'Drive source metadata unavailable%'
+            OR error_message LIKE 'Registration stopped after %: Drive source metadata unavailable%'
             OR error_message LIKE 'Copied destination is not readable in storage:%'
+            OR error_message LIKE 'Registration stopped after %: Copied destination is not readable in storage:%'
             OR error_message LIKE 'Copied destination size mismatch:%'
+            OR error_message LIKE 'Registration stopped after %: Copied destination size mismatch:%'
+          )
+        )
+        OR (
+          status='error'
+          AND COALESCE(attempt_count, 0) >= ${maxAttempts}
+          AND error_message NOT LIKE 'Registration source not found in storage:%'
+          AND error_message NOT LIKE 'Upload not found in storage%'
+          AND COALESCE(updated_at, created_at, TIMESTAMP 'epoch') < now() -
+            (${String(staleMinutes)} || ' minutes')::interval
+          AND (
+            error_message LIKE 'Registration stopped after % attempts; retry it manually'
+            OR error_message LIKE 'Drive copy failed (408%'
+            OR error_message LIKE 'Drive copy failed (425%'
+            OR error_message LIKE 'Drive copy failed (429%'
+            OR error_message LIKE 'Drive copy failed (5%'
+            OR error_message LIKE 'Registration stopped after %: Drive copy failed (408%'
+            OR error_message LIKE 'Registration stopped after %: Drive copy failed (425%'
+            OR error_message LIKE 'Registration stopped after %: Drive copy failed (429%'
+            OR error_message LIKE 'Registration stopped after %: Drive copy failed (5%'
+            OR error_message LIKE 'Drive copy not ready:%'
+            OR error_message LIKE 'Registration stopped after %: Drive copy not ready:%'
+            OR error_message LIKE 'Drive source metadata unavailable%'
+            OR error_message LIKE 'Registration stopped after %: Drive source metadata unavailable%'
+            OR error_message LIKE 'Copied destination is not readable in storage:%'
+            OR error_message LIKE 'Registration stopped after %: Copied destination is not readable in storage:%'
+            OR error_message LIKE 'Copied destination size mismatch:%'
+            OR error_message LIKE 'Registration stopped after %: Copied destination size mismatch:%'
+            OR error_message ILIKE '%connection terminated%'
+            OR error_message ILIKE '%connection reset%'
+            OR error_message ILIKE '%timed out%'
+            OR error_message ILIKE '%timeout%'
           )
         )
         )
@@ -3114,7 +3171,13 @@ const claimRegistrationQueueRow = async (
         status='registering',
         updated_at=now(),
         error_message=NULL,
-        attempt_count=COALESCE(status_row.attempt_count, 0) + 1
+        -- A terminal error starts a fresh bounded retry cycle. Missing-source
+        -- errors are excluded above and remain actionable until the object is
+        -- uploaded again; discovery then requeues them when it sees the key.
+        attempt_count=CASE
+          WHEN candidate.was_terminal_retry THEN 1
+          ELSE COALESCE(status_row.attempt_count, 0) + 1
+        END
       FROM candidate
       WHERE status_row.url=candidate.url
       RETURNING
@@ -3511,9 +3574,10 @@ const syncDetectedStatuses = async (
 // inventory walk so the Free-plan CPU budget stays bounded. That optimization
 // must not starve discovery: direct Drive uploads do not create panel hints and
 // would otherwise remain invisible until the entire older queue drained. Keep
-// discovery on its own bounded cron and insert only genuinely unknown source
-// objects in one SQL statement. Registration itself is performed by the FIFO
-// claim on a later invocation.
+// discovery on its own bounded cron. It requeues only an exhausted, explicitly
+// transport-retryable row when the source is present again, and inserts only
+// genuinely unknown source objects. Registration itself is performed by the
+// FIFO claim on a later invocation.
 const discoverRegistrationPage = async (
   env: Env,
   objects: R2ObjectLike[],
@@ -3547,6 +3611,15 @@ const discoverRegistrationPage = async (
     .filter((candidate): candidate is NonNullable<typeof candidate> => Boolean(candidate));
   if (candidates.length === 0) { return 0; }
 
+  const maxAttempts = getNumber(env.MAX_REGISTRATION_ATTEMPTS, 3, {
+    min: 1,
+    max: 20,
+  });
+  const retryAfterMinutes = getNumber(env.STALE_REGISTRATION_MINUTES, 15, {
+    min: 1,
+    max: 24 * 60,
+  });
+
   const sql = sqlForEnv(env);
   const payload = JSON.stringify(candidates.map(candidate => ({
     url: candidate.url,
@@ -3565,6 +3638,48 @@ const discoverRegistrationPage = async (
         uploaded_at TIMESTAMP WITH TIME ZONE,
         title TEXT
       )
+    ), requeued AS (
+      UPDATE worker_registration_status s
+      SET
+        status='detected',
+        error_message=NULL,
+        attempt_count=0,
+        updated_at=now()
+      FROM incoming i
+      WHERE (s.url=i.url OR s.source_url=i.url)
+        AND s.status='error'
+        AND COALESCE(s.attempt_count, 0) >= ${maxAttempts}
+        AND COALESCE(s.updated_at, s.created_at, TIMESTAMP 'epoch') <
+          now() - (${String(retryAfterMinutes)} || ' minutes')::interval
+        AND (
+          s.error_message LIKE 'Registration stopped after % attempts; retry it manually'
+          OR s.error_message LIKE 'Drive copy failed (408%'
+          OR s.error_message LIKE 'Drive copy failed (425%'
+          OR s.error_message LIKE 'Drive copy failed (429%'
+          OR s.error_message LIKE 'Drive copy failed (5%'
+          OR s.error_message LIKE 'Registration stopped after %: Drive copy failed (408%'
+          OR s.error_message LIKE 'Registration stopped after %: Drive copy failed (425%'
+          OR s.error_message LIKE 'Registration stopped after %: Drive copy failed (429%'
+          OR s.error_message LIKE 'Registration stopped after %: Drive copy failed (5%'
+          OR s.error_message LIKE 'Drive copy not ready:%'
+          OR s.error_message LIKE 'Registration stopped after %: Drive copy not ready:%'
+          OR s.error_message LIKE 'Drive source metadata unavailable%'
+          OR s.error_message LIKE 'Registration stopped after %: Drive source metadata unavailable%'
+          OR s.error_message LIKE 'Copied destination is not readable in storage:%'
+          OR s.error_message LIKE 'Registration stopped after %: Copied destination is not readable in storage:%'
+          OR s.error_message LIKE 'Copied destination size mismatch:%'
+          OR s.error_message LIKE 'Registration stopped after %: Copied destination size mismatch:%'
+          OR s.error_message ILIKE '%connection terminated%'
+          OR s.error_message ILIKE '%connection reset%'
+          OR s.error_message ILIKE '%timed out%'
+          OR s.error_message ILIKE '%timeout%'
+        )
+        AND NOT EXISTS (
+          SELECT 1
+          FROM registered_upload_file_map f
+          WHERE f.source_url=i.url OR f.stored_url=i.url
+        )
+      RETURNING s.url
     ), candidates AS (
       SELECT i.*
       FROM incoming i
@@ -3583,8 +3698,8 @@ const discoverRegistrationPage = async (
           FROM media m
           WHERE m.url=i.url OR m.poster_url=i.url OR m.preview_url=i.url
         )
-    )
-    INSERT INTO worker_registration_status (
+    ), inserted AS (
+      INSERT INTO worker_registration_status (
       url,
       file_name,
       uploaded_at,
@@ -3593,9 +3708,10 @@ const discoverRegistrationPage = async (
       original_file_name,
       title,
       extension,
-      error_message
+      error_message,
+      attempt_count
     )
-    SELECT
+      SELECT
       url,
       file_name,
       uploaded_at,
@@ -3604,10 +3720,17 @@ const discoverRegistrationPage = async (
       file_name,
       title,
       extension,
-      NULL
-    FROM candidates
-    ON CONFLICT (url) DO NOTHING
-    RETURNING url
+      NULL,
+      0
+      FROM candidates
+      ON CONFLICT (url) DO NOTHING
+      RETURNING url
+    ), changed AS (
+      SELECT url FROM requeued
+      UNION ALL
+      SELECT url FROM inserted
+    )
+    SELECT url FROM changed
   ` as unknown as Array<{ url: string }>;
   return rows.length;
 };
