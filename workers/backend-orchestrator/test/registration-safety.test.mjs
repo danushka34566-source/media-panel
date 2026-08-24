@@ -148,6 +148,9 @@ test('terminal registration errors re-enter a bounded retry cycle automatically'
   assert.match(source, /attempt_count=CASE[\s\S]*?THEN 1/);
   assert.match(source, /error_message LIKE 'Drive copy failed \(5%'/);
   assert.doesNotMatch(source, /error_message LIKE 'Drive copy failed \(403%'/);
+  const terminalStart = source.indexOf("error_message LIKE 'Registration stopped after % attempts; retry it manually'");
+  const terminal = source.slice(terminalStart, source.indexOf("\n          )", terminalStart));
+  assert.doesNotMatch(terminal, /Registration stopped after %: Drive copy failed/);
   assert.match(source, /Registration source not found in storage/);
   const discoveryStart = workerSource.indexOf('const discoverRegistrationPage');
   const discoveryEnd = workerSource.indexOf('const runRegistrationDiscoveryPage', discoveryStart);
@@ -158,6 +161,7 @@ test('terminal registration errors re-enter a bounded retry cycle automatically'
   assert.match(discovery, /s\.url=i\.url OR s\.source_url=i\.url/);
   assert.match(discovery, /s\.error_message LIKE 'Drive copy failed \(5%'/);
   assert.doesNotMatch(discovery, /s\.error_message LIKE 'Drive copy failed \(403%'/);
+  assert.doesNotMatch(discovery, /s\.error_message LIKE 'Registration stopped after %: Drive copy failed/);
 });
 
 test('registration scans process a bounded slice instead of one file per cron', () => {

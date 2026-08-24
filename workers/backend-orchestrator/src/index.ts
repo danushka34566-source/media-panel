@@ -266,7 +266,7 @@ const GENERATED_MEDIA_SUFFIX_REGEX =
 const STALE_REGISTRATION_ERROR_MESSAGE =
   'Previous registration attempt stalled; queued for retry';
 const MISSING_UPLOAD_ERROR_PREFIX = 'Upload not found in storage';
-const WORKER_BUILD_ID = 'v119';
+const WORKER_BUILD_ID = 'v120';
 // A scheduled Worker must finish promptly. Drive copies can become visible
 // asynchronously, so persist the in-flight state and check again on the next
 // minute instead of polling long enough to lose the registration lease.
@@ -3143,18 +3143,10 @@ const claimRegistrationQueueRow = async (
             OR error_message LIKE 'Drive copy failed (425%'
             OR error_message LIKE 'Drive copy failed (429%'
             OR error_message LIKE 'Drive copy failed (5%'
-            OR error_message LIKE 'Registration stopped after %: Drive copy failed (408%'
-            OR error_message LIKE 'Registration stopped after %: Drive copy failed (425%'
-            OR error_message LIKE 'Registration stopped after %: Drive copy failed (429%'
-            OR error_message LIKE 'Registration stopped after %: Drive copy failed (5%'
             OR error_message LIKE 'Drive copy not ready:%'
-            OR error_message LIKE 'Registration stopped after %: Drive copy not ready:%'
             OR error_message LIKE 'Drive source metadata unavailable%'
-            OR error_message LIKE 'Registration stopped after %: Drive source metadata unavailable%'
             OR error_message LIKE 'Copied destination is not readable in storage:%'
-            OR error_message LIKE 'Registration stopped after %: Copied destination is not readable in storage:%'
             OR error_message LIKE 'Copied destination size mismatch:%'
-            OR error_message LIKE 'Registration stopped after %: Copied destination size mismatch:%'
             OR error_message ILIKE '%connection terminated%'
             OR error_message ILIKE '%connection reset%'
             OR error_message ILIKE '%timed out%'
@@ -3171,9 +3163,11 @@ const claimRegistrationQueueRow = async (
         status='registering',
         updated_at=now(),
         error_message=NULL,
-        -- A terminal error starts a fresh bounded retry cycle. Missing-source
-        -- errors are excluded above and remain actionable until the object is
-        -- uploaded again; discovery then requeues them when it sees the key.
+        -- A legacy/retryable terminal marker gets one fresh bounded recovery
+        -- cycle. Once that cycle produces a concrete terminal message, it is
+        -- left for the explicit manual retry route instead of looping forever.
+        -- Missing-source errors remain actionable when discovery sees a later
+        -- re-upload of the key.
         attempt_count=CASE
           WHEN candidate.was_terminal_retry THEN 1
           ELSE COALESCE(status_row.attempt_count, 0) + 1
@@ -3657,18 +3651,10 @@ const discoverRegistrationPage = async (
           OR s.error_message LIKE 'Drive copy failed (425%'
           OR s.error_message LIKE 'Drive copy failed (429%'
           OR s.error_message LIKE 'Drive copy failed (5%'
-          OR s.error_message LIKE 'Registration stopped after %: Drive copy failed (408%'
-          OR s.error_message LIKE 'Registration stopped after %: Drive copy failed (425%'
-          OR s.error_message LIKE 'Registration stopped after %: Drive copy failed (429%'
-          OR s.error_message LIKE 'Registration stopped after %: Drive copy failed (5%'
           OR s.error_message LIKE 'Drive copy not ready:%'
-          OR s.error_message LIKE 'Registration stopped after %: Drive copy not ready:%'
           OR s.error_message LIKE 'Drive source metadata unavailable%'
-          OR s.error_message LIKE 'Registration stopped after %: Drive source metadata unavailable%'
           OR s.error_message LIKE 'Copied destination is not readable in storage:%'
-          OR s.error_message LIKE 'Registration stopped after %: Copied destination is not readable in storage:%'
           OR s.error_message LIKE 'Copied destination size mismatch:%'
-          OR s.error_message LIKE 'Registration stopped after %: Copied destination size mismatch:%'
           OR s.error_message ILIKE '%connection terminated%'
           OR s.error_message ILIKE '%connection reset%'
           OR s.error_message ILIKE '%timed out%'
