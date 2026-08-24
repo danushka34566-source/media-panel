@@ -52,7 +52,7 @@ export default function MediaGrid({
   animate = true,
   canStart,
   animateOnFirstLoadOnly,
-  staggerOnFirstLoadOnly = true,
+  staggerOnFirstLoadOnly,
   additionalTile,
   small,
   selectable = true,
@@ -209,7 +209,10 @@ export default function MediaGrid({
   } = useSelectMediaState();
   // Animate the first visible batch only. Replaying a 48-card entrance on
   // every infinite-scroll append is a major source of scroll jank.
-  const animateFirstLoadOnly = animateOnFirstLoadOnly ?? true;
+  // Do not force first-load-only mode here. The route itself is a new view
+  // when switching between grid and full layouts, and upstream animates that
+  // transition even after the application shell has finished loading.
+  const animateFirstLoadOnly = animateOnFirstLoadOnly;
 
   return (
     <div
