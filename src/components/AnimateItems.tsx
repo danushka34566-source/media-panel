@@ -84,6 +84,14 @@ function AnimateItems({
   const shouldStagger =
     !(staggerOnFirstLoadOnly && hasLoadedWithAnimations);
 
+  // `initial` is only meaningful on mount, but deriving it directly from
+  // app-state on every render lets a hydration/layout update replace the
+  // parent variant while cards are already visible. Framer can then replay
+  // the hidden scale/translate state, which looks like cards appearing and
+  // immediately shrinking away (especially on mobile). Capture the decision
+  // for this motion tree once and apply it explicitly to each child below.
+  const initialShouldAnimate = useRef(shouldAnimate).current;
+
   const typeResolved = animateFromAppState
     ? (nextMediaAnimationInitial.current?.type ?? type)
     : type;
@@ -146,7 +154,8 @@ function AnimateItems({
         const itemKey = String(itemKeys ? itemKeys[index] : index);
         return <motion.div
           key={itemKey}
-          initial={initialItemKeys.current.has(itemKey) ? undefined : false}
+            initial={initialShouldAnimate &&
+              initialItemKeys.current.has(itemKey) ? 'hidden' : false}
           className={classNameItem}
           variants={{
             hidden,
