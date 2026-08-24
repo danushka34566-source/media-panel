@@ -3,37 +3,31 @@
 import {
   useCallback,
   useEffect,
-  useLayoutEffect,
   useRef,
   useState,
   useSyncExternalStore,
 } from 'react';
-import { usePathname, useRouter } from 'next/navigation';
-import { clsx } from 'clsx/lite';
-import { LuMaximize2, LuMinimize2, LuPlay, LuX } from 'react-icons/lu';
+import { useRouter } from 'next/navigation';
+import { LuMaximize2, LuPlay, LuX } from 'react-icons/lu';
 import {
   AnimatePresence,
   motion,
-  type PanInfo,
-  useDragControls,
 } from 'framer-motion';
 import { VideoPlaybackManager } from '@/utility/VideoPlaybackManager';
 import {
   getDockedVideo,
   getDockedVideoServerSnapshot,
+  getActiveDetailVideoMediaId,
   subscribeVideoMiniPlayer,
   updateDockedVideo,
   clearDockedVideo,
-  PERSISTENT_VIDEO_FULLSCREEN_EVENT,
-  PERSISTENT_VIDEO_PIP_EVENT,
+  requestDetailVideoRestore,
 } from './video-mini-player';
 
 export default function VideoMiniPlayer() {
   const router = useRouter();
-  const pathname = usePathname();
-  const boundsRef = useRef<HTMLDivElement>(null);
-  const dragControls = useDragControls();
   const videoRef = useRef<HTMLVideoElement>(null);
+  const miniSwipeStartYRef = useRef<number | undefined>(undefined);
   const resumeTimeRef = useRef<number | undefined>(undefined);
   const dockedVideo = useSyncExternalStore(
     subscribeVideoMiniPlayer,
@@ -43,18 +37,9 @@ export default function VideoMiniPlayer() {
   const [useFallbackSource, setUseFallbackSource] = useState(false);
   const [playbackError, setPlaybackError] = useState(false);
   const [playbackNeedsGesture, setPlaybackNeedsGesture] = useState(false);
-  const [fullscreenMediaId, setFullscreenMediaId] = useState<string>();
-  type HostRect = NonNullable<typeof dockedVideo>['initialHostRect'];
-  const [hostPlacement, setHostPlacement] = useState<{
-    mediaId: string
-    rect: HostRect
-  }>();
   const source = dockedVideo && useFallbackSource && dockedVideo.fallbackUrl
     ? dockedVideo.fallbackUrl
     : dockedVideo?.sourceUrl;
-  const isFullscreen = Boolean(
-    dockedVideo && fullscreenMediaId === dockedVideo.mediaId,
-  );
   const requestPlayback = useCallback((video: HTMLVideoElement) => {
     void VideoPlaybackManager.requestPlay(video)
       .then(() => setPlaybackNeedsGesture(video.paused && !video.ended))
@@ -70,17 +55,12 @@ export default function VideoMiniPlayer() {
         muted: video.muted,
       });
     }
+    requestDetailVideoRestore(dockedVideo.mediaId);
+    if (getActiveDetailVideoMediaId() === dockedVideo.mediaId) { return; }
     // The persistent mini player keeps playing while the route payload loads;
     // MediaLarge claims the state only after the destination is mounted.
     router.push(dockedVideo.detailPath, { scroll: false });
   }, [dockedVideo, router]);
-  const onDragEnd = useCallback((
-    _: MouseEvent | TouchEvent | PointerEvent,
-    info: PanInfo,
-  ) => {
-    if (info.offset.y < -72 || info.velocity.y < -650) { openDetails(); }
-  }, [openDetails]);
-
   useEffect(() => {
     // The source selection is local UI state that must reset with a new
     // media element; this is an intentional state synchronization boundary.
@@ -93,45 +73,6 @@ export default function VideoMiniPlayer() {
     // element; only a new media id should reset the source selection.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dockedVideo?.mediaId]);
-
-  useEffect(() => {
-    const requestFullscreen = (event: Event) => {
-      const mediaId = (event as CustomEvent<{ mediaId?: string }>).detail
-        ?.mediaId;
-      if (mediaId) { setFullscreenMediaId(mediaId); }
-    };
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') { setFullscreenMediaId(undefined); }
-    };
-    const requestPictureInPicture = (event: Event) => {
-      const mediaId = (event as CustomEvent<{ mediaId?: string }>).detail
-        ?.mediaId;
-      const video = videoRef.current;
-      if (mediaId && video?.dataset.mediaId === mediaId) {
-        void VideoPlaybackManager.togglePiP(video);
-      }
-    };
-    window.addEventListener(
-      PERSISTENT_VIDEO_FULLSCREEN_EVENT,
-      requestFullscreen,
-    );
-    window.addEventListener('keydown', onKeyDown);
-    window.addEventListener(
-      PERSISTENT_VIDEO_PIP_EVENT,
-      requestPictureInPicture,
-    );
-    return () => {
-      window.removeEventListener(
-        PERSISTENT_VIDEO_FULLSCREEN_EVENT,
-        requestFullscreen,
-      );
-      window.removeEventListener('keydown', onKeyDown);
-      window.removeEventListener(
-        PERSISTENT_VIDEO_PIP_EVENT,
-        requestPictureInPicture,
-      );
-    };
-  }, []);
 
   const shouldResumePlayback = Boolean(dockedVideo?.wasPlaying);
   useEffect(() => {
@@ -157,85 +98,8 @@ export default function VideoMiniPlayer() {
     useFallbackSource,
   ]);
 
-  useLayoutEffect(() => {
-    const mediaId = dockedVideo?.mediaId;
-    if (!mediaId) {
-      return;
-    }
-    let frame: number | undefined;
-    const update = () => {
-      frame = undefined;
-      const hosts = Array.from(document.querySelectorAll<HTMLElement>(
-        '[data-persistent-video-host]',
-      )).filter(host => host.dataset.persistentVideoHost === mediaId);
-      const viewportWidth = window.innerWidth;
-      const viewportHeight = window.innerHeight;
-      const best = hosts.map(host => {
-        const rect = host.getBoundingClientRect();
-        const visibleWidth = Math.max(
-          0,
-          Math.min(rect.right, viewportWidth) - Math.max(rect.left, 0),
-        );
-        const visibleHeight = Math.max(
-          0,
-          Math.min(rect.bottom, viewportHeight) - Math.max(rect.top, 0),
-        );
-        return { rect, visibleArea: visibleWidth * visibleHeight };
-      }).sort((a, b) => b.visibleArea - a.visibleArea)[0];
-      const visibleRatio = best && best.rect.width > 0 && best.rect.height > 0
-        ? best.visibleArea / (best.rect.width * best.rect.height)
-        : 0;
-      if (!best || visibleRatio < 0.2) {
-        setHostPlacement(current =>
-          current?.mediaId === mediaId && current.rect === undefined
-          ? current
-          : { mediaId, rect: undefined });
-        return;
-      }
-      const next = {
-        left: best.rect.left,
-        top: best.rect.top,
-        width: best.rect.width,
-        height: best.rect.height,
-      };
-      setHostPlacement(current => current?.mediaId === mediaId && current.rect &&
-        Math.abs(current.rect.left - next.left) < 0.5 &&
-        Math.abs(current.rect.top - next.top) < 0.5 &&
-        Math.abs(current.rect.width - next.width) < 0.5 &&
-        Math.abs(current.rect.height - next.height) < 0.5
-        ? current
-        : { mediaId, rect: next });
-    };
-    const scheduleUpdate = () => {
-      if (frame === undefined) { frame = requestAnimationFrame(update); }
-    };
-    update();
-    const resizeObserver = typeof ResizeObserver === 'undefined'
-      ? undefined
-      : new ResizeObserver(scheduleUpdate);
-    document.querySelectorAll<HTMLElement>('[data-persistent-video-host]')
-      .forEach(host => resizeObserver?.observe(host));
-    const mutationObserver = new MutationObserver(scheduleUpdate);
-    mutationObserver.observe(document.body, { childList: true, subtree: true });
-    window.addEventListener('resize', scheduleUpdate);
-    window.addEventListener('scroll', scheduleUpdate, true);
-    return () => {
-      if (frame !== undefined) { cancelAnimationFrame(frame); }
-      resizeObserver?.disconnect();
-      mutationObserver.disconnect();
-      window.removeEventListener('resize', scheduleUpdate);
-      window.removeEventListener('scroll', scheduleUpdate, true);
-    };
-  }, [dockedVideo?.mediaId, pathname]);
-
-  const hostRect = dockedVideo && hostPlacement?.mediaId === dockedVideo.mediaId
-    ? hostPlacement.rect
-    : dockedVideo?.initialHostRect;
-  const isEmbedded = Boolean(hostRect) && !isFullscreen;
-
   return (
     <div
-      ref={boundsRef}
       className="pointer-events-none fixed inset-0 z-40"
     >
       <AnimatePresence>
@@ -243,42 +107,16 @@ export default function VideoMiniPlayer() {
         <motion.aside
           key={dockedVideo.mediaId}
           aria-label="Playing video"
-          className={clsx(
-            'pointer-events-auto absolute overflow-hidden',
-            isFullscreen
-              ? 'inset-0 rounded-none border-0 bg-black'
-              : isEmbedded
-              ? 'rounded-md bg-black'
-              : clsx(
-                  'bottom-2 right-2 rounded-xl sm:bottom-4 sm:right-4',
-                  'w-[min(19rem,calc(100vw-1rem))]',
-                  'border border-medium bg-main shadow-2xl ring-1 ring-black/15',
-                ),
-            'will-change-transform',
-          )}
-          style={isEmbedded && hostRect ? {
-            left: hostRect.left,
-            top: hostRect.top,
-            width: hostRect.width,
-            height: hostRect.height,
-          } : undefined}
-          layout
-          initial={isEmbedded ? false : { opacity: 0, scale: 0.9, y: 28 }}
+          className="pointer-events-auto absolute bottom-2 right-2
+            w-[min(19rem,calc(100vw-1rem))] overflow-hidden rounded-xl
+            border border-medium bg-main shadow-2xl ring-1 ring-black/15
+            will-change-transform sm:bottom-4 sm:right-4"
+          initial={{ opacity: 0, scale: 0.92, y: 20 }}
           animate={{ opacity: 1, scale: 1, y: 0 }}
           exit={{ opacity: 0, scale: 0.92, y: 20 }}
           transition={{ type: 'spring', stiffness: 360, damping: 32 }}
-          drag={!isEmbedded && !isFullscreen}
-          dragListener={false}
-          dragControls={dragControls}
-          dragConstraints={boundsRef}
-          dragElastic={0.06}
-          dragMomentum={false}
-          onDragEnd={onDragEnd}
         >
-          <div className={clsx(
-            'relative overflow-hidden bg-black',
-            isEmbedded || isFullscreen ? 'size-full' : 'aspect-video',
-          )}>
+          <div className="relative aspect-video overflow-hidden bg-black">
             <video
               ref={videoRef}
               data-media-id={dockedVideo.mediaId}
@@ -375,28 +213,26 @@ export default function VideoMiniPlayer() {
                 </button>
               </div>
             )}
-            {isFullscreen && (
-              <button
-                type="button"
-                aria-label="Exit full screen"
-                title="Exit full screen"
-                className="absolute right-3 top-3 z-20 inline-flex size-10
-                  items-center justify-center rounded-full border border-white/25
-                  bg-black/70 text-white shadow-lg backdrop-blur-sm
-                  transition-transform hover:scale-105"
-                onClick={() => setFullscreenMediaId(undefined)}
-              >
-                <LuMinimize2 size={18} />
-              </button>
-            )}
           </div>
-          {!isEmbedded && !isFullscreen && <div
-            className="flex min-h-12 touch-none select-none items-center gap-2
-              border-t border-medium bg-main px-2.5 py-2 cursor-grab
-              active:cursor-grabbing"
-            onPointerDown={event => {
-              const target = event.target as HTMLElement;
-              if (!target.closest('button')) { dragControls.start(event); }
+          <div
+            className="flex min-h-12 touch-pan-y select-none items-center gap-2
+              border-t border-medium bg-main px-2.5 py-2"
+            onTouchStart={event => {
+              miniSwipeStartYRef.current = event.touches.length === 1
+                ? event.touches[0].clientY
+                : undefined;
+            }}
+            onTouchEnd={event => {
+              const startY = miniSwipeStartYRef.current;
+              miniSwipeStartYRef.current = undefined;
+              const endY = event.changedTouches[0]?.clientY;
+              if (
+                typeof startY === 'number' &&
+                typeof endY === 'number' &&
+                endY - startY < -56
+              ) {
+                openDetails();
+              }
             }}
             onDoubleClick={openDetails}
           >
@@ -435,7 +271,7 @@ export default function VideoMiniPlayer() {
             >
               <LuX size={16} />
             </button>
-          </div>}
+          </div>
         </motion.aside>}
       </AnimatePresence>
     </div>

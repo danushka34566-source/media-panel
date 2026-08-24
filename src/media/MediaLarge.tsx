@@ -50,7 +50,7 @@ import {
   TouchEvent,
   type ReactNode,
 } from 'react';
-import { createPortal } from 'react-dom';
+import { createPortal, flushSync } from 'react-dom';
 import useVisibility from '@/utility/useVisibility';
 import MediaDate from './MediaDate';
 import { useAppState } from '@/app/AppState';
@@ -100,14 +100,15 @@ import {
 } from './full-video-playback';
 import { getFullVideoBridgeUrl } from './full-video-bridge';
 import {
+  clearDockedVideo,
   getDockedVideo,
   getDockedVideoServerSnapshot,
   subscribeVideoMiniPlayer,
   setDetailVideoPageActive,
   setDockedVideo,
+  type DockedVideoState,
   DETAIL_VIDEO_MINIMIZE_EVENT,
-  requestPersistentVideoFullscreen,
-  requestPersistentVideoPictureInPicture,
+  DETAIL_VIDEO_RESTORE_EVENT,
 } from './video-mini-player';
 
 const SWIPE_NAVIGATION_DISTANCE = 50;
@@ -259,7 +260,6 @@ export default function MediaLarge({
   const router = useRouter();
   const isVideo = isVideoMedia(photo);
   const ref = useRef<HTMLDivElement>(null);
-  const persistentVideoHostRef = useRef<HTMLDivElement>(null);
   const refZoomControls = useRef<ZoomControlsRef>(null);
   const refMediaRecipe = useRef<HTMLDivElement>(null);
   const refMediaFilm = useRef<HTMLDivElement>(null);
@@ -279,7 +279,11 @@ export default function MediaLarge({
     getDockedVideo,
     getDockedVideoServerSnapshot,
   );
-  const isPersistentVideoActive = dockedVideo?.mediaId === photo.id;
+  const isPersistentVideoActive = Boolean(
+    broadcastDetailVideoPlayback && dockedVideo?.mediaId === photo.id,
+  );
+  const [dockedResumeState, setDockedResumeState] =
+    useState<DockedVideoState>();
   const [isPreparingFullVideo, setIsPreparingFullVideo] = useState(false);
   const [fullVideoDeliveryUrl, setFullVideoDeliveryUrl] = useState<string>();
   const [preparedFullVideoDownloads, setPreparedFullVideoDownloads] = useState<Record<string, {
@@ -299,6 +303,7 @@ export default function MediaLarge({
   const [isPiPLocked, setIsPiPLocked] = useState(false);
   const [pipLockedSrc, setPipLockedSrc] = useState<string | undefined>(undefined);
   const floatingVideoSentinelRef = useRef<HTMLDivElement>(null);
+  const isDetailFoldingRef = useRef(false);
   const detailPlaybackRef = useRef<{
     isFullVideoPlaying: boolean
     isMainVideoActuallyPlaying: boolean
@@ -365,6 +370,7 @@ export default function MediaLarge({
     setReadyPreviewSrc(undefined);
     setReadyPreviewActivationId(undefined);
     setShouldUseCompatibilityPlayback(false);
+    setDockedResumeState(undefined);
   }, [photo.id]);
 
   // Warm the adjacent route payloads while the current media is visible. The
@@ -477,25 +483,6 @@ export default function MediaLarge({
   ]);
 
   useEffect(() => {
-    if (!broadcastDetailVideoPlayback || !isVideo) { return; }
-    const minimize = (event: Event) => {
-      const mediaId = (event as CustomEvent<{ mediaId?: string }>).detail?.mediaId;
-      if (
-        mediaId !== photo.id ||
-        getDockedVideo()?.mediaId !== photo.id
-      ) { return; }
-      router.back();
-    };
-    window.addEventListener(DETAIL_VIDEO_MINIMIZE_EVENT, minimize);
-    return () => window.removeEventListener(DETAIL_VIDEO_MINIMIZE_EVENT, minimize);
-  }, [
-    broadcastDetailVideoPlayback,
-    isVideo,
-    photo,
-    router,
-  ]);
-
-  useEffect(() => {
     if (!isVideo) { return; }
     try {
       const enabled = typeof document !== 'undefined' &&
@@ -567,54 +554,6 @@ export default function MediaLarge({
     ? getFullVideoBridgeUrl(compatibilityPlaybackUrl)
     : undefined;
 
-  const ensurePersistentVideo = useCallback(() => {
-    const current = getDockedVideo();
-    if (current?.mediaId === photo.id) { return current; }
-    const capabilityVideo = videoRef.current ?? document.createElement('video');
-    const isMobile = window.matchMedia('(pointer: coarse)').matches ||
-      window.innerWidth < 768;
-    const selectedPlaybackUrl = selectInitialVideoPlaybackUrl({
-      sourceUrl: photo.url,
-      compatibilityUrl: compatibilityPlaybackUrl,
-      isMobile,
-      nativeMatroskaSupport: capabilityVideo.canPlayType('video/x-matroska'),
-    });
-    const preparedDownload = preparedFullVideoDownloads[selectedPlaybackUrl];
-    const selectedDeliveryUrl = preparedDownload &&
-      preparedDownload.expiresAt > Date.now() + 10_000
-      ? preparedDownload.url
-      : getFullVideoBridgeUrl(selectedPlaybackUrl);
-    const next = {
-      mediaId: photo.id,
-      title: titleForMedia(photo),
-      detailPath: pathForMedia({ photo }),
-      sourceUrl: selectedDeliveryUrl,
-      fallbackUrl: fullVideoCompatibilityUrl,
-      posterUrl: getMediaPosterUrl(photo),
-      currentTime: 0,
-      wasPlaying: true,
-      muted: false,
-      initialHostRect: (() => {
-        const rect = persistentVideoHostRef.current?.getBoundingClientRect();
-        return rect && rect.width > 0 && rect.height > 0
-          ? {
-            left: rect.left,
-            top: rect.top,
-            width: rect.width,
-            height: rect.height,
-          }
-          : undefined;
-      })(),
-    };
-    setDockedVideo(next);
-    return next;
-  }, [
-    compatibilityPlaybackUrl,
-    fullVideoCompatibilityUrl,
-    photo,
-    preparedFullVideoDownloads,
-  ]);
-
   // Keep the latest playback position outside React state so a route change
   // can hand the active video to the global mini player before this card
   // unmounts. This also avoids a render on every timeupdate event.
@@ -633,19 +572,142 @@ export default function MediaLarge({
     isMainVideoActuallyPlaying,
   ]);
 
-  // Detail pages provide a stage for the root-layout player. The video node
-  // itself stays mounted above the route tree throughout navigation.
+  // The details page owns normal playback. The global mini player only owns
+  // a folded session after this page leaves or explicitly minimizes it.
   useEffect(() => {
     if (!broadcastDetailVideoPlayback || !isVideo) { return; }
     setDetailVideoPageActive(photo.id, true);
+    const docked = getDockedVideo();
+    if (docked?.mediaId === photo.id) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setDockedResumeState(docked);
+      clearDockedVideo();
+      setIsFullVideoPlaying(true);
+      setFullVideoDeliveryUrl(docked.sourceUrl);
+    }
     return () => {
       setDetailVideoPageActive(photo.id, false);
+      const playback = detailPlaybackRef.current;
+      if (
+        playback.isFullVideoPlaying &&
+        playback.sourceUrl &&
+        Number.isFinite(playback.currentTime)
+      ) {
+        setDockedVideo({
+          mediaId: photo.id,
+          title: titleForMedia(photo),
+          detailPath: pathForMedia({ photo }),
+          sourceUrl: playback.sourceUrl,
+          fallbackUrl: fullVideoCompatibilityUrl,
+          posterUrl: getMediaPosterUrl(photo),
+          currentTime: Math.max(0, playback.currentTime),
+          wasPlaying: playback.isMainVideoActuallyPlaying,
+          muted: playback.muted,
+        });
+      }
     };
   }, [
     broadcastDetailVideoPlayback,
+    fullVideoCompatibilityUrl,
     isVideo,
-    photo.id,
+    photo,
   ]);
+
+  useEffect(() => {
+    if (!dockedResumeState || !isFullVideoPlaying) { return; }
+    const video = videoRef.current;
+    if (!video) { return; }
+    const restore = () => {
+      try { video.currentTime = Math.max(0, dockedResumeState.currentTime); }
+      catch { /* media may still be switching sources */ }
+      video.muted = dockedResumeState.muted;
+      if (dockedResumeState.wasPlaying) {
+        void VideoPlaybackManager.requestPlay(video).catch(() => undefined);
+      }
+    };
+    video.addEventListener('loadedmetadata', restore, { once: true });
+    if (video.readyState >= 1) { restore(); }
+    return () => video.removeEventListener('loadedmetadata', restore);
+  }, [dockedResumeState, fullVideoSourceUrl, isFullVideoPlaying]);
+
+  useEffect(() => {
+    if (!broadcastDetailVideoPlayback || !isVideo) { return; }
+    const minimize = (event: Event) => {
+      const mediaId = (event as CustomEvent<{ mediaId?: string }>).detail?.mediaId;
+      if (mediaId !== photo.id) { return; }
+      const playback = detailPlaybackRef.current;
+      if (playback.isFullVideoPlaying && playback.sourceUrl) {
+        setDockedVideo({
+          mediaId: photo.id,
+          title: titleForMedia(photo),
+          detailPath: pathForMedia({ photo }),
+          sourceUrl: playback.sourceUrl,
+          fallbackUrl: fullVideoCompatibilityUrl,
+          posterUrl: getMediaPosterUrl(photo),
+          currentTime: Math.max(0, playback.currentTime),
+          wasPlaying: playback.isMainVideoActuallyPlaying,
+          muted: playback.muted,
+        });
+        videoRef.current?.pause();
+        detailPlaybackRef.current.isFullVideoPlaying = false;
+        detailPlaybackRef.current.isMainVideoActuallyPlaying = false;
+        isDetailFoldingRef.current = true;
+        setIsFullVideoPlaying(false);
+      }
+      router.back();
+    };
+    window.addEventListener(DETAIL_VIDEO_MINIMIZE_EVENT, minimize);
+    return () => window.removeEventListener(DETAIL_VIDEO_MINIMIZE_EVENT, minimize);
+  }, [
+    broadcastDetailVideoPlayback,
+    fullVideoCompatibilityUrl,
+    isVideo,
+    photo,
+    router,
+  ]);
+
+  // If the user scrolls back to the page placeholder, unfold the docked
+  // session into the page-owned player and resume from the same position.
+  useEffect(() => {
+    if (
+      !broadcastDetailVideoPlayback ||
+      !isVideo ||
+      !isPersistentVideoActive ||
+      !dockedVideo ||
+      isDetailFoldingRef.current
+    ) { return; }
+    const sentinel = floatingVideoSentinelRef.current;
+    if (!sentinel || typeof IntersectionObserver === 'undefined') { return; }
+    const observer = new IntersectionObserver(([entry]) => {
+      if (!entry?.isIntersecting || entry.intersectionRatio < 0.2) { return; }
+      setDockedResumeState(dockedVideo);
+      setFullVideoDeliveryUrl(dockedVideo.sourceUrl);
+      clearDockedVideo();
+      setIsFullVideoPlaying(true);
+      observer.disconnect();
+    }, { threshold: [0.2] });
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, [
+    broadcastDetailVideoPlayback,
+    dockedVideo,
+    isPersistentVideoActive,
+    isVideo,
+  ]);
+
+  useEffect(() => {
+    if (!broadcastDetailVideoPlayback || !isVideo) { return; }
+    const restore = (event: Event) => {
+      const mediaId = (event as CustomEvent<{ mediaId?: string }>).detail?.mediaId;
+      if (mediaId !== photo.id) { return; }
+      floatingVideoSentinelRef.current?.scrollIntoView({
+        behavior: 'smooth',
+        block: 'center',
+      });
+    };
+    window.addEventListener(DETAIL_VIDEO_RESTORE_EVENT, restore);
+    return () => window.removeEventListener(DETAIL_VIDEO_RESTORE_EVENT, restore);
+  }, [broadcastDetailVideoPlayback, isVideo, photo.id]);
 
   const warmFullVideoDownload = useCallback((sourceUrl = photo.url) => {
     if (!isVideo || !sourceUrl) { return; }
@@ -1351,15 +1413,10 @@ export default function MediaLarge({
           !isVideo && 'h-full',
           areMediaMatted && 'flex items-center justify-center',
         )}
-        ref={persistentVideoHostRef}
-        data-persistent-video-host={isVideo ? photo.id : undefined}
         style={isVideo ? { aspectRatio: mediaAspectRatio } : undefined}>
           {isVideo
             ? <>
-                {isPersistentVideoActive && (
-                  <div className="absolute inset-0 rounded-md bg-black" />
-                )}
-                {!isFullVideoPlaying && !isPersistentVideoActive && (
+                {!isFullVideoPlaying && (
                   posterSrc && shouldLoadVideoPoster && !hasPosterFailed
                     ? <div
                       key={`poster-${photo.id}`}
@@ -1388,8 +1445,7 @@ export default function MediaLarge({
                       className="absolute inset-0 z-0 max-h-full w-full rounded-md bg-black"
                     />
                 )}
-                {!isPersistentVideoActive &&
-                  (isFullVideoPlaying || shouldRenderPreview) &&
+                {(isFullVideoPlaying || shouldRenderPreview) &&
                   <video
                     ref={videoRef}
                     className={clsx(
@@ -1578,8 +1634,7 @@ export default function MediaLarge({
                 style={{ aspectRatio: mediaAspectRatio }}
               />}
           {/* Removed top-left video label */}
-          {isVideo && isPiPLocked && !isFullVideoPlaying &&
-            !isPersistentVideoActive && currentVideoUrl && (
+          {isVideo && isPiPLocked && !isFullVideoPlaying && currentVideoUrl && (
             <video
               className={clsx(
                 'absolute inset-0 w-full h-full',
@@ -1620,11 +1675,45 @@ export default function MediaLarge({
                   warmFullVideoDownload(compatibilityPlaybackUrl);
                 }
               }}
-              onClick={() => {
+              onClick={async () => {
                 if (isPreparingFullVideo) { return; }
                 setIsPreparingFullVideo(true);
                 try {
-                  ensurePersistentVideo();
+                  const previewVideo = videoRef.current;
+                  const capabilityVideo = previewVideo ??
+                    document.createElement('video');
+                  const isMobile = window.matchMedia('(pointer: coarse)')
+                    .matches || window.innerWidth < 768;
+                  const selectedPlaybackUrl = selectInitialVideoPlaybackUrl({
+                    sourceUrl: photo.url,
+                    compatibilityUrl: compatibilityPlaybackUrl,
+                    isMobile,
+                    nativeMatroskaSupport: capabilityVideo.canPlayType(
+                      'video/x-matroska',
+                    ),
+                  });
+                  const preferCompatibility = Boolean(
+                    compatibilityPlaybackUrl &&
+                    selectedPlaybackUrl === compatibilityPlaybackUrl,
+                  );
+                  const preparedDownload = preparedFullVideoDownloads[
+                    selectedPlaybackUrl
+                  ];
+                  const selectedDeliveryUrl = preparedDownload &&
+                    preparedDownload.expiresAt > Date.now() + 10_000
+                    ? preparedDownload.url
+                    : getFullVideoBridgeUrl(selectedPlaybackUrl);
+                  flushSync(() => {
+                    setShouldUseCompatibilityPlayback(preferCompatibility);
+                    setFullVideoDeliveryUrl(selectedDeliveryUrl);
+                    setIsFullVideoPlaying(true);
+                    setIsPiPLocked(false);
+                  });
+                  const video = videoRef.current;
+                  if (!video) { return; }
+                  await VideoPlaybackManager.requestPlay(video, {
+                    preferPiP: VideoPlaybackManager.isPiPActive(),
+                  });
                 } finally {
                   setIsPreparingFullVideo(false);
                 }
@@ -1972,8 +2061,18 @@ export default function MediaLarge({
                           tooltip={appText.tooltip.zoom}
                           icon={<LuExpand size={15} />}
                           onClick={() => {
-                            ensurePersistentVideo();
-                            requestPersistentVideoFullscreen(photo.id);
+                            const video = videoRef.current;
+                            if (video) {
+                              setZoomStartTime(video.currentTime || 0);
+                              setLastInlineWasPlaying(
+                                !video.paused && !video.ended,
+                              );
+                              try { video.pause(); } catch {}
+                            } else {
+                              setZoomStartTime(undefined);
+                              setLastInlineWasPlaying(false);
+                            }
+                            setIsVideoZoomOpen(true);
                           }}
                           styleAs="link"
                           className="text-medium translate-y-[0.25px]"
@@ -1983,9 +2082,32 @@ export default function MediaLarge({
                         <LoaderButton
                           tooltip={'Picture in Picture'}
                           icon={<LuPictureInPicture size={15} />}
-                          onClick={() => {
-                            ensurePersistentVideo();
-                            requestPersistentVideoPictureInPicture(photo.id);
+                          onClick={async () => {
+                            const video = videoRef.current;
+                            if (!video) { return; }
+                            if (!isFullVideoPlaying) {
+                              setIsFullVideoPlaying(true);
+                              requestAnimationFrame(() => {
+                                const fullVideo = videoRef.current;
+                                if (!fullVideo) { return; }
+                                const open = async () => {
+                                  setIsPiPLocked(false);
+                                  await VideoPlaybackManager.togglePiP(fullVideo);
+                                };
+                                if (fullVideo.readyState >= 2) {
+                                  void open();
+                                } else {
+                                  fullVideo.addEventListener(
+                                    'loadeddata',
+                                    open,
+                                    { once: true },
+                                  );
+                                  try { fullVideo.load(); } catch {}
+                                }
+                              });
+                            } else {
+                              await VideoPlaybackManager.togglePiP(video);
+                            }
                           }}
                           styleAs="link"
                           className="text-medium translate-y-[0.25px]"

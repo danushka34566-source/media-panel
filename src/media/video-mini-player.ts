@@ -10,21 +10,22 @@ export type DockedVideoState = {
   currentTime: number
   wasPlaying: boolean
   muted: boolean
-  initialHostRect?: {
-    left: number
-    top: number
-    width: number
-    height: number
-  }
 };
 
 export const DETAIL_VIDEO_MINIMIZE_EVENT = 'media-detail-video-minimize';
+export const DETAIL_VIDEO_RESTORE_EVENT = 'media-detail-video-restore';
 export const PERSISTENT_VIDEO_FULLSCREEN_EVENT =
   'persistent-video-fullscreen';
 export const PERSISTENT_VIDEO_PIP_EVENT = 'persistent-video-picture-in-picture';
 
 export const requestDetailVideoMinimize = (mediaId: string) => {
   window.dispatchEvent(new CustomEvent(DETAIL_VIDEO_MINIMIZE_EVENT, {
+    detail: { mediaId },
+  }));
+};
+
+export const requestDetailVideoRestore = (mediaId: string) => {
+  window.dispatchEvent(new CustomEvent(DETAIL_VIDEO_RESTORE_EVENT, {
     detail: { mediaId },
   }));
 };
