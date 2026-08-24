@@ -41,13 +41,13 @@ export default function DeferredGlobalFeatures({
     };
   }, []);
 
-  if (!isReady) { return null; }
-
   return <>
-    <GlobalMediaUpload shouldResize={false} onLastUpload={onLastUpload} />
-    <ShareModals />
-    <RecipeModal />
-    <AdminBatchEditPanel />
     <CommandK />
+    {isReady && <>
+      <GlobalMediaUpload shouldResize={false} onLastUpload={onLastUpload} />
+      <ShareModals />
+      <RecipeModal />
+      <AdminBatchEditPanel />
+    </>}
   </>;
 }
