@@ -135,10 +135,11 @@ export default function useMediaScrollRestoration(enabled = true) {
       const anchor = findAnchor(saved.anchorId);
       if (anchor) {
         const offset = saved.anchorOffset ?? 0;
-        const target = Math.max(
-          0,
-          Math.round(window.scrollY + anchor.getBoundingClientRect().top - offset),
-        );
+        // Use the same transform-independent layout coordinate captured at
+        // click time. Reading getBoundingClientRect here while the grid
+        // entrance is still moving would stop restoration at a transient
+        // position and then visibly drift when Framer settles.
+        const target = Math.max(0, Math.round(getLayoutTop(anchor) - offset));
         if (Math.abs(window.scrollY - target) > 2) {
           programmaticScroll = true;
           window.scrollTo({ top: target, behavior: 'auto' });
