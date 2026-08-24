@@ -89,8 +89,10 @@ export const metadata: Metadata = {
 
 export default async function RootLayout({
   children,
+  media,
 }: {
   children: React.ReactNode
+  media?: React.ReactNode
 }) {
   return (
     <html
@@ -133,6 +135,7 @@ export default async function RootLayout({
                           )}
                         >
                           {children}
+                          {media}
                         </div>
                       </main>
                       <Footer />

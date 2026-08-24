@@ -147,16 +147,12 @@ export const restoreMediaViewportAnchor = (anchor?: MediaViewportAnchor) => {
  * Restore a feed by its clicked media card instead of repeatedly chasing a
  * pixel offset while infinite-scroll pages mount. The saved card is a stable
  * layout anchor; once it exists we correct the viewport once and stop. A
- * single initial nudge still wakes the infinite-scroll sentinel when the
- * saved card is below the first page.
+ * Browser-native restoration handles reloads and the intercepted media route
+ * keeps the feed mounted for detail navigation. This hook only performs one
+ * exact correction once the saved card exists; it never walks the viewport
+ * through a sequence of partially loaded positions.
  */
 export default function useMediaScrollRestoration(enabled = true) {
-  // Restore before the browser paints the remounted feed.  useEffect lets the
-  // new route render at scrollTop 0 for one frame, which is especially visible
-  // when returning from a detail page; the subsequent correction then looks
-  // like an unwanted auto-scroll.  The feed is already server-rendered when
-  // this hook runs, so the layout effect can restore the stable card anchor
-  // synchronously and still retain the observers for delayed infinite rows.
   useMediaLayoutEffect(() => {
     if (!enabled || typeof window === 'undefined') { return; }
     const key = getStorageKey();
@@ -168,28 +164,15 @@ export default function useMediaScrollRestoration(enabled = true) {
     } catch { return; }
     let restoring = Boolean(saved && (saved.top > 0 || saved.anchorId));
     let programmaticScroll = false;
-    let lastProgrammaticTarget: number | undefined;
+    let userInterrupted = false;
     let mutationObserver: MutationObserver | undefined;
     let resizeObserver: ResizeObserver | undefined;
-    const previousScrollRestoration = window.history.scrollRestoration;
-    const root = document.documentElement;
-    const previousRootVisibility = root.style.visibility;
-    if (restoring) {
-      window.history.scrollRestoration = 'manual';
-      // A returning infinite feed may not have mounted the saved card yet.
-      // Keep that intermediate, clamped scroll position out of the paint so
-      // the user never sees the page jump through several partial positions.
-      root.style.visibility = 'hidden';
-    }
 
     const stopRestoring = () => {
       restoring = false;
       if (timeoutTimer !== undefined) { window.clearTimeout(timeoutTimer); }
       mutationObserver?.disconnect();
       resizeObserver?.disconnect();
-      window.history.scrollRestoration = previousScrollRestoration;
-      root.style.visibility = previousRootVisibility;
-      lastProgrammaticTarget = undefined;
     };
 
     const restore = () => {
@@ -203,10 +186,9 @@ export default function useMediaScrollRestoration(enabled = true) {
         // position and then visibly drift when Framer settles.
         const target = Math.max(0, Math.round(getLayoutTop(anchor) - offset));
         if (Math.abs(window.scrollY - target) > 2) {
-          lastProgrammaticTarget = target;
           programmaticScroll = true;
           window.scrollTo({ top: target, behavior: 'auto' });
-          window.setTimeout(() => { programmaticScroll = false; }, 250);
+          window.requestAnimationFrame(() => { programmaticScroll = false; });
         }
         // Consume the one-shot card anchor after the exact layout position is
         // restored. Normal scrolling must write a numeric position again,
@@ -216,52 +198,37 @@ export default function useMediaScrollRestoration(enabled = true) {
         return;
       }
 
-      // Move to the largest reachable position once to activate the existing
-      // infinite-scroll sentinel. Observers retry only after actual layout or
-      // DOM growth, not on a timer every 120ms.
+      // If no card anchor was recorded (for example a plain refresh), correct
+      // the numeric position once it is reachable. Until then leave native
+      // browser restoration in control instead of repeatedly scrolling to the
+      // bottom of each newly mounted infinite page.
       const maxScroll = Math.max(
         0,
         document.documentElement.scrollHeight - window.innerHeight,
       );
-      const target = Math.min(saved.top, maxScroll);
-      if (Math.abs(window.scrollY - target) > 2) {
-        lastProgrammaticTarget = target;
-        programmaticScroll = true;
-        window.scrollTo({ top: target, behavior: 'auto' });
-        window.setTimeout(() => { programmaticScroll = false; }, 250);
-      }
       if (!saved.anchorId && maxScroll >= saved.top - 2) {
+        const target = saved.top;
+        programmaticScroll = true;
+        if (Math.abs(window.scrollY - target) > 2) {
+          window.scrollTo({ top: target, behavior: 'auto' });
+        }
+        window.requestAnimationFrame(() => { programmaticScroll = false; });
         stopRestoring();
       }
     };
 
     const onScroll = () => {
-      if (
-        restoring &&
-        !programmaticScroll &&
-        lastProgrammaticTarget !== undefined &&
-        Math.abs(window.scrollY - lastProgrammaticTarget) <= 2
-      ) { return; }
-      if (restoring && !programmaticScroll) {
-        // A real user gesture should take control immediately. The synthetic
-        // scroll generated by restore() is ignored for this decision.
-        try {
-          const stored = parseSavedPosition(window.sessionStorage.getItem(key));
-          if (stored?.anchorId) { writePosition(key, { top: window.scrollY }); }
-        } catch { /* continue with the live scroll position */ }
-        stopRestoring();
-      }
-      if (!restoring) {
-        let previous: SavedScrollPosition | undefined;
-        try {
-          const stored = parseSavedPosition(window.sessionStorage.getItem(key));
-          // Next's client navigation emits a scroll-to-zero event after the
-          // card click. Preserve the richer anchor record written by the click
-          // instead of replacing it with `{ top: 0 }` during that transition.
-          if (stored?.anchorId) { previous = stored; }
-        } catch { /* continue with the live scroll position */ }
-        saveCurrentScrollPosition(key, previous);
-      }
+      if (restoring || programmaticScroll) { return; }
+      // A real scroll consumes any old click anchor. Refresh should restore
+      // where the user most recently stopped, not the card they opened before
+      // continuing to browse the feed.
+      saveCurrentScrollPosition(key);
+    };
+    const onUserInteraction = () => {
+      if (!restoring || programmaticScroll) { return; }
+      userInterrupted = true;
+      writePosition(key, { top: Math.max(0, Math.round(window.scrollY)) });
+      stopRestoring();
     };
     const onPageHide = () => {
       // A media click records the precise anchor immediately before the
@@ -280,6 +247,9 @@ export default function useMediaScrollRestoration(enabled = true) {
       : undefined;
     window.addEventListener('scroll', onScroll, { passive: true });
     window.addEventListener('pagehide', onPageHide, { passive: true });
+    window.addEventListener('wheel', onUserInteraction, { passive: true });
+    window.addEventListener('touchstart', onUserInteraction, { passive: true });
+    window.addEventListener('pointerdown', onUserInteraction, { passive: true });
     if (restoring && typeof MutationObserver !== 'undefined') {
       mutationObserver = new MutationObserver(restore);
       mutationObserver.observe(document.body, { childList: true, subtree: true });
@@ -288,11 +258,21 @@ export default function useMediaScrollRestoration(enabled = true) {
       resizeObserver = new ResizeObserver(restore);
       resizeObserver.observe(document.documentElement);
     }
-    if (restoring) { window.requestAnimationFrame(restore); }
+    if (restoring) {
+      // The layout effect runs before paint. In the common case the server
+      // rendered card already exists, so this correction is invisible.
+      restore();
+      if (restoring && !userInterrupted) {
+        window.requestAnimationFrame(restore);
+      }
+    }
 
     return () => {
       window.removeEventListener('scroll', onScroll);
       window.removeEventListener('pagehide', onPageHide);
+      window.removeEventListener('wheel', onUserInteraction);
+      window.removeEventListener('touchstart', onUserInteraction);
+      window.removeEventListener('pointerdown', onUserInteraction);
       stopRestoring();
     };
   }, [enabled]);

@@ -107,6 +107,7 @@ import {
   subscribeVideoMiniPlayer,
   setDetailVideoPageActive,
   setDockedVideo,
+  updateDockedVideo,
   type DockedVideoState,
   DETAIL_VIDEO_MINIMIZE_EVENT,
   DETAIL_VIDEO_RESTORE_EVENT,
@@ -859,6 +860,9 @@ export default function MediaLarge({
       setIsRestoringFromMini(true);
       setFullVideoDeliveryUrl(latestDockedVideo.sourceUrl);
       setIsFullVideoPlaying(true);
+      // Re-evaluate the root player against the now-visible detail viewport
+      // immediately, before the page-owned player finishes resuming.
+      updateDockedVideo({}, true);
       observer.disconnect();
     }, { threshold: [0.2] });
     observer.observe(sentinel);
@@ -1964,6 +1968,9 @@ export default function MediaLarge({
       ref={floatingVideoSentinelRef}
       className="relative"
       data-media-id={photo.id}
+      {...broadcastDetailVideoPlayback && isVideo && {
+        'data-detail-video-viewport': photo.id,
+      }}
     >
       {media}
       <PersonalFavoriteButton
