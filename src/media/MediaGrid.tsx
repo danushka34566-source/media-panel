@@ -261,8 +261,12 @@ export default function MediaGrid({
         // late-inserted cards from inheriting its hidden variant.
         type={animate === false ? 'none' : undefined}
         canStart={canStart}
-        duration={0.45}
-        staggerDelay={0.015}
+        // Match the original v80-v90 grid entrance: cards rise from a
+        // slightly smaller scale with a calm, readable stagger. The stable
+        // motion tree and explicit child initial state prevent this animation
+        // from reversing when the mobile/desktop layout hydrates.
+        duration={0.7}
+        staggerDelay={0.04}
         distanceOffset={40}
         // Keep the original scale entrance, but do not blank cold cards if a
         // mobile compositor or image request interrupts the first frame.
