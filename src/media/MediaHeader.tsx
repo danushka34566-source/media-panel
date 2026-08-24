@@ -11,7 +11,7 @@ import {
 import { MediaSetCategory } from '../category';
 import ShareButton from '@/share/ShareButton';
 import AnimateItems from '@/components/AnimateItems';
-import { Fragment, type ReactNode, type TouchEvent, useRef } from 'react';
+import { Fragment, type ReactNode } from 'react';
 import DivDebugBaselineGrid from '@/components/DivDebugBaselineGrid';
 import MediaPrevNextActions from './MediaPrevNextActions';
 import MediaLink from './MediaLink';
@@ -19,12 +19,6 @@ import ResponsiveText from '@/components/primitives/ResponsiveText';
 import { useAppState } from '@/app/AppState';
 import { GRID_GAP_CLASSNAME } from '@/components';
 import { useAppText } from '@/i18n/state/client';
-import {
-  requestDetailVideoMinimize,
-  updateDetailVideoFoldGesture,
-} from './video-mini-player';
-
-const MINIMIZE_PULL_DISTANCE = 64;
 
 export default function MediaHeader({
   photos,
@@ -57,106 +51,6 @@ export default function MediaHeader({
   const { isGridHighDensity } = useAppState();
 
   const appText = useAppText();
-  const pullStartRef = useRef<{ x: number, y: number } | undefined>(undefined);
-  const foldGestureIdRef = useRef(0);
-  const foldGesturePhaseRef = useRef<'idle' | 'pulling' | 'committing'>('idle');
-  const suppressTitleClickUntilRef = useRef(0);
-
-  const onTitleTouchStart = (event: TouchEvent<HTMLDivElement>) => {
-    if (foldGesturePhaseRef.current === 'committing') {
-      pullStartRef.current = undefined;
-      return;
-    }
-    if (!selectedMedia || !isVideoMedia(selectedMedia) || event.touches.length !== 1) {
-      pullStartRef.current = undefined;
-      return;
-    }
-    const target = event.target as HTMLElement | null;
-    if (
-      !target?.closest('[data-media-detail-fold-handle]') ||
-      target.closest('button,input,textarea,select')
-    ) {
-      pullStartRef.current = undefined;
-      foldGesturePhaseRef.current = 'idle';
-      return;
-    }
-    const touch = event.touches[0];
-    foldGestureIdRef.current += 1;
-    pullStartRef.current = { x: touch.clientX, y: touch.clientY };
-    foldGesturePhaseRef.current = 'idle';
-  };
-  const onTitleTouchMove = (event: TouchEvent<HTMLDivElement>) => {
-    const start = pullStartRef.current;
-    const touch = event.touches[0];
-    if (!start || !touch || foldGesturePhaseRef.current === 'committing') {
-      return;
-    }
-    const deltaX = touch.clientX - start.x;
-    const deltaY = touch.clientY - start.y;
-    const isVerticalPull = deltaY > 8 && deltaY > Math.abs(deltaX) * 1.15;
-    if (isVerticalPull) {
-      event.preventDefault();
-      foldGesturePhaseRef.current = 'pulling';
-      suppressTitleClickUntilRef.current = Date.now() + 500;
-    } else if (Math.abs(deltaX) > 10 || deltaY < -10) {
-      foldGesturePhaseRef.current = 'idle';
-      updateDetailVideoFoldGesture({
-        mediaId: selectedMedia!.id,
-        gestureId: foldGestureIdRef.current,
-        phase: 'cancel',
-        deltaX,
-        deltaY: 0,
-      });
-      return;
-    }
-    if (foldGesturePhaseRef.current !== 'pulling') { return; }
-    updateDetailVideoFoldGesture({
-      mediaId: selectedMedia!.id,
-      gestureId: foldGestureIdRef.current,
-      phase: 'move',
-      deltaX,
-      deltaY: Math.max(0, deltaY),
-    });
-  };
-  const onTitleTouchEnd = (event: TouchEvent<HTMLDivElement>) => {
-    const start = pullStartRef.current;
-    pullStartRef.current = undefined;
-    const touch = event.changedTouches[0];
-    if (!start || !touch || !selectedMedia) {
-      foldGesturePhaseRef.current = 'idle';
-      return;
-    }
-    const deltaX = touch.clientX - start.x;
-    const deltaY = touch.clientY - start.y;
-    const wasPulling = foldGesturePhaseRef.current === 'pulling';
-    const shouldCommit = wasPulling &&
-      deltaY >= MINIMIZE_PULL_DISTANCE && deltaY > Math.abs(deltaX) * 1.2;
-    if (shouldCommit) {
-      event.preventDefault();
-      foldGesturePhaseRef.current = 'committing';
-      updateDetailVideoFoldGesture({
-        mediaId: selectedMedia.id,
-        gestureId: foldGestureIdRef.current,
-        phase: 'commit',
-        deltaX,
-        deltaY,
-      });
-      requestDetailVideoMinimize(selectedMedia.id);
-    } else {
-      if (Math.abs(deltaX) > 8 || Math.abs(deltaY) > 8) {
-        suppressTitleClickUntilRef.current = Date.now() + 500;
-      }
-      foldGesturePhaseRef.current = 'idle';
-      updateDetailVideoFoldGesture({
-        mediaId: selectedMedia.id,
-        gestureId: foldGestureIdRef.current,
-        phase: 'cancel',
-        deltaX,
-        deltaY: Math.max(0, deltaY),
-      });
-    }
-  };
-
   const entityVerb = _entityVerb ?? appText.photo.photo.toLocaleUpperCase();
 
   const { start, end } = formattedDateRangeForMedia(photos, dateRange);
@@ -226,34 +120,7 @@ export default function MediaHeader({
     </DivDebugBaselineGrid>;
 
   return (
-    <div
-      onTouchStart={onTitleTouchStart}
-      onTouchMove={onTitleTouchMove}
-      onTouchEnd={onTitleTouchEnd}
-      onTouchCancel={() => {
-        const mediaId = selectedMedia?.id;
-        pullStartRef.current = undefined;
-        // A browser can emit touchcancel after the committed fold has already
-        // handed ownership to the mini player. Never reset that transaction
-        // back to the full detail panel.
-        if (mediaId && foldGesturePhaseRef.current !== 'committing') {
-          updateDetailVideoFoldGesture({
-            mediaId,
-            gestureId: foldGestureIdRef.current,
-            phase: 'cancel',
-            deltaX: 0,
-            deltaY: 0,
-          });
-        }
-        foldGesturePhaseRef.current = 'idle';
-      }}
-      onClickCapture={event => {
-        if (Date.now() < suppressTitleClickUntilRef.current) {
-          event.preventDefault();
-          event.stopPropagation();
-        }
-      }}
-    >
+    <div>
       <AnimateItems
       type="bottom"
       distanceOffset={10}
@@ -263,8 +130,6 @@ export default function MediaHeader({
           {/* Content A: Filter Set or Media Title */}
           <div className={clsx(
             'inline-flex uppercase',
-            selectedMedia && isVideoMedia(selectedMedia) &&
-              'touch-none select-none overscroll-contain',
             headerType === 'photo-set'
               ? isGridHighDensity
                 ? 'col-span-2 lg:col-span-3'
@@ -276,11 +141,7 @@ export default function MediaHeader({
                 : isGridHighDensity
                   ? 'col-span-3 sm:col-span-3 lg:col-span-5 w-[110%] xl:w-full'
                   : 'col-span-3 md:col-span-2 lg:col-span-3 w-[110%] xl:w-full',
-          )}
-            data-media-detail-fold-handle={selectedMedia && isVideoMedia(selectedMedia)
-              ? 'true'
-              : undefined}
-          >
+          )}>
             {headerType === 'photo-detail-with-entity'
               ? renderContentA
               // Necessary for title truncation

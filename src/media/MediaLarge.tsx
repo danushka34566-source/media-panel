@@ -47,7 +47,6 @@ import {
   useRef,
   useState,
   useEffect,
-  useSyncExternalStore,
   TouchEvent,
   type ReactNode,
 } from 'react';
@@ -100,19 +99,6 @@ import {
   type FullVideoTelemetry,
 } from './full-video-playback';
 import { getFullVideoBridgeUrl } from './full-video-bridge';
-import {
-  clearDockedVideo,
-  getDockedVideo,
-  getDockedVideoServerSnapshot,
-  subscribeVideoMiniPlayer,
-  setDetailVideoPageActive,
-  setDockedVideo,
-  type DockedVideoState,
-  DETAIL_VIDEO_MINIMIZE_EVENT,
-  DETAIL_VIDEO_RESTORE_EVENT,
-  DETAIL_VIDEO_FOLD_COMPLETE_EVENT,
-  PERSISTENT_VIDEO_HANDOFF_READY_EVENT,
-} from './video-mini-player';
 
 const SWIPE_NAVIGATION_DISTANCE = 50;
 const SWIPE_NAVIGATION_VERTICAL_TOLERANCE = 70;
@@ -273,38 +259,6 @@ export default function MediaLarge({
   'studio' | 'performer' | 'contentType' | 'film' | 'recipe' | 'focal'>) {
   const router = useRouter();
   const isVideo = isVideoMedia(photo);
-  const persistentDetailPath = useMemo(() => pathForMedia({
-    photo,
-    recent,
-    year,
-    camera,
-    lens,
-    album,
-    tag: tag ?? primaryTag,
-    category,
-    studio,
-    performer,
-    contentType,
-    film,
-    recipe,
-    focal,
-  }), [
-    album,
-    camera,
-    category,
-    contentType,
-    film,
-    focal,
-    lens,
-    performer,
-    photo,
-    primaryTag,
-    recent,
-    recipe,
-    studio,
-    tag,
-    year,
-  ]);
   const ref = useRef<HTMLDivElement>(null);
   const refZoomControls = useRef<ZoomControlsRef>(null);
   const refMediaRecipe = useRef<HTMLDivElement>(null);
@@ -320,15 +274,6 @@ export default function MediaLarge({
   const { videoPreviewMode = 'smart' } = useAppState();
   const [isPageResuming, setIsPageResuming] = useState(false);
   const [isFullVideoPlaying, setIsFullVideoPlaying] = useState(false);
-  const dockedVideo = useSyncExternalStore(
-    subscribeVideoMiniPlayer,
-    getDockedVideo,
-    getDockedVideoServerSnapshot,
-  );
-  const isPersistentVideoActive = dockedVideo?.mediaId === photo.id;
-  const [dockedResumeState, setDockedResumeState] =
-    useState<DockedVideoState>();
-  const [isRestoringFromMini, setIsRestoringFromMini] = useState(false);
   const [isPreparingFullVideo, setIsPreparingFullVideo] = useState(false);
   const [fullVideoDeliveryUrl, setFullVideoDeliveryUrl] = useState<string>();
   const [preparedFullVideoDownloads, setPreparedFullVideoDownloads] = useState<Record<string, {
@@ -347,25 +292,6 @@ export default function MediaLarge({
   const [canUsePiP, setCanUsePiP] = useState(false);
   const [isPiPLocked, setIsPiPLocked] = useState(false);
   const [pipLockedSrc, setPipLockedSrc] = useState<string | undefined>(undefined);
-  const floatingVideoSentinelRef = useRef<HTMLDivElement>(null);
-  const isDetailFoldingRef = useRef(false);
-  const handoffReadyRef = useRef(false);
-  const foldAnimationCompleteRef = useRef(false);
-  const routeBackScheduledRef = useRef(false);
-  const foldFallbackTimerRef = useRef<number | undefined>(undefined);
-  const [isDetailFolding, setIsDetailFolding] = useState(false);
-  const detailPlaybackRef = useRef<{
-    isFullVideoPlaying: boolean
-    isMainVideoActuallyPlaying: boolean
-    sourceUrl?: string
-    currentTime: number
-    muted: boolean
-  }>({
-    isFullVideoPlaying: false,
-    isMainVideoActuallyPlaying: false,
-    currentTime: 0,
-    muted: false,
-  });
   const [hasTextTracks, setHasTextTracks] = useState(false);
   const [captionsOn, setCaptionsOn] = useState(false);
   const [activeCaptionIndex, setActiveCaptionIndex] = useState(0);
@@ -420,17 +346,6 @@ export default function MediaLarge({
     setReadyPreviewSrc(undefined);
     setReadyPreviewActivationId(undefined);
     setShouldUseCompatibilityPlayback(false);
-    setDockedResumeState(undefined);
-    setIsRestoringFromMini(false);
-    setIsDetailFolding(false);
-    isDetailFoldingRef.current = false;
-    handoffReadyRef.current = false;
-    foldAnimationCompleteRef.current = false;
-    routeBackScheduledRef.current = false;
-    if (foldFallbackTimerRef.current !== undefined) {
-      window.clearTimeout(foldFallbackTimerRef.current);
-      foldFallbackTimerRef.current = undefined;
-    }
   }, [photo.id]);
 
   // Warm the adjacent route payloads while the current media is visible. The
@@ -459,13 +374,12 @@ export default function MediaLarge({
         { detail: { mediaId: photo.id, playing } },
       ),
     );
-    dispatch(isMainVideoActuallyPlaying || isDetailFolding);
+    dispatch(isMainVideoActuallyPlaying);
     return () => {
-      if (isMainVideoActuallyPlaying || isDetailFolding) { dispatch(false); }
+      if (isMainVideoActuallyPlaying) { dispatch(false); }
     };
   }, [
     broadcastDetailVideoPlayback,
-    isDetailFolding,
     isMainVideoActuallyPlaying,
     isVideo,
     photo.id,
@@ -496,119 +410,6 @@ export default function MediaLarge({
       video?.removeEventListener('webkitendfullscreen', updateFullscreen);
     };
   }, [isFullVideoPlaying, isVideo]);
-
-  // Hand a playing full-page video to the root-layout player when its card
-  // leaves the viewport. The player then survives every route transition.
-  useEffect(() => {
-    if (
-      !isVideo ||
-      !isFullVideoPlaying ||
-      !isMainVideoActuallyPlaying ||
-      isVideoFullscreen ||
-      isPiPLocked
-    ) {
-      return;
-    }
-    const sentinel = floatingVideoSentinelRef.current;
-    if (!sentinel || typeof IntersectionObserver === 'undefined') { return; }
-    const observer = new IntersectionObserver(([entry]) => {
-      const isVisible = Boolean(
-        entry?.isIntersecting && entry.intersectionRatio >= 0.2,
-      );
-      if (!isVisible) {
-        if (isDetailFoldingRef.current || getDockedVideo()?.pendingHandoff) {
-          return;
-        }
-        const playback = detailPlaybackRef.current;
-        if (!playback.sourceUrl) { return; }
-        setDockedVideo({
-          mediaId: photo.id,
-          title: titleForMedia(photo),
-          detailPath: persistentDetailPath,
-          sourceUrl: playback.sourceUrl,
-          posterUrl: getMediaPosterUrl(photo),
-          currentTime: Math.max(0, playback.currentTime),
-          wasPlaying: playback.isMainVideoActuallyPlaying,
-          muted: playback.muted,
-          pendingHandoff: true,
-        });
-      }
-    }, { threshold: [0, 0.2, 0.5] });
-    observer.observe(sentinel);
-    return () => observer.disconnect();
-  }, [
-    isFullVideoPlaying,
-    isMainVideoActuallyPlaying,
-    isPiPLocked,
-    isVideo,
-    isVideoFullscreen,
-    photo,
-    persistentDetailPath,
-  ]);
-
-  useEffect(() => {
-    if (!isVideo) { return; }
-    const releaseDetailVideo = () => {
-      videoRef.current?.pause();
-      detailPlaybackRef.current.isFullVideoPlaying = false;
-      detailPlaybackRef.current.isMainVideoActuallyPlaying = false;
-      setIsMainVideoActuallyPlaying(false);
-      setIsFullVideoPlaying(false);
-    };
-    const maybeRouteBack = () => {
-      if (
-        !isDetailFoldingRef.current ||
-        !handoffReadyRef.current ||
-        !foldAnimationCompleteRef.current ||
-        routeBackScheduledRef.current
-      ) { return; }
-      routeBackScheduledRef.current = true;
-      if (foldFallbackTimerRef.current !== undefined) {
-        window.clearTimeout(foldFallbackTimerRef.current);
-        foldFallbackTimerRef.current = undefined;
-      }
-      router.back();
-    };
-    const completeHandoff = (event: Event) => {
-      const mediaId = (event as CustomEvent<{ mediaId?: string }>).detail
-        ?.mediaId;
-      if (mediaId !== photo.id) { return; }
-      handoffReadyRef.current = true;
-      // Keep the page-owned video element mounted as a paused visual source
-      // until the fold animation completes. Unmounting it at handoff-ready
-      // leaves the shrinking detail panel showing a blank poster and makes the
-      // fold look like a second player was swapped in.
-      if (isDetailFoldingRef.current) {
-        videoRef.current?.pause();
-        if (videoRef.current) { videoRef.current.muted = true; }
-        detailPlaybackRef.current.isMainVideoActuallyPlaying = false;
-        setIsMainVideoActuallyPlaying(false);
-      } else {
-        releaseDetailVideo();
-      }
-      maybeRouteBack();
-    };
-    const completeFold = (event: Event) => {
-      const mediaId = (event as CustomEvent<{ mediaId?: string }>).detail
-        ?.mediaId;
-      if (mediaId !== photo.id) { return; }
-      foldAnimationCompleteRef.current = true;
-      if (isDetailFoldingRef.current) { releaseDetailVideo(); }
-      maybeRouteBack();
-    };
-    window.addEventListener(
-      PERSISTENT_VIDEO_HANDOFF_READY_EVENT,
-      completeHandoff,
-    );
-    window.addEventListener(DETAIL_VIDEO_FOLD_COMPLETE_EVENT, completeFold);
-    return () => {
-      window.removeEventListener(
-        PERSISTENT_VIDEO_HANDOFF_READY_EVENT,
-        completeHandoff,
-      );
-      window.removeEventListener(DETAIL_VIDEO_FOLD_COMPLETE_EVENT, completeFold);
-    };
-  }, [isVideo, photo.id, router]);
 
   useEffect(() => {
     if (!isVideo) { return; }
@@ -681,207 +482,6 @@ export default function MediaLarge({
   const fullVideoCompatibilityUrl = compatibilityPlaybackUrl
     ? getFullVideoBridgeUrl(compatibilityPlaybackUrl)
     : undefined;
-
-  // Keep the latest playback position outside React state so a route change
-  // can hand the active video to the global mini player before this card
-  // unmounts. This also avoids a render on every timeupdate event.
-  useEffect(() => {
-    const video = videoRef.current;
-    detailPlaybackRef.current = {
-      isFullVideoPlaying,
-      isMainVideoActuallyPlaying,
-      sourceUrl: fullVideoSourceUrl,
-      currentTime: video?.currentTime ?? 0,
-      muted: video?.muted ?? false,
-    };
-  }, [
-    fullVideoSourceUrl,
-    isFullVideoPlaying,
-    isMainVideoActuallyPlaying,
-  ]);
-
-  // The details page owns normal playback. The global mini player only owns
-  // a folded session after this page leaves or explicitly minimizes it.
-  useEffect(() => {
-    if (!broadcastDetailVideoPlayback || !isVideo) { return; }
-    setDetailVideoPageActive(photo.id, true);
-    const docked = getDockedVideo();
-    if (docked?.mediaId === photo.id) {
-      // eslint-disable-next-line react-hooks/set-state-in-effect
-      setDockedResumeState(docked);
-      setIsRestoringFromMini(true);
-      setIsFullVideoPlaying(true);
-      setFullVideoDeliveryUrl(docked.sourceUrl);
-    }
-    return () => {
-      setDetailVideoPageActive(photo.id, false);
-      if (isDetailFoldingRef.current) { return; }
-      const playback = detailPlaybackRef.current;
-      if (
-        playback.isFullVideoPlaying &&
-        playback.sourceUrl &&
-        Number.isFinite(playback.currentTime)
-      ) {
-        setDockedVideo({
-          mediaId: photo.id,
-          title: titleForMedia(photo),
-          detailPath: persistentDetailPath,
-          sourceUrl: playback.sourceUrl,
-          fallbackUrl: fullVideoCompatibilityUrl,
-          posterUrl: getMediaPosterUrl(photo),
-          currentTime: Math.max(0, playback.currentTime),
-          wasPlaying: playback.isMainVideoActuallyPlaying,
-          muted: playback.muted,
-        });
-      }
-    };
-  }, [
-    broadcastDetailVideoPlayback,
-    fullVideoCompatibilityUrl,
-    isVideo,
-    photo,
-    persistentDetailPath,
-  ]);
-
-  useEffect(() => {
-    if (!dockedResumeState || !isFullVideoPlaying) { return; }
-    const video = videoRef.current;
-    if (!video) { return; }
-    const restore = () => {
-      try { video.currentTime = Math.max(0, dockedResumeState.currentTime); }
-      catch { /* media may still be switching sources */ }
-      video.muted = isRestoringFromMini
-        ? true
-        : dockedResumeState.muted;
-      if (dockedResumeState.wasPlaying) {
-        void VideoPlaybackManager.requestPlay(video).catch(() => undefined);
-      }
-    };
-    video.addEventListener('loadedmetadata', restore, { once: true });
-    if (video.readyState >= 1) { restore(); }
-    return () => video.removeEventListener('loadedmetadata', restore);
-  }, [
-    dockedResumeState,
-    fullVideoSourceUrl,
-    isFullVideoPlaying,
-    isRestoringFromMini,
-  ]);
-
-  useEffect(() => {
-    if (!broadcastDetailVideoPlayback || !isVideo) { return; }
-    const minimize = (event: Event) => {
-      const mediaId = (event as CustomEvent<{ mediaId?: string }>).detail?.mediaId;
-      if (mediaId !== photo.id) { return; }
-      if (isDetailFoldingRef.current) { return; }
-      const playback = detailPlaybackRef.current;
-      const sourceUrl = playback.sourceUrl || fullVideoSourceUrl ||
-        getFullVideoBridgeUrl(photo.url);
-      const wasPlaying = playback.isFullVideoPlaying &&
-        playback.isMainVideoActuallyPlaying;
-      if (playback.isFullVideoPlaying && sourceUrl) {
-        setDockedVideo({
-          mediaId: photo.id,
-          title: titleForMedia(photo),
-          detailPath: persistentDetailPath,
-          sourceUrl,
-          fallbackUrl: fullVideoCompatibilityUrl,
-          posterUrl: getMediaPosterUrl(photo),
-          currentTime: Math.max(0, playback.currentTime),
-          wasPlaying,
-          muted: playback.muted,
-          pendingHandoff: wasPlaying,
-        });
-        isDetailFoldingRef.current = true;
-        setIsDetailFolding(true);
-        // A paused detail video has no playback ownership to hand off. It can
-        // still fold into a paused mini player, and the route only needs to
-        // wait for the visual fold transaction to finish.
-        handoffReadyRef.current = !wasPlaying;
-        foldAnimationCompleteRef.current = false;
-        routeBackScheduledRef.current = false;
-        if (foldFallbackTimerRef.current !== undefined) {
-          window.clearTimeout(foldFallbackTimerRef.current);
-        }
-        foldFallbackTimerRef.current = window.setTimeout(() => {
-          foldFallbackTimerRef.current = undefined;
-          if (!isDetailFoldingRef.current) { return; }
-          if (!wasPlaying) { return; }
-          handoffReadyRef.current = true;
-          videoRef.current?.pause();
-          detailPlaybackRef.current.isMainVideoActuallyPlaying = false;
-          setIsMainVideoActuallyPlaying(false);
-          window.dispatchEvent(new CustomEvent(
-            PERSISTENT_VIDEO_HANDOFF_READY_EVENT,
-            { detail: { mediaId: photo.id } },
-          ));
-        }, 1800);
-        // Do not pause or unmount the page video yet. VideoMiniPlayer will
-        // signal PERSISTENT_VIDEO_HANDOFF_READY_EVENT after its own element
-        // reaches onPlaying, then the listener above releases this owner.
-        return;
-      }
-      router.back();
-    };
-    window.addEventListener(DETAIL_VIDEO_MINIMIZE_EVENT, minimize);
-    return () => {
-      window.removeEventListener(DETAIL_VIDEO_MINIMIZE_EVENT, minimize);
-    };
-  }, [
-    broadcastDetailVideoPlayback,
-    fullVideoCompatibilityUrl,
-    fullVideoSourceUrl,
-    isVideo,
-    photo,
-    persistentDetailPath,
-    router,
-  ]);
-
-  // If the user scrolls back to the page placeholder, unfold the docked
-  // session into the page-owned player and resume from the same position.
-  useEffect(() => {
-    if (
-      !isVideo ||
-      !isPersistentVideoActive ||
-      !dockedVideo ||
-      isDetailFoldingRef.current
-    ) { return; }
-    const sentinel = floatingVideoSentinelRef.current;
-    if (!sentinel || typeof IntersectionObserver === 'undefined') { return; }
-    const observer = new IntersectionObserver(([entry]) => {
-      if (!entry?.isIntersecting || entry.intersectionRatio < 0.2) { return; }
-      const latestDockedVideo = getDockedVideo() ?? dockedVideo;
-      if (latestDockedVideo.pendingHandoff) {
-        clearDockedVideo();
-        observer.disconnect();
-        return;
-      }
-      setDockedResumeState(latestDockedVideo);
-      setIsRestoringFromMini(true);
-      setFullVideoDeliveryUrl(latestDockedVideo.sourceUrl);
-      setIsFullVideoPlaying(true);
-      observer.disconnect();
-    }, { threshold: [0.2] });
-    observer.observe(sentinel);
-    return () => observer.disconnect();
-  }, [
-    dockedVideo,
-    isPersistentVideoActive,
-    isVideo,
-  ]);
-
-  useEffect(() => {
-    if (!broadcastDetailVideoPlayback || !isVideo) { return; }
-    const restore = (event: Event) => {
-      const mediaId = (event as CustomEvent<{ mediaId?: string }>).detail?.mediaId;
-      if (mediaId !== photo.id) { return; }
-      floatingVideoSentinelRef.current?.scrollIntoView({
-        behavior: 'smooth',
-        block: 'center',
-      });
-    };
-    window.addEventListener(DETAIL_VIDEO_RESTORE_EVENT, restore);
-    return () => window.removeEventListener(DETAIL_VIDEO_RESTORE_EVENT, restore);
-  }, [broadcastDetailVideoPlayback, isVideo, photo.id]);
 
   const warmFullVideoDownload = useCallback((sourceUrl = photo.url) => {
     if (!isVideo || !sourceUrl) { return; }
@@ -1651,37 +1251,22 @@ export default function MediaLarge({
                       : undefined}
                     playsInline
                     autoPlay={!isFullVideoPlaying && isPreviewActive}
-                    muted={!isFullVideoPlaying || isRestoringFromMini}
+                    muted={!isFullVideoPlaying}
                     loop={!isFullVideoPlaying}
                     controls={isFullVideoPlaying}
                     controlsList="nodownload noplaybackrate"
                     onContextMenu={(e) => e.preventDefault()}
-                    onTimeUpdate={event => {
-                      if (isFullVideoPlaying) {
-                        detailPlaybackRef.current.currentTime =
-                          event.currentTarget.currentTime;
-                        detailPlaybackRef.current.muted =
-                          event.currentTarget.muted;
-                      }
-                    }}
                     onPlay={() => {
                       if (isFullVideoPlaying) {
-                        detailPlaybackRef.current.isMainVideoActuallyPlaying = true;
                         setIsMainVideoActuallyPlaying(true);
                       }
                     }}
                     onPause={() => {
                       if (isFullVideoPlaying) {
-                        detailPlaybackRef.current.isMainVideoActuallyPlaying = false;
                         setIsMainVideoActuallyPlaying(false);
                       }
                     }}
-                    onEnded={event => {
-                      if (isFullVideoPlaying) {
-                        detailPlaybackRef.current.currentTime =
-                          event.currentTarget.currentTime;
-                        detailPlaybackRef.current.isMainVideoActuallyPlaying = false;
-                      }
+                    onEnded={() => {
                       setIsMainVideoActuallyPlaying(false);
                     }}
                     preload="auto"
@@ -1704,14 +1289,6 @@ export default function MediaLarge({
                       }
                     }}
                     onPlaying={() => {
-                      if (isFullVideoPlaying && isRestoringFromMini) {
-                        const video = videoRef.current;
-                        clearDockedVideo();
-                        setIsRestoringFromMini(false);
-                        if (video) {
-                          video.muted = dockedResumeState?.muted ?? false;
-                        }
-                      }
                       if (!isFullVideoPlaying && automaticPreviewSrc) {
                         setReadyPreviewSrc(automaticPreviewSrc);
                         setReadyPreviewActivationId(previewActivationId);
@@ -1833,7 +1410,7 @@ export default function MediaLarge({
               preload="metadata"
             />
           )}
-          {isVideo && !isFullVideoPlaying && !isPersistentVideoActive && (
+          {isVideo && !isFullVideoPlaying && (
             <button
               type="button"
               data-media-play-overlay="true"
@@ -1961,7 +1538,6 @@ export default function MediaLarge({
 
   const renderMediaWithFavorite = (media: ReactNode) =>
     <div
-      ref={floatingVideoSentinelRef}
       className="relative"
       data-media-id={photo.id}
     >
