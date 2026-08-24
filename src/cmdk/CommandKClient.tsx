@@ -892,6 +892,13 @@ export default function CommandKClient({
     <Command.Dialog
       open={isOpen}
       onOpenChange={setIsOpen}
+      // Radix renders the dialog content in a portal. Keep that portal above
+      // sticky navigation, hover surfaces, and the video mini-player; without
+      // an explicit positioned layer the input can receive focus while the
+      // panel itself is visually covered on mobile.
+      label={DIALOG_TITLE}
+      overlayClassName="fixed inset-0 z-[2190]"
+      contentClassName="fixed inset-0 z-[2200] pointer-events-auto"
       filter={(value, search, keywords) => {
         const searchFormatted = search.trim().toLocaleLowerCase();
         return (

@@ -25,7 +25,7 @@ const EMPTY_COMMAND_K_DATA: CommandKData = {
   studios: [],
   performers: [],
   contentTypes: [],
-  footer: undefined,
+  footer: '',
 };
 
 export default function DeferredCommandK() {
