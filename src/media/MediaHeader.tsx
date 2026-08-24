@@ -58,10 +58,15 @@ export default function MediaHeader({
 
   const appText = useAppText();
   const pullStartRef = useRef<{ x: number, y: number } | undefined>(undefined);
+  const foldGestureIdRef = useRef(0);
   const foldGesturePhaseRef = useRef<'idle' | 'pulling' | 'committing'>('idle');
   const suppressTitleClickUntilRef = useRef(0);
 
   const onTitleTouchStart = (event: TouchEvent<HTMLDivElement>) => {
+    if (foldGesturePhaseRef.current === 'committing') {
+      pullStartRef.current = undefined;
+      return;
+    }
     if (!selectedMedia || !isVideoMedia(selectedMedia) || event.touches.length !== 1) {
       pullStartRef.current = undefined;
       return;
@@ -76,6 +81,7 @@ export default function MediaHeader({
       return;
     }
     const touch = event.touches[0];
+    foldGestureIdRef.current += 1;
     pullStartRef.current = { x: touch.clientX, y: touch.clientY };
     foldGesturePhaseRef.current = 'idle';
   };
@@ -96,6 +102,7 @@ export default function MediaHeader({
       foldGesturePhaseRef.current = 'idle';
       updateDetailVideoFoldGesture({
         mediaId: selectedMedia!.id,
+        gestureId: foldGestureIdRef.current,
         phase: 'cancel',
         deltaX,
         deltaY: 0,
@@ -105,6 +112,7 @@ export default function MediaHeader({
     if (foldGesturePhaseRef.current !== 'pulling') { return; }
     updateDetailVideoFoldGesture({
       mediaId: selectedMedia!.id,
+      gestureId: foldGestureIdRef.current,
       phase: 'move',
       deltaX,
       deltaY: Math.max(0, deltaY),
@@ -128,6 +136,7 @@ export default function MediaHeader({
       foldGesturePhaseRef.current = 'committing';
       updateDetailVideoFoldGesture({
         mediaId: selectedMedia.id,
+        gestureId: foldGestureIdRef.current,
         phase: 'commit',
         deltaX,
         deltaY,
@@ -140,6 +149,7 @@ export default function MediaHeader({
       foldGesturePhaseRef.current = 'idle';
       updateDetailVideoFoldGesture({
         mediaId: selectedMedia.id,
+        gestureId: foldGestureIdRef.current,
         phase: 'cancel',
         deltaX,
         deltaY: Math.max(0, deltaY),
@@ -223,9 +233,13 @@ export default function MediaHeader({
       onTouchCancel={() => {
         const mediaId = selectedMedia?.id;
         pullStartRef.current = undefined;
-        if (mediaId) {
+        // A browser can emit touchcancel after the committed fold has already
+        // handed ownership to the mini player. Never reset that transaction
+        // back to the full detail panel.
+        if (mediaId && foldGesturePhaseRef.current !== 'committing') {
           updateDetailVideoFoldGesture({
             mediaId,
+            gestureId: foldGestureIdRef.current,
             phase: 'cancel',
             deltaX: 0,
             deltaY: 0,

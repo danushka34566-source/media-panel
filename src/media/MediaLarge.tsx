@@ -548,6 +548,13 @@ export default function MediaLarge({
 
   useEffect(() => {
     if (!isVideo) { return; }
+    const releaseDetailVideo = () => {
+      videoRef.current?.pause();
+      detailPlaybackRef.current.isFullVideoPlaying = false;
+      detailPlaybackRef.current.isMainVideoActuallyPlaying = false;
+      setIsMainVideoActuallyPlaying(false);
+      setIsFullVideoPlaying(false);
+    };
     const maybeRouteBack = () => {
       if (
         !isDetailFoldingRef.current ||
@@ -567,11 +574,18 @@ export default function MediaLarge({
         ?.mediaId;
       if (mediaId !== photo.id) { return; }
       handoffReadyRef.current = true;
-      videoRef.current?.pause();
-      detailPlaybackRef.current.isFullVideoPlaying = false;
-      detailPlaybackRef.current.isMainVideoActuallyPlaying = false;
-      setIsMainVideoActuallyPlaying(false);
-      setIsFullVideoPlaying(false);
+      // Keep the page-owned video element mounted as a paused visual source
+      // until the fold animation completes. Unmounting it at handoff-ready
+      // leaves the shrinking detail panel showing a blank poster and makes the
+      // fold look like a second player was swapped in.
+      if (isDetailFoldingRef.current) {
+        videoRef.current?.pause();
+        if (videoRef.current) { videoRef.current.muted = true; }
+        detailPlaybackRef.current.isMainVideoActuallyPlaying = false;
+        setIsMainVideoActuallyPlaying(false);
+      } else {
+        releaseDetailVideo();
+      }
       maybeRouteBack();
     };
     const completeFold = (event: Event) => {
@@ -579,6 +593,7 @@ export default function MediaLarge({
         ?.mediaId;
       if (mediaId !== photo.id) { return; }
       foldAnimationCompleteRef.current = true;
+      if (isDetailFoldingRef.current) { releaseDetailVideo(); }
       maybeRouteBack();
     };
     window.addEventListener(
@@ -700,6 +715,7 @@ export default function MediaLarge({
     }
     return () => {
       setDetailVideoPageActive(photo.id, false);
+      if (isDetailFoldingRef.current) { return; }
       const playback = detailPlaybackRef.current;
       if (
         playback.isFullVideoPlaying &&
@@ -758,26 +774,29 @@ export default function MediaLarge({
       if (mediaId !== photo.id) { return; }
       if (isDetailFoldingRef.current) { return; }
       const playback = detailPlaybackRef.current;
-      if (
-        playback.isFullVideoPlaying &&
-        playback.isMainVideoActuallyPlaying &&
-        playback.sourceUrl
-      ) {
+      const sourceUrl = playback.sourceUrl || fullVideoSourceUrl ||
+        getFullVideoBridgeUrl(photo.url);
+      const wasPlaying = playback.isFullVideoPlaying &&
+        playback.isMainVideoActuallyPlaying;
+      if (playback.isFullVideoPlaying && sourceUrl) {
         setDockedVideo({
           mediaId: photo.id,
           title: titleForMedia(photo),
           detailPath: persistentDetailPath,
-          sourceUrl: playback.sourceUrl,
+          sourceUrl,
           fallbackUrl: fullVideoCompatibilityUrl,
           posterUrl: getMediaPosterUrl(photo),
           currentTime: Math.max(0, playback.currentTime),
-          wasPlaying: true,
+          wasPlaying,
           muted: playback.muted,
-          pendingHandoff: true,
+          pendingHandoff: wasPlaying,
         });
         isDetailFoldingRef.current = true;
         setIsDetailFolding(true);
-        handoffReadyRef.current = false;
+        // A paused detail video has no playback ownership to hand off. It can
+        // still fold into a paused mini player, and the route only needs to
+        // wait for the visual fold transaction to finish.
+        handoffReadyRef.current = !wasPlaying;
         foldAnimationCompleteRef.current = false;
         routeBackScheduledRef.current = false;
         if (foldFallbackTimerRef.current !== undefined) {
@@ -786,12 +805,11 @@ export default function MediaLarge({
         foldFallbackTimerRef.current = window.setTimeout(() => {
           foldFallbackTimerRef.current = undefined;
           if (!isDetailFoldingRef.current) { return; }
+          if (!wasPlaying) { return; }
           handoffReadyRef.current = true;
           videoRef.current?.pause();
-          detailPlaybackRef.current.isFullVideoPlaying = false;
           detailPlaybackRef.current.isMainVideoActuallyPlaying = false;
           setIsMainVideoActuallyPlaying(false);
-          setIsFullVideoPlaying(false);
           window.dispatchEvent(new CustomEvent(
             PERSISTENT_VIDEO_HANDOFF_READY_EVENT,
             { detail: { mediaId: photo.id } },
@@ -811,6 +829,7 @@ export default function MediaLarge({
   }, [
     broadcastDetailVideoPlayback,
     fullVideoCompatibilityUrl,
+    fullVideoSourceUrl,
     isVideo,
     photo,
     persistentDetailPath,

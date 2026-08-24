@@ -39,6 +39,7 @@ export const requestDetailVideoRestore = (mediaId: string) => {
 
 export type DetailVideoFoldGesture = {
   mediaId: string
+  gestureId?: number
   phase: 'move' | 'cancel' | 'commit'
   deltaX: number
   deltaY: number

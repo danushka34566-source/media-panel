@@ -41,10 +41,10 @@ export default function VideoMiniPlayer() {
   const videoRef = useRef<HTMLVideoElement>(null);
   const miniGestureMovedRef = useRef(false);
   const miniActionRef = useRef<'idle' | 'dragging' | 'opening' | 'dismissing'>('idle');
+  const gestureSessionRef = useRef(0);
   const suppressClickUntilRef = useRef(0);
   const pendingActionTimerRef = useRef<number | undefined>(undefined);
   const handoffReadyMediaRef = useRef<string | undefined>(undefined);
-  const controlsTimerRef = useRef<number | undefined>(undefined);
   const resumeTimeRef = useRef<number | undefined>(undefined);
   const dockedVideo = useSyncExternalStore(
     subscribeVideoMiniPlayer,
@@ -54,10 +54,16 @@ export default function VideoMiniPlayer() {
   const [useFallbackSource, setUseFallbackSource] = useState(false);
   const [playbackError, setPlaybackError] = useState(false);
   const [headerHeight, setHeaderHeight] = useState(0);
-  const [controlsVisible, setControlsVisible] = useState(false);
   const source = dockedVideo && useFallbackSource && dockedVideo.fallbackUrl
     ? dockedVideo.fallbackUrl
     : dockedVideo?.sourceUrl;
+  const isPendingDetailFold = Boolean(
+    dockedVideo &&
+    getActiveDetailVideoMediaId() === dockedVideo.mediaId &&
+    document.querySelector<HTMLElement>(
+      `[data-media-detail-fold-panel="${dockedVideo.mediaId}"]`,
+    )?.dataset.foldCommitting === 'true',
+  );
   const requestPlayback = useCallback((video: HTMLVideoElement) => {
     void VideoPlaybackManager.requestPlay(video).catch(() => undefined);
   }, []);
@@ -73,37 +79,64 @@ export default function VideoMiniPlayer() {
       handoffReadyMediaRef.current === mediaId
     ) { return; }
     handoffReadyMediaRef.current = mediaId;
+    video.muted = latest.muted;
+    // Publish the new owner before releasing the detail player. Keeping the
+    // store on `pendingHandoff: true` left React free to re-apply the temporary
+    // muted prop after the imperative unmute and made the mini appear stuck.
+    updateDockedVideo({
+      pendingHandoff: false,
+      muted: latest.muted,
+    }, true);
     window.dispatchEvent(new CustomEvent(
       PERSISTENT_VIDEO_HANDOFF_READY_EVENT,
       { detail: { mediaId } },
     ));
-    video.muted = latest.muted;
-    updateDockedVideo({ pendingHandoff: false, muted: latest.muted });
   }, []);
-  const openDetails = useCallback(() => {
-    if (!dockedVideo || miniActionRef.current === 'dismissing') { return; }
+  const openDetails = useCallback((fromGesture = false) => {
+    const currentDockedVideo = getDockedVideo();
+    if (
+      !currentDockedVideo ||
+      miniActionRef.current === 'dismissing' ||
+      (!fromGesture && miniActionRef.current !== 'idle') ||
+      (fromGesture && miniActionRef.current !== 'opening')
+    ) { return; }
     miniActionRef.current = 'opening';
     if (pendingActionTimerRef.current !== undefined) {
       window.clearTimeout(pendingActionTimerRef.current);
       pendingActionTimerRef.current = undefined;
     }
     const video = videoRef.current;
-    if (video) {
+    if (
+      video &&
+      video.dataset.mediaId === currentDockedVideo.mediaId
+    ) {
       updateDockedVideo({
         currentTime: video.currentTime,
         wasPlaying: !video.paused && !video.ended,
         muted: video.muted,
       });
     }
-    requestDetailVideoRestore(dockedVideo.mediaId);
-    if (getActiveDetailVideoMediaId() === dockedVideo.mediaId) {
+    requestDetailVideoRestore(currentDockedVideo.mediaId);
+    if (getActiveDetailVideoMediaId() === currentDockedVideo.mediaId) {
+      animate(miniScale, 1, { duration: 0.12, ease: 'easeOut' });
       miniActionRef.current = 'idle';
       return;
     }
+    const openingMediaId = currentDockedVideo.mediaId;
+    pendingActionTimerRef.current = window.setTimeout(() => {
+      pendingActionTimerRef.current = undefined;
+      if (
+        miniActionRef.current === 'opening' &&
+        getDockedVideo()?.mediaId === openingMediaId
+      ) {
+        miniActionRef.current = 'idle';
+        animate(miniScale, 1, { duration: 0.12, ease: 'easeOut' });
+      }
+    }, 5000);
     // The persistent mini player keeps playing while the route payload loads;
     // MediaLarge claims the state only after the destination is mounted.
-    router.push(dockedVideo.detailPath, { scroll: false });
-  }, [dockedVideo, router]);
+    router.push(currentDockedVideo.detailPath, { scroll: false });
+  }, [miniScale, router]);
   useEffect(() => {
     // The source selection is local UI state that must reset with a new
     // media element; this is an intentional state synchronization boundary.
@@ -122,6 +155,29 @@ export default function VideoMiniPlayer() {
     if (!video || !dockedVideo?.pendingHandoff) { return; }
     if (!video.paused) { signalHandoffReady(video); }
   }, [dockedVideo?.pendingHandoff, dockedVideo?.mediaId, signalHandoffReady]);
+
+  useEffect(() => {
+    const onHandoffReady = (event: Event) => {
+      const mediaId = (event as CustomEvent<{ mediaId?: string }>).detail
+        ?.mediaId;
+      const latest = getDockedVideo();
+      if (
+        !latest ||
+        latest.mediaId !== mediaId ||
+        !latest.pendingHandoff
+      ) { return; }
+      if (videoRef.current) { videoRef.current.muted = latest.muted; }
+      // The detail-side timeout can release the route even when autoplay is
+      // blocked. Mark the ownership handoff complete so the mini is visible
+      // and the user can start it normally from the origin page.
+      updateDockedVideo({ pendingHandoff: false }, true);
+    };
+    window.addEventListener(PERSISTENT_VIDEO_HANDOFF_READY_EVENT, onHandoffReady);
+    return () => window.removeEventListener(
+      PERSISTENT_VIDEO_HANDOFF_READY_EVENT,
+      onHandoffReady,
+    );
+  }, [dockedVideo?.mediaId]);
 
   const shouldResumePlayback = Boolean(dockedVideo?.wasPlaying);
   useEffect(() => {
@@ -186,33 +242,11 @@ export default function VideoMiniPlayer() {
     animate(miniY, targetY, { type: 'spring', stiffness: 420, damping: 34 });
     animate(miniScale, 1, { type: 'spring', stiffness: 420, damping: 34 });
   }, [miniScale, miniX, miniY]);
-  const scheduleControlsHide = useCallback(() => {
-    if (controlsTimerRef.current !== undefined) {
-      window.clearTimeout(controlsTimerRef.current);
-    }
-    controlsTimerRef.current = window.setTimeout(() => {
-      setControlsVisible(false);
-    }, 3200);
-  }, []);
-  const toggleControls = useCallback(() => {
-    if (
-      miniGestureMovedRef.current ||
-      miniActionRef.current !== 'idle' ||
-      Date.now() < suppressClickUntilRef.current
-    ) { return; }
-    setControlsVisible(current => {
-      const next = !current;
-      if (next) { scheduleControlsHide(); }
-      return next;
-    });
-  }, [scheduleControlsHide]);
   const onMiniDragStart = () => {
     if (miniActionRef.current !== 'idle') { return; }
+    gestureSessionRef.current += 1;
     miniActionRef.current = 'dragging';
     miniGestureMovedRef.current = false;
-    if (controlsTimerRef.current !== undefined) {
-      window.clearTimeout(controlsTimerRef.current);
-    }
   };
   const onMiniDrag = (
     _: MouseEvent | TouchEvent | PointerEvent,
@@ -232,6 +266,7 @@ export default function VideoMiniPlayer() {
     info: PanInfo,
   ) => {
     if (miniActionRef.current !== 'dragging') { return; }
+    const session = gestureSessionRef.current;
     const corner = cornerRef.current;
     const isBottom = corner.startsWith('b');
     const isLeft = corner.endsWith('l');
@@ -247,16 +282,27 @@ export default function VideoMiniPlayer() {
     );
     const didMove = miniGestureMovedRef.current;
     if (didMove) { suppressClickUntilRef.current = Date.now() + 360; }
+    // The movement flag belongs to this pointer session only. Leaving it set
+    // permanently disables every later tap that should reveal native video
+    // controls.
+    miniGestureMovedRef.current = false;
     if (shouldUnfold) {
+      const mediaId = getDockedVideo()?.mediaId;
       miniActionRef.current = 'opening';
       animate(miniScale, 1.12, { duration: 0.12, ease: 'easeOut' });
       pendingActionTimerRef.current = window.setTimeout(() => {
         pendingActionTimerRef.current = undefined;
-        openDetails();
+        if (
+          session !== gestureSessionRef.current ||
+          miniActionRef.current !== 'opening' ||
+          getDockedVideo()?.mediaId !== mediaId
+        ) { return; }
+        openDetails(true);
       }, 90);
       return;
     }
     if (shouldDismiss) {
+      const mediaId = getDockedVideo()?.mediaId;
       miniActionRef.current = 'dismissing';
       const bounds = boundsRef.current?.getBoundingClientRect();
       const player = playerRef.current;
@@ -277,17 +323,23 @@ export default function VideoMiniPlayer() {
       }
       pendingActionTimerRef.current = window.setTimeout(() => {
         pendingActionTimerRef.current = undefined;
+        if (
+          session !== gestureSessionRef.current ||
+          miniActionRef.current !== 'dismissing' ||
+          getDockedVideo()?.mediaId !== mediaId
+        ) { return; }
         videoRef.current?.pause();
         clearDockedVideo();
+        miniActionRef.current = 'idle';
       }, 150);
       return;
     }
     miniActionRef.current = 'idle';
     snapToCorner();
-    if (controlsVisible) { scheduleControlsHide(); }
   };
 
   useEffect(() => {
+    gestureSessionRef.current += 1;
     miniActionRef.current = 'idle';
     miniGestureMovedRef.current = false;
     suppressClickUntilRef.current = 0;
@@ -299,15 +351,22 @@ export default function VideoMiniPlayer() {
     miniX.set(0);
     miniY.set(0);
     miniScale.set(1);
-    // A new media session starts with the unobstructed minimal player.
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    setControlsVisible(false);
   }, [dockedVideo?.mediaId, miniScale, miniX, miniY]);
 
   useEffect(() => {
     const recover = () => {
       if (document.hidden || !dockedVideo) { return; }
-      setControlsVisible(false);
+      // Browsers can suspend a pointer sequence and throttle its completion
+      // timer while the screen is locked. Invalidate that abandoned session
+      // so the player never returns permanently locked in opening/dismissing.
+      gestureSessionRef.current += 1;
+      miniActionRef.current = 'idle';
+      miniGestureMovedRef.current = false;
+      suppressClickUntilRef.current = 0;
+      if (pendingActionTimerRef.current !== undefined) {
+        window.clearTimeout(pendingActionTimerRef.current);
+        pendingActionTimerRef.current = undefined;
+      }
       window.requestAnimationFrame(() => snapToCorner(cornerRef.current));
       const video = videoRef.current;
       if (!video) { return; }
@@ -344,22 +403,20 @@ export default function VideoMiniPlayer() {
     if (pendingActionTimerRef.current !== undefined) {
       window.clearTimeout(pendingActionTimerRef.current);
     }
-    if (controlsTimerRef.current !== undefined) {
-      window.clearTimeout(controlsTimerRef.current);
-    }
   }, []);
 
   return (
     <div
       ref={boundsRef}
       className="pointer-events-none fixed inset-x-0 bottom-0 z-40"
-      style={{ top: headerHeight }}
+      style={{ top: headerHeight, visibility: 'visible' }}
     >
       <AnimatePresence>
         {dockedVideo && source &&
           <motion.aside
           ref={playerRef}
           data-video-mini-player
+          data-media-id={dockedVideo.mediaId}
           key={dockedVideo.mediaId}
           aria-label="Playing video"
             className="pointer-events-auto absolute bottom-2 right-2
@@ -376,7 +433,15 @@ export default function VideoMiniPlayer() {
           dragConstraints={boundsRef}
           dragElastic={0.04}
           dragMomentum={false}
-          style={{ x: miniX, y: miniY, scale: miniScale }}
+          style={{
+            x: miniX,
+            y: miniY,
+            scale: miniScale,
+            // During a detail-title fold the page-owned video is the visible
+            // object. Keep this element mounted and playing for handoff, but
+            // do not expose a second floating player over the shrinking page.
+            visibility: isPendingDetailFold ? 'hidden' : 'visible',
+          }}
           onDragStart={onMiniDragStart}
           onDrag={onMiniDrag}
             onDragEnd={onMiniDragEnd}
@@ -389,13 +454,12 @@ export default function VideoMiniPlayer() {
               className="size-full object-contain"
               src={source}
               poster={dockedVideo.posterUrl}
-              controls={controlsVisible}
+              controls
               controlsList="nodownload noplaybackrate"
               playsInline
               autoPlay={dockedVideo.wasPlaying}
               muted={dockedVideo.pendingHandoff ? true : dockedVideo.muted}
               preload="auto"
-              onContextMenu={event => event.preventDefault()}
               onLoadedMetadata={event => {
                 const currentTime = resumeTimeRef.current;
                 if (
@@ -428,7 +492,13 @@ export default function VideoMiniPlayer() {
               onPause={event => {
                 const currentTime = event.currentTarget.currentTime;
                 resumeTimeRef.current = currentTime;
-                updateDockedVideo({ currentTime, wasPlaying: false }, true);
+                // Mobile browsers pause media while locking/backgrounding the
+                // page. Preserve the user's playing intent in that lifecycle
+                // pause so visibility recovery can resume without a refresh.
+                updateDockedVideo({
+                  currentTime,
+                  ...!document.hidden && { wasPlaying: false },
+                }, !document.hidden);
               }}
               onVolumeChange={event => {
                 updateDockedVideo({ muted: event.currentTarget.muted });
@@ -460,8 +530,8 @@ export default function VideoMiniPlayer() {
               aria-label="Mini-player gesture surface"
               role="button"
               tabIndex={0}
-              className={`absolute inset-x-0 top-0 z-[5] cursor-grab touch-none
-                active:cursor-grabbing ${controlsVisible ? 'h-8' : 'bottom-0'}`}
+              className="absolute inset-x-0 top-0 z-[5] h-7 cursor-grab
+                touch-none active:cursor-grabbing"
               onPointerDown={event => {
                 if (miniActionRef.current !== 'idle') {
                   event.preventDefault();
@@ -469,12 +539,18 @@ export default function VideoMiniPlayer() {
                 }
                 dragControls.start(event);
               }}
-              onClick={toggleControls}
+              onPointerCancel={() => {
+                if (miniActionRef.current !== 'dragging') { return; }
+                gestureSessionRef.current += 1;
+                miniActionRef.current = 'idle';
+                miniGestureMovedRef.current = false;
+                suppressClickUntilRef.current = Date.now() + 120;
+                snapToCorner();
+              }}
               onKeyDown={event => {
-                if (event.key === 'Enter' || event.key === ' ') {
+                if (event.key === 'Enter' || event.key === ' ' ||
+                  event.key === 'ArrowUp') {
                   event.preventDefault();
-                  toggleControls();
-                } else if (event.key === 'ArrowUp') {
                   openDetails();
                 }
               }}

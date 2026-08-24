@@ -1,9 +1,10 @@
 'use client';
 
-import { type ReactNode, useEffect, useRef } from 'react';
+import { type ReactNode, useLayoutEffect, useRef } from 'react';
 import {
   DETAIL_VIDEO_FOLD_COMPLETE_EVENT,
   DETAIL_VIDEO_FOLD_GESTURE_EVENT,
+  getDockedVideo,
   type DetailVideoFoldGesture,
 } from './video-mini-player';
 
@@ -23,11 +24,68 @@ export default function MediaDetailFoldPanel({
   const commitTimerRef = useRef<number | undefined>(undefined);
   const transitionDoneRef = useRef(false);
   const commitStartedRef = useRef(false);
+  const activeGestureIdRef = useRef<number | undefined>(undefined);
+  const committedGestureIdRef = useRef<number | undefined>(undefined);
+  const unfoldFrameRef = useRef<number | undefined>(undefined);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
+    activeGestureIdRef.current = undefined;
+    committedGestureIdRef.current = undefined;
+    commitStartedRef.current = false;
+    transitionDoneRef.current = false;
+    if (resetTimerRef.current !== undefined) {
+      window.clearTimeout(resetTimerRef.current);
+    }
+    if (commitTimerRef.current !== undefined) {
+      window.clearTimeout(commitTimerRef.current);
+    }
+    if (unfoldFrameRef.current !== undefined) {
+      window.cancelAnimationFrame(unfoldFrameRef.current);
+      unfoldFrameRef.current = undefined;
+    }
+    if (panelRef.current) {
+      panelRef.current.style.transition = 'none';
+      panelRef.current.style.transform = 'none';
+      panelRef.current.style.opacity = '1';
+      panelRef.current.style.borderRadius = '0px';
+      panelRef.current.style.pointerEvents = '';
+      panelRef.current.style.willChange = '';
+    }
+    const docked = getDockedVideo();
+    const mini = docked?.mediaId === mediaId && !docked.pendingHandoff
+      ? document.querySelector<HTMLElement>(
+        `[data-video-mini-player][data-media-id="${mediaId}"]`,
+      )
+      : undefined;
+    if (mini && panelRef.current) {
+      const panelRect = panelRef.current.getBoundingClientRect();
+      const miniRect = mini.getBoundingClientRect();
+      if (panelRect.width > 0 && miniRect.width > 0) {
+        const scale = Math.min(0.72, Math.max(0.18,
+          miniRect.width / panelRect.width));
+        const translateX = miniRect.left + miniRect.width / 2 -
+          (panelRect.left + panelRect.width / 2);
+        const translateY = miniRect.top + miniRect.height / 2 -
+          (panelRect.top + panelRect.height / 2);
+        panelRef.current.style.transition = 'none';
+        panelRef.current.style.transform =
+          `translate3d(${translateX}px, ${translateY}px, 0) scale(${scale})`;
+        panelRef.current.style.borderRadius = '18px';
+        panelRef.current.style.willChange = 'transform';
+        unfoldFrameRef.current = window.requestAnimationFrame(() => {
+          unfoldFrameRef.current = undefined;
+          if (!panelRef.current) { return; }
+          panelRef.current.style.transition = RESET_TRANSITION;
+          panelRef.current.style.transform =
+            'translate3d(0, 0, 0) scale(1)';
+          panelRef.current.style.borderRadius = '0px';
+        });
+      }
+    }
     const reset = (animate: boolean) => {
       const panel = panelRef.current;
       if (!panel) { return; }
+      panel.dataset.foldCommitting = 'false';
       if (resetTimerRef.current !== undefined) {
         window.clearTimeout(resetTimerRef.current);
       }
@@ -58,12 +116,26 @@ export default function MediaDetailFoldPanel({
     const onGesture = (event: Event) => {
       const gesture = (event as CustomEvent<DetailVideoFoldGesture>).detail;
       if (!gesture || gesture.mediaId !== mediaId) { return; }
+      if (
+        gesture.phase !== 'cancel' &&
+        committedGestureIdRef.current !== undefined
+      ) { return; }
       const panel = panelRef.current;
       if (!panel) { return; }
       if (gesture.phase === 'cancel') {
+        if (commitStartedRef.current) { return; }
         commitStartedRef.current = false;
+        activeGestureIdRef.current = undefined;
         reset(true);
         return;
+      }
+      if (
+        activeGestureIdRef.current !== undefined &&
+        gesture.gestureId !== undefined &&
+        activeGestureIdRef.current !== gesture.gestureId
+      ) { return; }
+      if (gesture.gestureId !== undefined) {
+        activeGestureIdRef.current = gesture.gestureId;
       }
       const pull = Math.max(0, gesture.deltaY);
       const progress = Math.min(1, pull / 180);
@@ -88,6 +160,8 @@ export default function MediaDetailFoldPanel({
       }
       transitionDoneRef.current = false;
       commitStartedRef.current = true;
+      committedGestureIdRef.current = gesture.gestureId;
+      panel.dataset.foldCommitting = 'true';
       const relatedGrid = document.querySelector<HTMLElement>(
         `[data-media-detail-related-grid="${mediaId}"]`,
       );
@@ -107,26 +181,37 @@ export default function MediaDetailFoldPanel({
       };
       const animateCommit = () => {
         const currentPanel = panelRef.current;
-        if (!currentPanel) { return; }
+        if (
+          !currentPanel ||
+          !commitStartedRef.current ||
+          committedGestureIdRef.current !== gesture.gestureId
+        ) { return; }
+        // The panel has been following the finger with a temporary transform.
+        // Measure its committed layout box before replacing that transform;
+        // otherwise the pull offset is counted twice and the fold jumps.
+        currentPanel.style.transition = 'none';
+        currentPanel.style.transform = 'none';
         const panelRect = currentPanel.getBoundingClientRect();
-        const miniRect = document.querySelector<HTMLElement>(
-          '[data-video-mini-player]',
-        )?.getBoundingClientRect();
+        const miniRect = Array.from(
+          document.querySelectorAll<HTMLElement>('[data-video-mini-player]'),
+        ).find(element => element.dataset.mediaId === mediaId)
+          ?.getBoundingClientRect();
         const scale = miniRect && panelRect.width > 0
           ? Math.min(0.72, Math.max(0.18, miniRect.width / panelRect.width))
           : 0.72;
-        const scaledWidth = panelRect.width * scale;
-        const scaledHeight = panelRect.height * scale;
         const destination = miniRect ?? {
           left: window.innerWidth - Math.min(272, window.innerWidth - 16) - 16,
           top: window.innerHeight - 160 - 16,
           width: Math.min(272, window.innerWidth - 16),
           height: 160,
         };
-        const targetX = destination.left - panelRect.left +
-          (destination.width - scaledWidth) / 2;
-        const targetY = destination.top - panelRect.top +
-          (destination.height - scaledHeight) / 2;
+        // Framer/CSS scales around the panel center. Align centers directly;
+        // adding scaled width/height here would double-count the transform
+        // origin and leave the folded panel offset from the mini player.
+        const targetX = destination.left + destination.width / 2 -
+          (panelRect.left + panelRect.width / 2);
+        const targetY = destination.top + destination.height / 2 -
+          (panelRect.top + panelRect.height / 2);
         currentPanel.style.transition = RESET_TRANSITION;
         currentPanel.style.willChange = 'transform, opacity';
         currentPanel.style.pointerEvents = 'none';
@@ -168,5 +253,6 @@ export default function MediaDetailFoldPanel({
     ref={panelRef}
     className="relative z-[60] bg-main"
     data-media-detail-fold-panel={mediaId}
+    data-fold-committing="false"
   >{children}</div>;
 }
