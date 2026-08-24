@@ -2851,11 +2851,8 @@ const clearStaleRegistrationStatuses = async (env: Env) => {
     -- file that was actually claimed and left in registering.
     WHERE status='registering'
       AND COALESCE(attempt_count, 0) < ${maxAttempts}
-      AND (
-        media_id IS NULL
-        OR COALESCE(updated_at, created_at, TIMESTAMP 'epoch') <
-          now() - (${String(minutes)} || ' minutes')::interval
-      )
+      AND COALESCE(updated_at, created_at, TIMESTAMP 'epoch') <
+        now() - (${String(minutes)} || ' minutes')::interval
     RETURNING url
   ` as unknown as Array<{ url: string }>;
   const exhaustedRows = await sql`
@@ -2869,11 +2866,8 @@ const clearStaleRegistrationStatuses = async (env: Env) => {
       updated_at=now()
     WHERE status='registering'
       AND COALESCE(attempt_count, 0) >= ${maxAttempts}
-      AND (
-        media_id IS NULL
-        OR COALESCE(updated_at, created_at, TIMESTAMP 'epoch') <
-          now() - (${String(minutes)} || ' minutes')::interval
-      )
+      AND COALESCE(updated_at, created_at, TIMESTAMP 'epoch') <
+        now() - (${String(minutes)} || ' minutes')::interval
     RETURNING url
   ` as unknown as Array<{ url: string }>;
   // A transient Drive 5xx can be reported after the copy request has already
@@ -3317,8 +3311,7 @@ const upsertRegistrationStatusBatch = async (
       title,
       media_id,
       extension,
-      error_message,
-      attempt_count
+      error_message
     )
     SELECT
       url,

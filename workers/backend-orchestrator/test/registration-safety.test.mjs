@@ -124,6 +124,14 @@ test('generated destination recovery carries the attempt count into its declared
   assert.match(source, /extension,\s*NULL,\s*COALESCE\(attempt_count, 0\)/);
 });
 
+test('generic registration status upsert keeps target and select columns aligned', () => {
+  const start = workerSource.indexOf('const upsertRegistrationStatusBatch');
+  const end = workerSource.indexOf('const upsertRegistrationStatuses', start);
+  const source = workerSource.slice(start, end);
+  assert.match(source, /error_message\s*\)\s*SELECT[\s\S]*?error_message\s+FROM incoming/);
+  assert.doesNotMatch(source, /error_message,\s*attempt_count\s*\)\s*SELECT/);
+});
+
 test('registration scans process a bounded slice instead of one file per cron', () => {
   assert.match(workerSource, /registerBatchSize: getNumber\(env\.REGISTER_BATCH_SIZE, 2/);
   assert.match(workerSource, /maxRegisterPasses: getNumber\(env\.MAX_REGISTER_PASSES, 2/);
@@ -180,7 +188,10 @@ test('only an in-progress registration is recovered as stalled', () => {
   const staleSource = workerSource.slice(staleStart, staleEnd);
 
   assert.match(staleSource, /WHERE status='registering'/);
-  assert.match(staleSource, /media_id IS NULL/);
+  // A freshly claimed row has no media_id until the commit. Recovery must
+  // wait for the durable age threshold instead of requeueing it immediately.
+  assert.doesNotMatch(staleSource, /media_id IS NULL\s*OR/);
+  assert.match(staleSource, /COALESCE\(updated_at, created_at, TIMESTAMP 'epoch'\) <[\s\S]*?now\(\)/);
   assert.doesNotMatch(staleSource, /status IN \('detected', 'registering'\)/);
   assert.match(staleSource, /WHERE status='detected'[\s\S]*?error_message=\$\{STALE_REGISTRATION_ERROR_MESSAGE\}/);
 });

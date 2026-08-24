@@ -28,6 +28,11 @@ interface Props extends AnimationConfig {
   // directional transition without the full-page black veil caused by a
   // zero-opacity entrance state.
   fade?: boolean
+  // Most motion shells should remove their transform after settling so fixed
+  // descendants are not trapped by a containing block. Grid cards use the
+  // historical identity transform instead, which keeps Framer's scale
+  // interpolation stable during the first hydrated render.
+  removeTransformAfterAnimation?: boolean
   animateOnFirstLoadOnly?: boolean
   staggerOnFirstLoadOnly?: boolean
   onAnimationComplete?: () => void
@@ -49,6 +54,7 @@ function AnimateItems({
   distanceOffset = 20,
   animateFromAppState,
   fade = true,
+  removeTransformAfterAnimation = true,
   animateOnFirstLoadOnly,
   staggerOnFirstLoadOnly,
   onAnimationComplete,
@@ -173,7 +179,9 @@ function AnimateItems({
               // an identity transform creates a containing block for fixed
               // descendants, which would make the full-page mini player
               // scroll away with its original card.
-              transform: 'none',
+              transform: removeTransformAfterAnimation
+                ? 'none'
+                : 'translateX(0) translateY(0) scale(1)',
             },
           }}
           transition={{

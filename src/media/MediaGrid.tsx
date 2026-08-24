@@ -268,6 +268,10 @@ export default function MediaGrid({
         duration={0.7}
         staggerDelay={0.04}
         distanceOffset={40}
+        // The original grid animation ended at an explicit identity
+        // transform. Keep that interpolation for cards; other motion shells
+        // still remove transforms to preserve fixed mini-player positioning.
+        removeTransformAfterAnimation={false}
         // Keep the original scale entrance, but do not blank cold cards if a
         // mobile compositor or image request interrupts the first frame.
         fade={false}
