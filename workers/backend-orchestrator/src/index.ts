@@ -1091,6 +1091,24 @@ export const isRecoverableDriveCopyError = (error: unknown) => {
   );
 };
 
+// Keep manual scans aligned with the scheduled SQL claim. The manual path
+// loads the complete status table, so it must not turn terminal/non-retryable
+// errors back into attempts merely because their source object is still in
+// storage. Those rows require an explicit /registration/retry request.
+export const isRetryableRegistrationStatusError = (
+  errorMessage?: string | null,
+) => {
+  if (errorMessage == null) { return true; }
+  return (
+    /timeout|connection terminated|connection reset/i.test(errorMessage) ||
+    /^Drive copy failed \((?:408|425|429|5\d{2})/i.test(errorMessage) ||
+    /^Drive copy not ready:/i.test(errorMessage) ||
+    /^Drive source metadata unavailable/i.test(errorMessage) ||
+    /^Copied destination is not readable in storage:/i.test(errorMessage) ||
+    /^Copied destination size mismatch:/i.test(errorMessage)
+  );
+};
+
 export const selectOldestRegistrationBatch = (
   pending: R2ObjectLike[],
   attemptedKeys: Set<string>,
@@ -2835,7 +2853,8 @@ const clearStaleRegistrationStatuses = async (env: Env) => {
       AND COALESCE(attempt_count, 0) < ${maxAttempts}
       AND (
         media_id IS NULL
-        OR updated_at < now() - (${String(minutes)} || ' minutes')::interval
+        OR COALESCE(updated_at, created_at, TIMESTAMP 'epoch') <
+          now() - (${String(minutes)} || ' minutes')::interval
       )
     RETURNING url
   ` as unknown as Array<{ url: string }>;
@@ -2852,7 +2871,8 @@ const clearStaleRegistrationStatuses = async (env: Env) => {
       AND COALESCE(attempt_count, 0) >= ${maxAttempts}
       AND (
         media_id IS NULL
-        OR updated_at < now() - (${String(minutes)} || ' minutes')::interval
+        OR COALESCE(updated_at, created_at, TIMESTAMP 'epoch') <
+          now() - (${String(minutes)} || ' minutes')::interval
       )
     RETURNING url
   ` as unknown as Array<{ url: string }>;
@@ -2896,7 +2916,8 @@ const clearOldCompletedRegistrationStatuses = async (env: Env) => {
   await sql`
     DELETE FROM worker_registration_status
     WHERE status IN ('registered', 'error')
-      AND updated_at < now() - (${String(days)} || ' days')::interval
+      AND COALESCE(updated_at, created_at, TIMESTAMP 'epoch') <
+        now() - (${String(days)} || ' days')::interval
   `;
 };
 
@@ -2959,7 +2980,7 @@ const getRegistrationStatusRows = async (env: Env, limit?: number) => {
         OR (
           status='registering'
           AND COALESCE(attempt_count, 0) < ${maxAttempts}
-          AND updated_at < now() - (
+          AND COALESCE(updated_at, created_at, TIMESTAMP 'epoch') < now() - (
             ${String(getNumber(env.STALE_REGISTRATION_MINUTES, 15, {
               min: 1,
               max: 24 * 60,
@@ -3041,7 +3062,8 @@ const claimRegistrationQueueRow = async (
         updated_at=now()
       WHERE status='registering'
         AND COALESCE(attempt_count, 0) >= ${maxAttempts}
-        AND updated_at < now() - (${String(staleMinutes)} || ' minutes')::interval
+        AND COALESCE(updated_at, created_at, TIMESTAMP 'epoch') <
+          now() - (${String(staleMinutes)} || ' minutes')::interval
       RETURNING url
     ), active AS MATERIALIZED (
       SELECT COUNT(*)::int AS active_count
@@ -3049,14 +3071,14 @@ const claimRegistrationQueueRow = async (
       CROSS JOIN claim_lock
       CROSS JOIN (SELECT COUNT(*) FROM exhausted) AS reclaimed
       WHERE active_row.status='registering'
-        AND active_row.updated_at >= now() -
+        AND COALESCE(active_row.updated_at, active_row.created_at, TIMESTAMP 'epoch') >= now() -
           (${String(staleMinutes)} || ' minutes')::interval
     ), candidate AS MATERIALIZED (
       SELECT
         url,
         (
           status='registering'
-          AND updated_at < now() -
+          AND COALESCE(updated_at, created_at, TIMESTAMP 'epoch') < now() -
             (${String(staleMinutes)} || ' minutes')::interval
         ) AS was_stale_retry
       FROM worker_registration_status
@@ -3067,7 +3089,8 @@ const claimRegistrationQueueRow = async (
         OR (
           status='registering'
           AND COALESCE(attempt_count, 0) < ${maxAttempts}
-          AND updated_at < now() - (${String(staleMinutes)} || ' minutes')::interval
+          AND COALESCE(updated_at, created_at, TIMESTAMP 'epoch') <
+            now() - (${String(staleMinutes)} || ' minutes')::interval
         )
         OR (
           status='error'
@@ -3180,6 +3203,10 @@ const setRegistrationStatus = async (
 // same retry guard.
 const incrementRegistrationAttempt = async (env: Env, url: string) => {
   const sql = sqlForEnv(env);
+  const maxAttempts = getNumber(env.MAX_REGISTRATION_ATTEMPTS, 3, {
+    min: 1,
+    max: 20,
+  });
   const rows = await sql`
     UPDATE worker_registration_status
     SET
@@ -3187,10 +3214,12 @@ const incrementRegistrationAttempt = async (env: Env, url: string) => {
       status='registering',
       error_message=NULL,
       updated_at=now()
-    WHERE url=${url} OR source_url=${url}
+    WHERE (url=${url} OR source_url=${url})
+      AND status IN ('detected', 'error')
+      AND COALESCE(attempt_count, 0) < ${maxAttempts}
     RETURNING attempt_count
   ` as unknown as Array<{ attempt_count: number }>;
-  return Number(rows[0]?.attempt_count || 1);
+  return rows[0] ? Number(rows[0].attempt_count) : undefined;
 };
 
 type RegistrationStatusWrite = {
@@ -3288,7 +3317,8 @@ const upsertRegistrationStatusBatch = async (
       title,
       media_id,
       extension,
-      error_message
+      error_message,
+      attempt_count
     )
     SELECT
       url,
@@ -3391,7 +3421,8 @@ const replaceRegistrationStatusUrl = async (
       title,
       media_id,
       extension,
-      error_message
+      error_message,
+      attempt_count
     )
     SELECT
       ${nextUrl},
@@ -3695,7 +3726,8 @@ const retryStaleProcessing = async (env: Env) => {
       transcode_error='Previous processing attempt stalled; queued for retry',
       updated_at=now()
     WHERE transcode_status='processing'
-      AND updated_at < now() - (${String(minutes)} || ' minutes')::interval
+      AND COALESCE(updated_at, created_at, TIMESTAMP 'epoch') <
+        now() - (${String(minutes)} || ' minutes')::interval
     RETURNING id
   ` as unknown as { id: string }[];
   // A transient Drive/connection failure can be reported after the processor
@@ -4801,6 +4833,17 @@ const scanAndRegisterWithLease = async (
       if (!MEDIA_EXTENSIONS.has(extension)) { return false; }
       if (GENERATED_MEDIA_SUFFIX_REGEX.test(fileNameBase)) { return false; }
       const objectUrl = urlForKey(env, object.key);
+      const registrationRow = registrationRowsByUrl.get(objectUrl);
+      if (registrationRow?.status === 'registered') { return false; }
+      if (registrationRow?.status === 'error') {
+        const attemptCount = Number(registrationRow.attempt_count ?? 0);
+        if (
+          attemptCount >= maxRegistrationAttempts ||
+          !isRetryableRegistrationStatusError(registrationRow.error_message)
+        ) {
+          return false;
+        }
+      }
       if (knownUrls.has(objectUrl) || registeredSourceUrls.has(objectUrl)) {
         return false;
       }
@@ -5058,7 +5101,12 @@ const scanAndRegisterWithLease = async (
       );
       try {
         if (!hasScheduledQueue) {
-          registrationAttemptNumber = await incrementRegistrationAttempt(env, sourceUrl);
+          const claimedAttempt = await incrementRegistrationAttempt(env, sourceUrl);
+          // A scheduled claim can win between the inventory read and this
+          // manual attempt. If the guarded update matched no row, abandon
+          // this object instead of creating a second copy request.
+          if (claimedAttempt === undefined) { continue; }
+          registrationAttemptNumber = claimedAttempt;
         } else if (registrationAttemptNumber < 1) {
           // Rows created by an older schema may have no persisted count. The
           // scheduled claim has already reserved this attempt, so keep the

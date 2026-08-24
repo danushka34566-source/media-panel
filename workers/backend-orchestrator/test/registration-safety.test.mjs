@@ -20,6 +20,7 @@ import {
   isAllowedProcessorUploadKey,
   isProtectedRegistrationDestination,
   isRecoverableDriveCopyError,
+  isRetryableRegistrationStatusError,
   isVerifiedStorageCopy,
   mergeSubtitleManifestTracks,
   runSafeRegistrationCommit,
@@ -96,6 +97,31 @@ test('Drive copy failures distinguish retryable transport errors from bad creden
   assert.equal(isRecoverableDriveCopyError(new Error('Drive copy failed (429): Too many requests')), true);
   assert.equal(isRecoverableDriveCopyError(new Error('fetch failed')), true);
   assert.equal(isRecoverableDriveCopyError(new Error('Drive source metadata unavailable (503)')), true);
+});
+
+test('manual scans do not revive terminal registration errors', () => {
+  assert.equal(isRetryableRegistrationStatusError(null), true);
+  assert.equal(isRetryableRegistrationStatusError('Drive copy failed (503)'), true);
+  assert.equal(isRetryableRegistrationStatusError('Copied destination size mismatch: source=100 destination=50'), true);
+  assert.equal(isRetryableRegistrationStatusError('Drive copy failed (403): permission denied'), false);
+  assert.equal(isRetryableRegistrationStatusError('Upload not found in storage; finalize or re-upload the file'), false);
+});
+
+test('manual registration attempts cannot race an already claimed row', () => {
+  const start = workerSource.indexOf('const incrementRegistrationAttempt');
+  const end = workerSource.indexOf('type RegistrationStatusWrite', start);
+  const source = workerSource.slice(start, end);
+  assert.match(source, /status IN \('detected', 'error'\)/);
+  assert.match(source, /COALESCE\(attempt_count, 0\) < \$\{maxAttempts\}/);
+  assert.match(source, /rows\[0\] \? Number\(rows\[0\]\.attempt_count\) : undefined/);
+});
+
+test('generated destination recovery carries the attempt count into its declared column', () => {
+  const start = workerSource.indexOf('const replaceRegistrationStatusUrl');
+  const end = workerSource.indexOf('const syncDetectedStatuses', start);
+  const source = workerSource.slice(start, end);
+  assert.match(source, /error_message,\s*attempt_count/);
+  assert.match(source, /extension,\s*NULL,\s*COALESCE\(attempt_count, 0\)/);
 });
 
 test('registration scans process a bounded slice instead of one file per cron', () => {
