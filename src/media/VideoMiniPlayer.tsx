@@ -89,7 +89,7 @@ export default function VideoMiniPlayer() {
     <aside
       aria-label="Playing video"
       className={clsx(
-        'fixed right-2 z-[2100] sm:right-4 sm:bottom-4',
+        'fixed right-2 z-40 sm:right-4 sm:bottom-4',
         'bottom-[max(0.5rem,env(safe-area-inset-bottom))]',
         'w-[min(18rem,calc(100vw-1rem))] overflow-hidden rounded-md',
         'border border-medium bg-black shadow-xl ring-1 ring-black/20',

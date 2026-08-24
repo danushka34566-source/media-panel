@@ -1,3 +1,4 @@
+import AnimateItems from '@/components/AnimateItems';
 import {
   Media,
   MediaDateRangePostgres,
@@ -6,7 +7,6 @@ import {
 } from '.';
 import { MediaSetCategory } from '../category';
 import MediaLarge from './MediaLarge';
-import MediaDetailHeroTransition from './MediaDetailHeroTransition';
 import AppGrid from '@/components/AppGrid';
 import MediaGrid from './MediaGrid';
 import TagHeader from '@/tag/TagHeader';
@@ -187,50 +187,52 @@ export default function MediaDetailPage({
           hasAiTextGeneration={AI_CONTENT_GENERATION_ENABLED}
         />}
       />
-      <MediaDetailHeroTransition key={photo.id} mediaId={photo.id}>
-        <MediaLarge
-          key={photo.id}
-          photo={photo}
-          album={album}
-          primaryTag={tag}
-          priority
-          preloadSubtitleManifest
-          broadcastDetailVideoPlayback
-          prefetchRelatedLinks
-          recent={recent}
-          year={year}
-          showTitle={Boolean(customHeader)}
-          showTitleAsH1
-          showCamera={!camera}
-          showLens={!lens}
-          showFilm={!film}
-          showRecipe={!recipe}
-          shouldShare={shouldShare}
-          shouldShareRecents={recent !== undefined}
-          shouldShareYear={year !== undefined}
-          shouldShareCamera={camera !== undefined}
-          shouldShareLens={lens !== undefined}
-          shouldShareAlbum={album !== undefined}
-          shouldShareTag={tag !== undefined}
-          shouldShareFilm={film !== undefined}
-          shouldShareRecipe={recipe !== undefined}
-          shouldShareFocalLength={focal !== undefined}
-          includeFavoriteInAdminMenu={includeFavoriteInAdminMenu}
-          showAdminKeyCommands
-          swipePreviousPath={swipePreviousPath}
-          swipeNextPath={swipeNextPath}
-        />
-      </MediaDetailHeroTransition>
+      <AnimateItems
+        className="md:mb-8"
+        animateFromAppState
+        removeTransformAfterAnimation
+        items={[
+          <MediaLarge
+            key={photo.id}
+            photo={photo}
+            album={album}
+            primaryTag={tag}
+            priority
+            preloadSubtitleManifest
+            broadcastDetailVideoPlayback
+            prefetchRelatedLinks
+            recent={recent}
+            year={year}
+            showTitle={Boolean(customHeader)}
+            showTitleAsH1
+            showCamera={!camera}
+            showLens={!lens}
+            showFilm={!film}
+            showRecipe={!recipe}
+            shouldShare={shouldShare}
+            shouldShareRecents={recent !== undefined}
+            shouldShareYear={year !== undefined}
+            shouldShareCamera={camera !== undefined}
+            shouldShareLens={lens !== undefined}
+            shouldShareAlbum={album !== undefined}
+            shouldShareTag={tag !== undefined}
+            shouldShareFilm={film !== undefined}
+            shouldShareRecipe={recipe !== undefined}
+            shouldShareFocalLength={focal !== undefined}
+            includeFavoriteInAdminMenu={includeFavoriteInAdminMenu}
+            showAdminKeyCommands
+            swipePreviousPath={swipePreviousPath}
+            swipeNextPath={swipeNextPath}
+          />,
+        ]}
+      />
       <AppGrid
         contentMain={<MediaGrid
           photos={photosGrid ?? photos}
           selectedMedia={photo}
-          prioritizeInitialMedia
-          deferInitialRender
           {...categoryPathParams}
           autoplaySmartPreviews
           suspendSmartPreviewsOnMainPlayback
-          animate={false}
           animateOnFirstLoadOnly
         />}
       />

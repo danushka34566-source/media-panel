@@ -24,19 +24,10 @@ interface Props extends AnimationConfig {
   itemKeys?: string[]
   canStart?: boolean
   animateFromAppState?: boolean
-  // Keep route content visible while its media asset loads. This preserves a
-  // directional transition without the full-page black veil caused by a
-  // zero-opacity entrance state.
-  fade?: boolean
-  // Most motion shells should remove their transform after settling so fixed
-  // descendants are not trapped by a containing block. Grid cards use the
-  // historical identity transform instead, which keeps Framer's scale
-  // interpolation stable during the first hydrated render.
+  // Fixed descendants need their ancestor's transform removed after motion
+  // settles. The animation itself still uses the original identity-transform
+  // target so its interpolation remains identical to upstream.
   removeTransformAfterAnimation?: boolean
-  // Some keyed collections (the media grid) intentionally use the original
-  // parent-controlled initial variant. This avoids a second child-level
-  // hidden state competing with the parent's stagger during first hydration.
-  inheritParentInitial?: boolean
   animateOnFirstLoadOnly?: boolean
   staggerOnFirstLoadOnly?: boolean
   onAnimationComplete?: () => void
@@ -57,9 +48,7 @@ function AnimateItems({
   scaleOffset = 0.9,
   distanceOffset = 20,
   animateFromAppState,
-  fade = true,
-  removeTransformAfterAnimation = true,
-  inheritParentInitial = false,
+  removeTransformAfterAnimation = false,
   animateOnFirstLoadOnly,
   staggerOnFirstLoadOnly,
   onAnimationComplete,
@@ -75,16 +64,6 @@ function AnimateItems({
   } = useAppState();
 
   const nextMediaAnimationId = useRef<string>(undefined);
-  // A few feeds intentionally mount their motion shell before their items
-  // arrive (for example while a detail route releases related cards). If the
-  // shell has already completed its entrance animation, newly inserted items
-  // can inherit the hidden scale/translate variant and visibly shrink before
-  // settling. Keep the first item keys eligible for the entrance animation;
-  // later keys are mounted directly in their final state.
-  const initialItemKeys = useRef(new Set(
-    (itemKeys ?? items.map((_, index) => String(index))).map(String),
-  ));
-
   const prefersReducedMotion = usePrefersReducedMotion();
   
   const nextMediaAnimationInitial = useRef(nextMediaAnimation);
@@ -94,15 +73,6 @@ function AnimateItems({
     !(animateOnFirstLoadOnly && hasLoadedWithAnimations);
   const shouldStagger =
     !(staggerOnFirstLoadOnly && hasLoadedWithAnimations);
-
-  // `initial` is only meaningful on mount, but deriving it directly from
-  // app-state on every render lets a hydration/layout update replace the
-  // parent variant while cards are already visible. Framer can then replay
-  // the hidden scale/translate state, which looks like cards appearing and
-  // immediately shrinking away (especially on mobile). Capture the decision
-  // for this motion tree once and apply it explicitly to each child below.
-  const initialShouldAnimate = useRef(shouldAnimate).current;
-  const initialShouldStagger = useRef(shouldStagger).current;
 
   const typeResolved = animateFromAppState
     ? (nextMediaAnimationInitial.current?.type ?? type)
@@ -116,19 +86,19 @@ function AnimateItems({
     (() => {
       switch (typeResolved) {
         case 'left': return {
-          opacity: fade ? 0 : 1,
+          opacity: 0,
           transform: `translateX(${distanceOffset}px)`,
         };
         case 'right': return {
-          opacity: fade ? 0 : 1,
+          opacity: 0,
           transform: `translateX(${-distanceOffset}px)`,
         };
         case 'bottom': return {
-          opacity: fade ? 0 : 1,
+          opacity: 0,
           transform: `translateY(${distanceOffset}px)`,
         };
         default: return {
-          opacity: fade ? 0 : 1,
+          opacity: 0,
           transform: `translateY(${distanceOffset}px) scale(${scaleOffset})`,
         };
       }})();
@@ -139,9 +109,9 @@ function AnimateItems({
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerLeave={onPointerLeave}
-      initial={initialShouldAnimate ? 'hidden' : false}
+      initial={shouldAnimate ? 'hidden' : false}
       animate={canStart || IGNORE_CAN_START ? 'show' : 'hidden'}
-      variants={initialShouldStagger
+      variants={shouldStagger
         ? {
           show: {
             transition: {
@@ -153,43 +123,24 @@ function AnimateItems({
         nextMediaAnimationId.current = getNextMediaAnimationId?.();
       }}
       onAnimationComplete={() => {
-        // Once the first entrance has settled, a removed-and-reinserted key
-        // is a late item too; do not let it replay the hidden variant.
-        initialItemKeys.current.clear();
         if (animateFromAppState) {
           clearNextMediaAnimation?.(nextMediaAnimationId.current);
         }
         onAnimationComplete?.();
       }}
     >
-      {items.map((item, index) => {
-        const itemKey = String(itemKeys ? itemKeys[index] : index);
-        return <motion.div
-          key={itemKey}
-          // Keyed collections can receive late items after the parent has
-          // settled, so they need an explicit initial state. Header/nav
-          // consumers intentionally omit itemKeys and retain the original
-          // parent-inherited variant; forcing an explicit child initial state
-          // there can leave the header hidden during hydration.
-          initial={inheritParentInitial
-            ? initialItemKeys.current.has(itemKey) ? undefined : false
-            : itemKeys
-            ? initialShouldAnimate && initialItemKeys.current.has(itemKey)
-              ? 'hidden'
-              : false
-            : undefined}
+      {items.map((item, index) =>
+        <motion.div
+          key={itemKeys ? itemKeys[index] : index}
           className={classNameItem}
           variants={{
             hidden,
             show: {
               opacity: 1,
-              // Remove the transform after the entrance transition. Keeping
-              // an identity transform creates a containing block for fixed
-              // descendants, which would make the full-page mini player
-              // scroll away with its original card.
-              transform: removeTransformAfterAnimation
-                ? 'none'
-                : 'translateX(0) translateY(0) scale(1)',
+              transform: 'translateX(0) translateY(0) scale(1)',
+              ...removeTransformAfterAnimation && {
+                transitionEnd: { transform: 'none' },
+              },
             },
           }}
           transition={{
@@ -198,8 +149,7 @@ function AnimateItems({
           }}
         >
           {item}
-        </motion.div>;
-      })}
+        </motion.div>)}
     </motion.div>
   );
 };

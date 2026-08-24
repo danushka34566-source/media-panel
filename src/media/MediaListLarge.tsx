@@ -26,6 +26,7 @@ export default function MediaListLarge({
       staggerDelay={0.15}
       distanceOffset={0}
       staggerOnFirstLoadOnly
+      removeTransformAfterAnimation
       classNameItem={optimizeLongList
         ? '[content-visibility:auto] [contain-intrinsic-size:900px]'
         : undefined}

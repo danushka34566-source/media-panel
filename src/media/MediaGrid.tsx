@@ -23,7 +23,6 @@ import {
   type DetailMainVideoPlayback,
 } from './detail-video-playback';
 import PersonalFavoriteButton from './PersonalFavoriteButton';
-import { DETAIL_HERO_READY_EVENT } from './MediaDetailHeroTransition';
 
 const WIDE_GRID_ASPECT_RATIO = 16 / 9;
 const SMART_PREVIEW_ACTIVATION_EVENT = 'media-grid-smart-preview-activation';
@@ -46,13 +45,12 @@ export default function MediaGrid({
   photos,
   selectedMedia,
   prioritizeInitialMedia,
-  deferInitialRender = false,
   className,
   classNameMedia,
   animate = true,
   canStart,
   animateOnFirstLoadOnly,
-  staggerOnFirstLoadOnly,
+  staggerOnFirstLoadOnly = true,
   additionalTile,
   small,
   selectable = true,
@@ -65,10 +63,6 @@ export default function MediaGrid({
   photos: Media[]
   selectedMedia?: Media
   prioritizeInitialMedia?: boolean
-  // Detail navigation should animate the primary media before mounting the
-  // related-card tree. Mounting all card images in the same commit can steal
-  // the first animation frames and make the hero appear to pause.
-  deferInitialRender?: boolean
   className?: string
   classNameMedia?: string
   animate?: boolean
@@ -91,24 +85,9 @@ export default function MediaGrid({
   } = useAppState();
   const [smartPreviewIds, setSmartPreviewIds] = useState<Set<string>>(new Set());
   const [isMainVideoPlaying, setIsMainVideoPlaying] = useState(false);
-  const [releasedDeferKey, setReleasedDeferKey] = useState<string>();
-  const [layoutAnimationKey, setLayoutAnimationKey] = useState(0);
-  const hasMountedLayoutRef = useRef(false);
-  const deferKey = selectedMedia?.id ?? photos[0]?.id;
-  const shouldRenderRelated = !deferInitialRender || releasedDeferKey === deferKey;
   const smartActivationFrameRef = useRef<number | undefined>(undefined);
   const pendingSmartCardIdRef = useRef<string | undefined>(undefined);
   const activeSmartCardIdRef = useRef<string | undefined>(undefined);
-  useEffect(() => {
-    // The first effect run represents hydration, not a user layout change.
-    // Replaying the full entrance there was the source of the old mobile
-    // cards-shrinking-then-disappearing glitch.
-    if (!hasMountedLayoutRef.current) {
-      hasMountedLayoutRef.current = true;
-      return;
-    }
-    setLayoutAnimationKey(current => current + 1);
-  }, [isWideGrid, isGridHighDensity]);
   useEffect(() => {
     if (!suspendSmartPreviewsOnMainPlayback) { return; }
     const syncMainVideoPlayback = (event: Event) => {
@@ -131,29 +110,6 @@ export default function MediaGrid({
     suspendSmartPreviewsOnMainPlayback,
     isMainVideoPlaying,
   );
-  useEffect(() => {
-    if (!deferInitialRender || !deferKey) { return; }
-
-    // Keep the first route transition frames dedicated to the hero. Release
-    // related cards at the actual hero boundary rather than racing a fixed
-    // timer against slower mobile decoders and server transitions.
-    const release = () => {
-      setReleasedDeferKey(deferKey);
-    };
-    const onHeroReady = (event: Event) => {
-      const mediaId = (event as CustomEvent<{ mediaId?: string }>).detail?.mediaId;
-      if (mediaId === deferKey) { release(); }
-    };
-    window.addEventListener(DETAIL_HERO_READY_EVENT, onHeroReady);
-    // Reduced-motion mode and a cancelled transition may not emit a Framer
-    // completion callback. Keep a bounded fallback so related content never
-    // remains deferred indefinitely.
-    const timer = window.setTimeout(release, 650);
-    return () => {
-      window.removeEventListener(DETAIL_HERO_READY_EVENT, onHeroReady);
-      window.clearTimeout(timer);
-    };
-  }, [deferInitialRender, deferKey]);
   useEffect(() => {
     const syncActivePreviews = (event: Event) => {
       const { activeIds } = (
@@ -219,22 +175,11 @@ export default function MediaGrid({
     selectedMediaIds,
     setSelectedMediaIds,
   } = useSelectMediaState();
-  // Animate the first visible batch only. Replaying a 48-card entrance on
-  // every infinite-scroll append is a major source of scroll jank.
-  // Do not force first-load-only mode here. The route itself is a new view
-  // when switching between grid and full layouts, and upstream animates that
-  // transition even after the application shell has finished loading.
-  const animateFirstLoadOnly = animateOnFirstLoadOnly;
-
   return (
     <div
       {...{ [DATA_KEY_MEDIA_GRID]: selectable, className }}
     >
       <AnimateItems
-        key={layoutAnimationKey}
-        // Keep one motion tree while layout preferences hydrate. Remounting
-        // on the initial density/width update replayed the hidden scale
-        // variant and made loaded cards visibly shrink away before returning.
         onPointerDown={event => activateSmartRows(
           event.target,
           event.currentTarget,
@@ -273,21 +218,15 @@ export default function MediaGrid({
                 : 'grid-cols-2 sm:grid-cols-4 md:grid-cols-3 lg:grid-cols-4',
           'items-center',
         )}
-        // Keep the original scale entrance, while AnimateItems prevents
-        // late-inserted cards from inheriting its hidden variant.
         type={animate === false ? 'none' : undefined}
         canStart={canStart}
-        // Match the original v80-v90 grid entrance: cards rise from a
-        // slightly smaller scale with a calm, readable stagger. The stable
-        // motion tree and explicit child initial state prevent this animation
-        // from reversing when the mobile/desktop layout hydrates.
         duration={0.7}
         staggerDelay={0.04}
         distanceOffset={40}
-        animateOnFirstLoadOnly={animateFirstLoadOnly}
+        animateOnFirstLoadOnly={animateOnFirstLoadOnly}
         staggerOnFirstLoadOnly={staggerOnFirstLoadOnly}
         onAnimationComplete={onAnimationComplete}
-        items={(shouldRenderRelated ? photos : []).map((photo, index) => {
+        items={photos.map((photo, index) => {
           const isSelected = selectedMediaIds?.includes(photo.id) ?? false;
           return <div
             key={photo.id}
@@ -364,7 +303,7 @@ export default function MediaGrid({
               />}
           </div>;
         }).concat(additionalTile ? <>{additionalTile}</> : [])}
-        itemKeys={(shouldRenderRelated ? photos : []).map(photo => photo.id)
+        itemKeys={photos.map(photo => photo.id)
           .concat(additionalTile ? ['more'] : [])}
       />
     </div>
