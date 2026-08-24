@@ -199,6 +199,16 @@ export default function MediaDetailPage({
               photo={photo}
               album={album}
               primaryTag={tag}
+              camera={camera}
+              lens={lens}
+              tag={tag}
+              category={category}
+              studio={studio}
+              performer={performer}
+              contentType={contentType}
+              film={film}
+              recipe={recipe}
+              focal={focal}
               priority
               preloadSubtitleManifest
               broadcastDetailVideoPlayback
@@ -230,6 +240,7 @@ export default function MediaDetailPage({
         />
       </MediaDetailFoldPanel>
       <AppGrid
+        data-media-detail-related-grid={photo.id}
         contentMain={<MediaGrid
           photos={photosGrid ?? photos}
           selectedMedia={photo}

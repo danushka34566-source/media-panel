@@ -40,6 +40,7 @@ import {
 } from '@/app/config';
 import AdminMediaMenu from '@/admin/AdminMediaMenu';
 import { RevalidateMedia } from './InfiniteMediaScroll';
+import type { MediaSetCategory } from '../category';
 import {
   useCallback,
   useMemo,
@@ -109,6 +110,7 @@ import {
   type DockedVideoState,
   DETAIL_VIDEO_MINIMIZE_EVENT,
   DETAIL_VIDEO_RESTORE_EVENT,
+  DETAIL_VIDEO_FOLD_COMPLETE_EVENT,
   PERSISTENT_VIDEO_HANDOFF_READY_EVENT,
 } from './video-mini-player';
 
@@ -186,6 +188,16 @@ export default function MediaLarge({
   className,
   album,
   primaryTag,
+  camera,
+  lens,
+  tag,
+  category,
+  studio,
+  performer,
+  contentType,
+  film,
+  recipe,
+  focal,
   priority,
   initiallyLoadPreviewImage = false,
   prefetch = SHOULD_PREFETCH_ALL_LINKS,
@@ -257,9 +269,42 @@ export default function MediaLarge({
   resolveOptimizedPlaybackUrl?: boolean
   preloadSubtitleManifest?: boolean
   broadcastDetailVideoPlayback?: boolean
-}) {
+} & Pick<MediaSetCategory, 'camera' | 'lens' | 'tag' | 'category' |
+  'studio' | 'performer' | 'contentType' | 'film' | 'recipe' | 'focal'>) {
   const router = useRouter();
   const isVideo = isVideoMedia(photo);
+  const persistentDetailPath = useMemo(() => pathForMedia({
+    photo,
+    recent,
+    year,
+    camera,
+    lens,
+    album,
+    tag: tag ?? primaryTag,
+    category,
+    studio,
+    performer,
+    contentType,
+    film,
+    recipe,
+    focal,
+  }), [
+    album,
+    camera,
+    category,
+    contentType,
+    film,
+    focal,
+    lens,
+    performer,
+    photo,
+    primaryTag,
+    recent,
+    recipe,
+    studio,
+    tag,
+    year,
+  ]);
   const ref = useRef<HTMLDivElement>(null);
   const refZoomControls = useRef<ZoomControlsRef>(null);
   const refMediaRecipe = useRef<HTMLDivElement>(null);
@@ -304,6 +349,11 @@ export default function MediaLarge({
   const [pipLockedSrc, setPipLockedSrc] = useState<string | undefined>(undefined);
   const floatingVideoSentinelRef = useRef<HTMLDivElement>(null);
   const isDetailFoldingRef = useRef(false);
+  const handoffReadyRef = useRef(false);
+  const foldAnimationCompleteRef = useRef(false);
+  const routeBackScheduledRef = useRef(false);
+  const foldFallbackTimerRef = useRef<number | undefined>(undefined);
+  const [isDetailFolding, setIsDetailFolding] = useState(false);
   const detailPlaybackRef = useRef<{
     isFullVideoPlaying: boolean
     isMainVideoActuallyPlaying: boolean
@@ -372,6 +422,15 @@ export default function MediaLarge({
     setShouldUseCompatibilityPlayback(false);
     setDockedResumeState(undefined);
     setIsRestoringFromMini(false);
+    setIsDetailFolding(false);
+    isDetailFoldingRef.current = false;
+    handoffReadyRef.current = false;
+    foldAnimationCompleteRef.current = false;
+    routeBackScheduledRef.current = false;
+    if (foldFallbackTimerRef.current !== undefined) {
+      window.clearTimeout(foldFallbackTimerRef.current);
+      foldFallbackTimerRef.current = undefined;
+    }
   }, [photo.id]);
 
   // Warm the adjacent route payloads while the current media is visible. The
@@ -400,12 +459,13 @@ export default function MediaLarge({
         { detail: { mediaId: photo.id, playing } },
       ),
     );
-    dispatch(isMainVideoActuallyPlaying);
+    dispatch(isMainVideoActuallyPlaying || isDetailFolding);
     return () => {
-      if (isMainVideoActuallyPlaying) { dispatch(false); }
+      if (isMainVideoActuallyPlaying || isDetailFolding) { dispatch(false); }
     };
   }, [
     broadcastDetailVideoPlayback,
+    isDetailFolding,
     isMainVideoActuallyPlaying,
     isVideo,
     photo.id,
@@ -456,12 +516,15 @@ export default function MediaLarge({
         entry?.isIntersecting && entry.intersectionRatio >= 0.2,
       );
       if (!isVisible) {
+        if (isDetailFoldingRef.current || getDockedVideo()?.pendingHandoff) {
+          return;
+        }
         const playback = detailPlaybackRef.current;
         if (!playback.sourceUrl) { return; }
         setDockedVideo({
           mediaId: photo.id,
           title: titleForMedia(photo),
-          detailPath: pathForMedia({ photo }),
+          detailPath: persistentDetailPath,
           sourceUrl: playback.sourceUrl,
           posterUrl: getMediaPosterUrl(photo),
           currentTime: Math.max(0, playback.currentTime),
@@ -480,35 +543,56 @@ export default function MediaLarge({
     isVideo,
     isVideoFullscreen,
     photo,
+    persistentDetailPath,
   ]);
 
   useEffect(() => {
     if (!isVideo) { return; }
+    const maybeRouteBack = () => {
+      if (
+        !isDetailFoldingRef.current ||
+        !handoffReadyRef.current ||
+        !foldAnimationCompleteRef.current ||
+        routeBackScheduledRef.current
+      ) { return; }
+      routeBackScheduledRef.current = true;
+      if (foldFallbackTimerRef.current !== undefined) {
+        window.clearTimeout(foldFallbackTimerRef.current);
+        foldFallbackTimerRef.current = undefined;
+      }
+      router.back();
+    };
     const completeHandoff = (event: Event) => {
       const mediaId = (event as CustomEvent<{ mediaId?: string }>).detail
         ?.mediaId;
       if (mediaId !== photo.id) { return; }
-      const isFolding = isDetailFoldingRef.current;
+      handoffReadyRef.current = true;
       videoRef.current?.pause();
       detailPlaybackRef.current.isFullVideoPlaying = false;
       detailPlaybackRef.current.isMainVideoActuallyPlaying = false;
       setIsMainVideoActuallyPlaying(false);
       setIsFullVideoPlaying(false);
-      if (isFolding) {
-        // Let the mini player become the playback owner before leaving the
-        // details route. This keeps the page video alive until onPlaying has
-        // confirmed the folded player is ready.
-        window.setTimeout(() => router.back(), 80);
-      }
+      maybeRouteBack();
+    };
+    const completeFold = (event: Event) => {
+      const mediaId = (event as CustomEvent<{ mediaId?: string }>).detail
+        ?.mediaId;
+      if (mediaId !== photo.id) { return; }
+      foldAnimationCompleteRef.current = true;
+      maybeRouteBack();
     };
     window.addEventListener(
       PERSISTENT_VIDEO_HANDOFF_READY_EVENT,
       completeHandoff,
     );
-    return () => window.removeEventListener(
-      PERSISTENT_VIDEO_HANDOFF_READY_EVENT,
-      completeHandoff,
-    );
+    window.addEventListener(DETAIL_VIDEO_FOLD_COMPLETE_EVENT, completeFold);
+    return () => {
+      window.removeEventListener(
+        PERSISTENT_VIDEO_HANDOFF_READY_EVENT,
+        completeHandoff,
+      );
+      window.removeEventListener(DETAIL_VIDEO_FOLD_COMPLETE_EVENT, completeFold);
+    };
   }, [isVideo, photo.id, router]);
 
   useEffect(() => {
@@ -625,7 +709,7 @@ export default function MediaLarge({
         setDockedVideo({
           mediaId: photo.id,
           title: titleForMedia(photo),
-          detailPath: pathForMedia({ photo }),
+          detailPath: persistentDetailPath,
           sourceUrl: playback.sourceUrl,
           fallbackUrl: fullVideoCompatibilityUrl,
           posterUrl: getMediaPosterUrl(photo),
@@ -640,6 +724,7 @@ export default function MediaLarge({
     fullVideoCompatibilityUrl,
     isVideo,
     photo,
+    persistentDetailPath,
   ]);
 
   useEffect(() => {
@@ -671,6 +756,7 @@ export default function MediaLarge({
     const minimize = (event: Event) => {
       const mediaId = (event as CustomEvent<{ mediaId?: string }>).detail?.mediaId;
       if (mediaId !== photo.id) { return; }
+      if (isDetailFoldingRef.current) { return; }
       const playback = detailPlaybackRef.current;
       if (
         playback.isFullVideoPlaying &&
@@ -680,7 +766,7 @@ export default function MediaLarge({
         setDockedVideo({
           mediaId: photo.id,
           title: titleForMedia(photo),
-          detailPath: pathForMedia({ photo }),
+          detailPath: persistentDetailPath,
           sourceUrl: playback.sourceUrl,
           fallbackUrl: fullVideoCompatibilityUrl,
           posterUrl: getMediaPosterUrl(photo),
@@ -690,6 +776,27 @@ export default function MediaLarge({
           pendingHandoff: true,
         });
         isDetailFoldingRef.current = true;
+        setIsDetailFolding(true);
+        handoffReadyRef.current = false;
+        foldAnimationCompleteRef.current = false;
+        routeBackScheduledRef.current = false;
+        if (foldFallbackTimerRef.current !== undefined) {
+          window.clearTimeout(foldFallbackTimerRef.current);
+        }
+        foldFallbackTimerRef.current = window.setTimeout(() => {
+          foldFallbackTimerRef.current = undefined;
+          if (!isDetailFoldingRef.current) { return; }
+          handoffReadyRef.current = true;
+          videoRef.current?.pause();
+          detailPlaybackRef.current.isFullVideoPlaying = false;
+          detailPlaybackRef.current.isMainVideoActuallyPlaying = false;
+          setIsMainVideoActuallyPlaying(false);
+          setIsFullVideoPlaying(false);
+          window.dispatchEvent(new CustomEvent(
+            PERSISTENT_VIDEO_HANDOFF_READY_EVENT,
+            { detail: { mediaId: photo.id } },
+          ));
+        }, 1800);
         // Do not pause or unmount the page video yet. VideoMiniPlayer will
         // signal PERSISTENT_VIDEO_HANDOFF_READY_EVENT after its own element
         // reaches onPlaying, then the listener above releases this owner.
@@ -706,6 +813,7 @@ export default function MediaLarge({
     fullVideoCompatibilityUrl,
     isVideo,
     photo,
+    persistentDetailPath,
     router,
   ]);
 
@@ -1228,8 +1336,8 @@ export default function MediaLarge({
 
   const tags = sortTagsArray(photo.tags, primaryTag);
 
-  const camera = cameraFromMedia(photo);
-  const lens = lensFromMedia(photo);
+  const mediaCamera = cameraFromMedia(photo);
+  const mediaLens = lensFromMedia(photo);
   const { recipeTitle } = photo;
 
   const showExifContent = shouldShowExifDataForMedia(photo);
@@ -1967,13 +2075,13 @@ export default function MediaLarge({
                         <div className="flex flex-col *:self-start">
                           {showCameraContent &&
                             <MediaCamera
-                              camera={camera}
+                              camera={mediaCamera}
                               contrast="medium"
                               prefetch={prefetchRelatedLinks}
                             />}
                           {showLensContent &&
                             <MediaLens
-                              lens={lens}
+                              lens={mediaLens}
                               contrast="medium"
                               prefetch={prefetchRelatedLinks}
                             />}
@@ -2186,10 +2294,10 @@ export default function MediaLarge({
                           ? primaryTag
                           : undefined}
                         camera={shouldShareCamera
-                          ? camera
+                          ? mediaCamera
                           : undefined}
                         lens={shouldShareLens
-                          ? lens
+                          ? mediaLens
                           : undefined}
                         film={shouldShareFilm
                           ? photo.film

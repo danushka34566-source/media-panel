@@ -1787,7 +1787,22 @@ export const updateMediaLibraryValueAction = async (formData: FormData) =>
       value,
       updatedValue,
     });
-    revalidateAllKeysAndPaths();
+    // Keep this action scoped to the affected taxonomy caches. The previous
+    // all-path invalidation could throw after a successful UPDATE on Vercel,
+    // turning a saved category into a misleading 500 response.
+    const revalidateValueType = (type: MediaLibraryValueType) => {
+      switch (type) {
+        case 'tag': revalidateTagsKey(); break;
+        case 'category': revalidateCategoriesKey(); break;
+        case 'studio': revalidateStudiosKey(); break;
+        case 'performer': revalidatePerformersKey(); break;
+        case 'contentType': revalidateContentTypesKey(); break;
+      }
+    };
+    revalidateMediaKey();
+    revalidateValueType(sourceType);
+    if (targetType !== sourceType) { revalidateValueType(targetType); }
+    revalidateAdminPaths();
     redirect(pathForLibraryValueType(targetType));
   });
 

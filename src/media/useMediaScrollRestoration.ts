@@ -1,6 +1,10 @@
 'use client';
 
-import { useEffect } from 'react';
+import { useEffect, useLayoutEffect } from 'react';
+
+const useMediaLayoutEffect = typeof window === 'undefined'
+  ? useEffect
+  : useLayoutEffect;
 
 const STORAGE_PREFIX = 'media-panel:scroll:';
 const RESTORE_TIMEOUT_MS = 12_000;
@@ -147,7 +151,13 @@ export const restoreMediaViewportAnchor = (anchor?: MediaViewportAnchor) => {
  * saved card is below the first page.
  */
 export default function useMediaScrollRestoration(enabled = true) {
-  useEffect(() => {
+  // Restore before the browser paints the remounted feed.  useEffect lets the
+  // new route render at scrollTop 0 for one frame, which is especially visible
+  // when returning from a detail page; the subsequent correction then looks
+  // like an unwanted auto-scroll.  The feed is already server-rendered when
+  // this hook runs, so the layout effect can restore the stable card anchor
+  // synchronously and still retain the observers for delayed infinite rows.
+  useMediaLayoutEffect(() => {
     if (!enabled || typeof window === 'undefined') { return; }
     const key = getStorageKey();
     if (!key) { return; }

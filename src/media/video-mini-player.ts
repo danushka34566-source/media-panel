@@ -17,6 +17,8 @@ export const DETAIL_VIDEO_MINIMIZE_EVENT = 'media-detail-video-minimize';
 export const DETAIL_VIDEO_RESTORE_EVENT = 'media-detail-video-restore';
 export const DETAIL_VIDEO_FOLD_GESTURE_EVENT =
   'media-detail-video-fold-gesture';
+export const DETAIL_VIDEO_FOLD_COMPLETE_EVENT =
+  'media-detail-video-fold-complete';
 export const PERSISTENT_VIDEO_FULLSCREEN_EVENT =
   'persistent-video-fullscreen';
 export const PERSISTENT_VIDEO_PIP_EVENT = 'persistent-video-picture-in-picture';

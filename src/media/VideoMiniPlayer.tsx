@@ -40,6 +40,10 @@ export default function VideoMiniPlayer() {
   const cornerRef = useRef<'tl' | 'tr' | 'bl' | 'br'>('br');
   const videoRef = useRef<HTMLVideoElement>(null);
   const miniGestureMovedRef = useRef(false);
+  const miniActionRef = useRef<'idle' | 'dragging' | 'opening' | 'dismissing'>('idle');
+  const suppressClickUntilRef = useRef(0);
+  const pendingActionTimerRef = useRef<number | undefined>(undefined);
+  const handoffReadyMediaRef = useRef<string | undefined>(undefined);
   const controlsTimerRef = useRef<number | undefined>(undefined);
   const resumeTimeRef = useRef<number | undefined>(undefined);
   const dockedVideo = useSyncExternalStore(
@@ -57,8 +61,32 @@ export default function VideoMiniPlayer() {
   const requestPlayback = useCallback((video: HTMLVideoElement) => {
     void VideoPlaybackManager.requestPlay(video).catch(() => undefined);
   }, []);
+  const signalHandoffReady = useCallback((video: HTMLVideoElement) => {
+    const latest = getDockedVideo();
+    const mediaId = video.dataset.mediaId;
+    if (
+      !latest ||
+      !mediaId ||
+      latest.mediaId !== mediaId ||
+      !latest.pendingHandoff ||
+      video.paused ||
+      handoffReadyMediaRef.current === mediaId
+    ) { return; }
+    handoffReadyMediaRef.current = mediaId;
+    window.dispatchEvent(new CustomEvent(
+      PERSISTENT_VIDEO_HANDOFF_READY_EVENT,
+      { detail: { mediaId } },
+    ));
+    video.muted = latest.muted;
+    updateDockedVideo({ pendingHandoff: false, muted: latest.muted });
+  }, []);
   const openDetails = useCallback(() => {
-    if (!dockedVideo) { return; }
+    if (!dockedVideo || miniActionRef.current === 'dismissing') { return; }
+    miniActionRef.current = 'opening';
+    if (pendingActionTimerRef.current !== undefined) {
+      window.clearTimeout(pendingActionTimerRef.current);
+      pendingActionTimerRef.current = undefined;
+    }
     const video = videoRef.current;
     if (video) {
       updateDockedVideo({
@@ -68,7 +96,10 @@ export default function VideoMiniPlayer() {
       });
     }
     requestDetailVideoRestore(dockedVideo.mediaId);
-    if (getActiveDetailVideoMediaId() === dockedVideo.mediaId) { return; }
+    if (getActiveDetailVideoMediaId() === dockedVideo.mediaId) {
+      miniActionRef.current = 'idle';
+      return;
+    }
     // The persistent mini player keeps playing while the route payload loads;
     // MediaLarge claims the state only after the destination is mounted.
     router.push(dockedVideo.detailPath, { scroll: false });
@@ -79,11 +110,18 @@ export default function VideoMiniPlayer() {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setUseFallbackSource(false);
     setPlaybackError(false);
+    handoffReadyMediaRef.current = undefined;
     resumeTimeRef.current = dockedVideo?.currentTime;
     // Playback time is updated continuously without changing the media
     // element; only a new media id should reset the source selection.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dockedVideo?.mediaId]);
+
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video || !dockedVideo?.pendingHandoff) { return; }
+    if (!video.paused) { signalHandoffReady(video); }
+  }, [dockedVideo?.pendingHandoff, dockedVideo?.mediaId, signalHandoffReady]);
 
   const shouldResumePlayback = Boolean(dockedVideo?.wasPlaying);
   useEffect(() => {
@@ -157,7 +195,11 @@ export default function VideoMiniPlayer() {
     }, 3200);
   }, []);
   const toggleControls = useCallback(() => {
-    if (miniGestureMovedRef.current) { return; }
+    if (
+      miniGestureMovedRef.current ||
+      miniActionRef.current !== 'idle' ||
+      Date.now() < suppressClickUntilRef.current
+    ) { return; }
     setControlsVisible(current => {
       const next = !current;
       if (next) { scheduleControlsHide(); }
@@ -165,6 +207,8 @@ export default function VideoMiniPlayer() {
     });
   }, [scheduleControlsHide]);
   const onMiniDragStart = () => {
+    if (miniActionRef.current !== 'idle') { return; }
+    miniActionRef.current = 'dragging';
     miniGestureMovedRef.current = false;
     if (controlsTimerRef.current !== undefined) {
       window.clearTimeout(controlsTimerRef.current);
@@ -174,8 +218,10 @@ export default function VideoMiniPlayer() {
     _: MouseEvent | TouchEvent | PointerEvent,
     info: PanInfo,
   ) => {
+    if (miniActionRef.current !== 'dragging') { return; }
     if (Math.hypot(info.offset.x, info.offset.y) > 6) {
       miniGestureMovedRef.current = true;
+      suppressClickUntilRef.current = Date.now() + 360;
     }
     const isBottom = cornerRef.current.startsWith('b');
     const inwardDistance = isBottom ? -info.offset.y : info.offset.y;
@@ -185,6 +231,7 @@ export default function VideoMiniPlayer() {
     _: MouseEvent | TouchEvent | PointerEvent,
     info: PanInfo,
   ) => {
+    if (miniActionRef.current !== 'dragging') { return; }
     const corner = cornerRef.current;
     const isBottom = corner.startsWith('b');
     const isLeft = corner.endsWith('l');
@@ -198,13 +245,19 @@ export default function VideoMiniPlayer() {
     ) || (
       outwardY > 88 && Math.abs(info.offset.y) > Math.abs(info.offset.x)
     );
-    window.setTimeout(() => { miniGestureMovedRef.current = false; }, 0);
+    const didMove = miniGestureMovedRef.current;
+    if (didMove) { suppressClickUntilRef.current = Date.now() + 360; }
     if (shouldUnfold) {
+      miniActionRef.current = 'opening';
       animate(miniScale, 1.12, { duration: 0.12, ease: 'easeOut' });
-      window.setTimeout(openDetails, 90);
+      pendingActionTimerRef.current = window.setTimeout(() => {
+        pendingActionTimerRef.current = undefined;
+        openDetails();
+      }, 90);
       return;
     }
     if (shouldDismiss) {
+      miniActionRef.current = 'dismissing';
       const bounds = boundsRef.current?.getBoundingClientRect();
       const player = playerRef.current;
       if (bounds && player) {
@@ -222,17 +275,26 @@ export default function VideoMiniPlayer() {
         }
         animate(miniScale, 0.88, { duration: 0.16 });
       }
-      window.setTimeout(() => {
+      pendingActionTimerRef.current = window.setTimeout(() => {
+        pendingActionTimerRef.current = undefined;
         videoRef.current?.pause();
         clearDockedVideo();
       }, 150);
       return;
     }
+    miniActionRef.current = 'idle';
     snapToCorner();
     if (controlsVisible) { scheduleControlsHide(); }
   };
 
   useEffect(() => {
+    miniActionRef.current = 'idle';
+    miniGestureMovedRef.current = false;
+    suppressClickUntilRef.current = 0;
+    if (pendingActionTimerRef.current !== undefined) {
+      window.clearTimeout(pendingActionTimerRef.current);
+      pendingActionTimerRef.current = undefined;
+    }
     cornerRef.current = 'br';
     miniX.set(0);
     miniY.set(0);
@@ -279,6 +341,9 @@ export default function VideoMiniPlayer() {
   }, [dockedVideo, requestPlayback, snapToCorner]);
 
   useEffect(() => () => {
+    if (pendingActionTimerRef.current !== undefined) {
+      window.clearTimeout(pendingActionTimerRef.current);
+    }
     if (controlsTimerRef.current !== undefined) {
       window.clearTimeout(controlsTimerRef.current);
     }
@@ -292,11 +357,12 @@ export default function VideoMiniPlayer() {
     >
       <AnimatePresence>
         {dockedVideo && source &&
-        <motion.aside
+          <motion.aside
           ref={playerRef}
+          data-video-mini-player
           key={dockedVideo.mediaId}
           aria-label="Playing video"
-          className="pointer-events-auto absolute bottom-2 right-2
+            className="pointer-events-auto absolute bottom-2 right-2
             w-[min(17rem,calc(100vw-1rem))] overflow-hidden rounded-lg
             border border-white/15 bg-black shadow-2xl ring-1 ring-black/30
             will-change-transform sm:bottom-4 sm:right-4"
@@ -313,8 +379,8 @@ export default function VideoMiniPlayer() {
           style={{ x: miniX, y: miniY, scale: miniScale }}
           onDragStart={onMiniDragStart}
           onDrag={onMiniDrag}
-          onDragEnd={onMiniDragEnd}
-        >
+            onDragEnd={onMiniDragEnd}
+          >
           <div className="relative aspect-video overflow-hidden bg-black">
             <video
               ref={videoRef}
@@ -324,7 +390,7 @@ export default function VideoMiniPlayer() {
               src={source}
               poster={dockedVideo.posterUrl}
               controls={controlsVisible}
-              controlsList="nodownload noplaybackrate nofullscreen"
+              controlsList="nodownload noplaybackrate"
               playsInline
               autoPlay={dockedVideo.wasPlaying}
               muted={dockedVideo.pendingHandoff ? true : dockedVideo.muted}
@@ -353,18 +419,11 @@ export default function VideoMiniPlayer() {
               }}
               onPlay={() => {
                 updateDockedVideo({ wasPlaying: true }, true);
+                const video = videoRef.current;
+                if (video) { signalHandoffReady(video); }
               }}
               onPlaying={event => {
-                if (!dockedVideo.pendingHandoff) { return; }
-                window.dispatchEvent(new CustomEvent(
-                  PERSISTENT_VIDEO_HANDOFF_READY_EVENT,
-                  { detail: { mediaId: dockedVideo.mediaId } },
-                ));
-                event.currentTarget.muted = dockedVideo.muted;
-                updateDockedVideo({
-                  pendingHandoff: false,
-                  muted: dockedVideo.muted,
-                });
+                signalHandoffReady(event.currentTarget);
               }}
               onPause={event => {
                 const currentTime = event.currentTarget.currentTime;
@@ -402,8 +461,14 @@ export default function VideoMiniPlayer() {
               role="button"
               tabIndex={0}
               className={`absolute inset-x-0 top-0 z-[5] cursor-grab touch-none
-                active:cursor-grabbing ${controlsVisible ? 'bottom-10' : 'bottom-0'}`}
-              onPointerDown={event => dragControls.start(event)}
+                active:cursor-grabbing ${controlsVisible ? 'h-8' : 'bottom-0'}`}
+              onPointerDown={event => {
+                if (miniActionRef.current !== 'idle') {
+                  event.preventDefault();
+                  return;
+                }
+                dragControls.start(event);
+              }}
               onClick={toggleControls}
               onKeyDown={event => {
                 if (event.key === 'Enter' || event.key === ' ') {

@@ -3,9 +3,12 @@ import MediaGridContainer from './MediaGridContainer';
 import { Media, MediaDateRangePostgres, descriptionForMediaSet, photoQuantityText } from '.';
 import { capitalizeWords } from '@/utility/string';
 import { getAppText } from '@/i18n/state/server';
-import Link from 'next/link';
 import { ReactNode } from 'react';
 import { AI_CONTENT_GENERATION_ENABLED } from '@/app/config';
+import MediaCategory from '@/category/MediaCategory';
+import MediaStudio from '@/studio/MediaStudio';
+import MediaPerformer from '@/performer/MediaPerformer';
+import MediaContentType from '@/content-type/MediaContentType';
 
 export type MediaStringEntityKind =
   'category' |
@@ -79,14 +82,43 @@ export async function MediaStringEntityHeader({
 }) {
   const appText = await getAppText();
   const label = formatMediaStringEntity(value);
+  const entity = kind === 'category'
+    ? <MediaCategory
+      category={value}
+      label={label}
+      contrast="high"
+      hoverType="none"
+      hoverCount={count}
+      showAdminMenu
+    />
+    : kind === 'studio'
+      ? <MediaStudio
+        studio={value}
+        contrast="high"
+        hoverType="none"
+        hoverCount={count}
+        showAdminMenu
+      />
+      : kind === 'performer'
+        ? <MediaPerformer
+          performer={value}
+          contrast="high"
+          hoverType="none"
+          hoverCount={count}
+          showAdminMenu
+        />
+        : <MediaContentType
+          contentType={value}
+          label={label}
+          contrast="high"
+          hoverType="none"
+          hoverCount={count}
+          showAdminMenu
+        />;
 
   return (
     <MediaHeader
-      entity={
-        <Link href={path} className="hover:underline">
-          {label}
-        </Link>
-      }
+      entity={entity}
       entityVerb={ENTITY_VERBS[kind]}
       entitySubhead={kind.toUpperCase()}
       entityDescription={descriptionForMediaSet(

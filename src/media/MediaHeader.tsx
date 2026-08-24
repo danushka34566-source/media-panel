@@ -58,6 +58,8 @@ export default function MediaHeader({
 
   const appText = useAppText();
   const pullStartRef = useRef<{ x: number, y: number } | undefined>(undefined);
+  const foldGesturePhaseRef = useRef<'idle' | 'pulling' | 'committing'>('idle');
+  const suppressTitleClickUntilRef = useRef(0);
 
   const onTitleTouchStart = (event: TouchEvent<HTMLDivElement>) => {
     if (!selectedMedia || !isVideoMedia(selectedMedia) || event.touches.length !== 1) {
@@ -65,22 +67,42 @@ export default function MediaHeader({
       return;
     }
     const target = event.target as HTMLElement | null;
-    if (target?.closest('button,input,textarea,select')) {
+    if (
+      !target?.closest('[data-media-detail-fold-handle]') ||
+      target.closest('button,input,textarea,select')
+    ) {
       pullStartRef.current = undefined;
+      foldGesturePhaseRef.current = 'idle';
       return;
     }
     const touch = event.touches[0];
     pullStartRef.current = { x: touch.clientX, y: touch.clientY };
+    foldGesturePhaseRef.current = 'idle';
   };
   const onTitleTouchMove = (event: TouchEvent<HTMLDivElement>) => {
     const start = pullStartRef.current;
     const touch = event.touches[0];
-    if (!start || !touch) { return; }
+    if (!start || !touch || foldGesturePhaseRef.current === 'committing') {
+      return;
+    }
     const deltaX = touch.clientX - start.x;
     const deltaY = touch.clientY - start.y;
-    if (deltaY > 8 && deltaY > Math.abs(deltaX)) {
+    const isVerticalPull = deltaY > 8 && deltaY > Math.abs(deltaX) * 1.15;
+    if (isVerticalPull) {
       event.preventDefault();
+      foldGesturePhaseRef.current = 'pulling';
+      suppressTitleClickUntilRef.current = Date.now() + 500;
+    } else if (Math.abs(deltaX) > 10 || deltaY < -10) {
+      foldGesturePhaseRef.current = 'idle';
+      updateDetailVideoFoldGesture({
+        mediaId: selectedMedia!.id,
+        phase: 'cancel',
+        deltaX,
+        deltaY: 0,
+      });
+      return;
     }
+    if (foldGesturePhaseRef.current !== 'pulling') { return; }
     updateDetailVideoFoldGesture({
       mediaId: selectedMedia!.id,
       phase: 'move',
@@ -92,11 +114,18 @@ export default function MediaHeader({
     const start = pullStartRef.current;
     pullStartRef.current = undefined;
     const touch = event.changedTouches[0];
-    if (!start || !touch || !selectedMedia) { return; }
+    if (!start || !touch || !selectedMedia) {
+      foldGesturePhaseRef.current = 'idle';
+      return;
+    }
     const deltaX = touch.clientX - start.x;
     const deltaY = touch.clientY - start.y;
-    if (deltaY >= MINIMIZE_PULL_DISTANCE && deltaY > Math.abs(deltaX) * 1.2) {
+    const wasPulling = foldGesturePhaseRef.current === 'pulling';
+    const shouldCommit = wasPulling &&
+      deltaY >= MINIMIZE_PULL_DISTANCE && deltaY > Math.abs(deltaX) * 1.2;
+    if (shouldCommit) {
       event.preventDefault();
+      foldGesturePhaseRef.current = 'committing';
       updateDetailVideoFoldGesture({
         mediaId: selectedMedia.id,
         phase: 'commit',
@@ -105,6 +134,10 @@ export default function MediaHeader({
       });
       requestDetailVideoMinimize(selectedMedia.id);
     } else {
+      if (Math.abs(deltaX) > 8 || Math.abs(deltaY) > 8) {
+        suppressTitleClickUntilRef.current = Date.now() + 500;
+      }
+      foldGesturePhaseRef.current = 'idle';
       updateDetailVideoFoldGesture({
         mediaId: selectedMedia.id,
         phase: 'cancel',
@@ -158,6 +191,10 @@ export default function MediaHeader({
       selectedMedia !== undefined &&
         <MediaLink
           photo={selectedMedia}
+          // The detail title is not the originating grid card. Keeping this
+          // navigation out of scroll-anchor persistence prevents a later
+          // title click from replacing the card position used by Back.
+          replace
           className="uppercase font-bold break-all whitespace-normal"
         >
           {titleForMedia(selectedMedia, true)}
@@ -194,6 +231,13 @@ export default function MediaHeader({
             deltaY: 0,
           });
         }
+        foldGesturePhaseRef.current = 'idle';
+      }}
+      onClickCapture={event => {
+        if (Date.now() < suppressTitleClickUntilRef.current) {
+          event.preventDefault();
+          event.stopPropagation();
+        }
       }}
     >
       <AnimateItems
@@ -218,7 +262,11 @@ export default function MediaHeader({
                 : isGridHighDensity
                   ? 'col-span-3 sm:col-span-3 lg:col-span-5 w-[110%] xl:w-full'
                   : 'col-span-3 md:col-span-2 lg:col-span-3 w-[110%] xl:w-full',
-          )}>
+          )}
+            data-media-detail-fold-handle={selectedMedia && isVideoMedia(selectedMedia)
+              ? 'true'
+              : undefined}
+          >
             {headerType === 'photo-detail-with-entity'
               ? renderContentA
               // Necessary for title truncation
