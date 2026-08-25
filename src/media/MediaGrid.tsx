@@ -224,8 +224,9 @@ export default function MediaGrid({
         type={animate === false ? 'none' : undefined}
         fade={false}
         canStart={canStart}
-        duration={0.7}
-        staggerDelay={0.04}
+        duration={0.45}
+        staggerDelay={0.018}
+        animationItemLimit={16}
         distanceOffset={40}
         animateOnFirstLoadOnly={animateOnFirstLoadOnly}
         staggerOnFirstLoadOnly={staggerOnFirstLoadOnly}

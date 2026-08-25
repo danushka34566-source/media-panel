@@ -21,6 +21,7 @@ export default function SwitcherItem({
   prefetch = SHOULD_PREFETCH_ALL_LINKS,
   tooltip,
   width = 'normal',
+  showLoader = true,
 }: {
   icon: ReactNode
   title?: string
@@ -34,6 +35,7 @@ export default function SwitcherItem({
   prefetch?: boolean
   tooltip?: ComponentProps<typeof Tooltip>
   width?: 'narrow' | 'normal'
+  showLoader?: boolean
 }) {
   const widthClass = width === 'narrow' ? WIDTH_CLASS_NARROW : WIDTH_CLASS;
   const className = clsx(
@@ -69,7 +71,7 @@ export default function SwitcherItem({
       className,
       prefetch,
       icon: renderIcon(),
-      loader: <Spinner />,
+      loader: showLoader ? <Spinner /> : undefined,
     }} />
     : <div {...{ title, onClick, className }}>
       {renderIcon()}

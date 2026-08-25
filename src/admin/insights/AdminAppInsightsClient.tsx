@@ -94,9 +94,8 @@ const renderLabeledEnvVar = (
 
 const libraryCountLabel = (
   count: number,
-  singular: string,
-  plural?: string,
-) => capitalizeWords(pluralize(count, singular, plural));
+  collectionLabel: string,
+) => `${capitalizeWords(collectionLabel)} (${count})`;
 
 const renderHighlightText = (
   text: string,
@@ -519,64 +518,64 @@ export default function AdminAppInsightsClient({
         /> : null}
         {mediaCounts?.photos ? <ScoreCardRow
           icon={<IconMedia size={15} className="translate-y-[0.5px]" />}
-          content={libraryCountLabel(mediaCounts.photos, 'photo')}
+          content={libraryCountLabel(mediaCounts.photos, 'photos')}
         /> : null}
         {mediaCounts?.videos ? <ScoreCardRow
           icon={<LuPlay size={14} className="translate-y-[1px]" />}
-          content={libraryCountLabel(mediaCounts.videos, 'video')}
+          content={libraryCountLabel(mediaCounts.videos, 'videos')}
         /> : null}
         {yearsCount > 0 && <ScoreCardRow
           icon={<IconYear size={15} />}
-          content={libraryCountLabel(yearsCount, 'year')}
+          content={libraryCountLabel(yearsCount, 'years')}
         />}
         {albumsCount > 0 && <ScoreCardRow
           icon={<IconAlbum size={15} />}
-          content={libraryCountLabel(albumsCount, 'album')}
+          content={libraryCountLabel(albumsCount, 'albums')}
         />}
         {categoriesCount > 0 && <ScoreCardRow
           icon={<IconTag
             size={15}
             className="translate-x-[1px] translate-y-[1px]"
           />}
-          content={libraryCountLabel(categoriesCount, 'category')}
+          content={libraryCountLabel(categoriesCount, 'categories')}
         />}
         {studiosCount > 0 && <ScoreCardRow
           icon={<FaBuilding size={14} />}
-          content={libraryCountLabel(studiosCount, 'studio')}
+          content={libraryCountLabel(studiosCount, 'studios')}
         />}
         {performersCount > 0 && <ScoreCardRow
           icon={<FaUsers size={15} />}
-          content={libraryCountLabel(performersCount, 'performer')}
+          content={libraryCountLabel(performersCount, 'performers')}
         />}
         {camerasCount > 0 && <ScoreCardRow
           icon={<IconCamera size={15} className="translate-y-[0.5px]" />}
-          content={libraryCountLabel(camerasCount, 'camera')}
+          content={libraryCountLabel(camerasCount, 'cameras')}
         />}
         {lensesCount > 0 && <ScoreCardRow
           icon={<IconLens size={15} className="translate-y-[0.5px]" />}
-          content={libraryCountLabel(lensesCount, 'lens', 'lenses')}
+          content={libraryCountLabel(lensesCount, 'lenses')}
         />}
         {tagsCount > 0 && <ScoreCardRow
           icon={<IconTag
             size={15}
             className="translate-x-[1px] translate-y-[1px]"
           />}
-          content={libraryCountLabel(tagsCount, 'tag')}
+          content={libraryCountLabel(tagsCount, 'tags')}
         />}
         {recipesCount > 0 && <ScoreCardRow
           icon={<IconRecipe
             size={18}
             className="translate-x-[0.5px] translate-y-[-0.5px]"
           />}
-          content={libraryCountLabel(recipesCount, 'recipe')}
+          content={libraryCountLabel(recipesCount, 'recipes')}
         />}
         {filmsCount > 0 && <ScoreCardRow
           icon={<IconFilm size={15} />}
-          content={libraryCountLabel(filmsCount, 'film')}
+          content={libraryCountLabel(filmsCount, 'films')}
         />}
         {focalLengthsCount > 0 && <ScoreCardRow
           icon={<IconFocalLength size={14} />}
-          content={libraryCountLabel(focalLengthsCount, 'focal length')}
+          content={libraryCountLabel(focalLengthsCount, 'focal lengths')}
         />}
         {descriptionWithSpaces && <ScoreCardRow
           icon={<FaRegCalendar

@@ -35,6 +35,7 @@ interface Props extends AnimationConfig {
   layoutDependency?: string | number | boolean
   animateOnFirstLoadOnly?: boolean
   staggerOnFirstLoadOnly?: boolean
+  animationItemLimit?: number
   onAnimationComplete?: () => void
   onPointerDown?: PointerEventHandler<HTMLDivElement>
   onPointerMove?: PointerEventHandler<HTMLDivElement>
@@ -59,6 +60,7 @@ function AnimateItems({
   layoutDependency,
   animateOnFirstLoadOnly,
   staggerOnFirstLoadOnly,
+  animationItemLimit,
   onAnimationComplete,
   onPointerDown,
   onPointerMove,
@@ -111,6 +113,14 @@ function AnimateItems({
         };
       }})();
 
+  const shown: Variant = {
+    opacity: 1,
+    transform: 'translateX(0) translateY(0) scale(1)',
+    ...removeTransformAfterAnimation && {
+      transitionEnd: { transform: 'none' },
+    },
+  };
+
   return (
     <motion.div
       className={className}
@@ -119,7 +129,7 @@ function AnimateItems({
       onPointerLeave={onPointerLeave}
       initial={shouldAnimate ? 'hidden' : false}
       animate={canStart || IGNORE_CAN_START ? 'show' : 'hidden'}
-      variants={shouldStagger
+      variants={shouldStagger && animationItemLimit === undefined
         ? {
           show: {
             transition: {
@@ -137,29 +147,32 @@ function AnimateItems({
         onAnimationComplete?.();
       }}
     >
-      {items.map((item, index) =>
-        <motion.div
+      {items.map((item, index) => {
+        const shouldAnimateItem = shouldAnimate && (
+          animationItemLimit === undefined || index < animationItemLimit
+        );
+        return <motion.div
           key={itemKeys ? itemKeys[index] : index}
           layout={layoutItems}
           layoutDependency={layoutDependency}
           className={classNameItem}
           variants={{
-            hidden,
-            show: {
-              opacity: 1,
-              transform: 'translateX(0) translateY(0) scale(1)',
-              ...removeTransformAfterAnimation && {
-                transitionEnd: { transform: 'none' },
-              },
-            },
+            hidden: shouldAnimateItem ? hidden : shown,
+            show: shown,
           }}
           transition={{
-            duration: durationResolved,
+            duration: shouldAnimateItem ? durationResolved : 0,
             ease: 'easeOut',
+            ...shouldStagger &&
+              animationItemLimit !== undefined &&
+              shouldAnimateItem && {
+              delay: index * staggerDelay,
+            },
           }}
         >
           {item}
-        </motion.div>)}
+        </motion.div>;
+      })}
     </motion.div>
   );
 };

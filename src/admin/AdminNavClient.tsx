@@ -23,8 +23,14 @@ import {
 import { useAppState } from '@/app/AppState';
 import { clsx } from 'clsx/lite';
 import { differenceInMinutes } from 'date-fns';
-import { usePathname } from 'next/navigation';
-import { useEffect, useMemo, useState } from 'react';
+import { usePathname, useRouter } from 'next/navigation';
+import {
+  MouseEvent as ReactMouseEvent,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import { FaRegClock } from 'react-icons/fa';
 import AdminAppInfoIcon from './AdminAppInfoIcon';
 import AdminInfoNav from './AdminInfoNav';
@@ -38,6 +44,7 @@ const areTimesRecent = (dates: Date[]) => dates
   .some(date => differenceInMinutes(new Date(), date) < 5);
 const ACTIVE_ADMIN_REFRESH_INTERVAL_MS = 30_000;
 const IDLE_ADMIN_REFRESH_INTERVAL_MS = 180_000;
+const ADMIN_INFO_NAVIGATION_DELAY_MS = 1_000;
 
 export default function AdminNavClient({
   items,
@@ -53,7 +60,38 @@ export default function AdminNavClient({
   includeInsights?: boolean
 }) {
   const pathname = usePathname();
+  const router = useRouter();
   const appText = useAppText();
+  const adminInfoPath = includeInsights
+    ? PATH_ADMIN_INSIGHTS
+    : PATH_ADMIN_STATS;
+  const [isAdminInfoLoading, setIsAdminInfoLoading] = useState(false);
+  const adminInfoNavigationTimerRef = useRef<number | undefined>(undefined);
+
+  useEffect(() => () => {
+    if (adminInfoNavigationTimerRef.current !== undefined) {
+      window.clearTimeout(adminInfoNavigationTimerRef.current);
+    }
+  }, []);
+
+  const onAdminInfoClick = (event: ReactMouseEvent<HTMLAnchorElement>) => {
+    if (
+      event.button !== 0 ||
+      event.metaKey ||
+      event.ctrlKey ||
+      event.shiftKey ||
+      event.altKey ||
+      pathname === adminInfoPath
+    ) { return; }
+    event.preventDefault();
+    if (isAdminInfoLoading) { return; }
+    setIsAdminInfoLoading(true);
+    router.prefetch(adminInfoPath);
+    adminInfoNavigationTimerRef.current = window.setTimeout(() => {
+      adminInfoNavigationTimerRef.current = undefined;
+      router.push(adminInfoPath);
+    }, ADMIN_INFO_NAVIGATION_DELAY_MS);
+  };
 
   const {
     adminUpdateTimes = [],
@@ -253,9 +291,9 @@ export default function AdminNavClient({
               />
             </button>
             <LinkWithIconLoader
-              href={includeInsights
-                ? PATH_ADMIN_INSIGHTS
-                : PATH_ADMIN_STATS}
+              href={adminInfoPath}
+              isLoading={isAdminInfoLoading}
+              onClick={onAdminInfoClick}
               className={clsx(
                 isPathAdminInfo(pathname)
                   ? 'font-bold'

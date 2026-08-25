@@ -45,15 +45,17 @@ export type SwitcherSelection = 'full' | 'grid' | 'admin';
 
 const GAP_CLASS_RIGHT = 'mr-1.5 sm:mr-2';
 const GAP_CLASS_LEFT  = 'ml-0.5 sm:ml-1';
-const GRID_MODE_SWITCH_FEEDBACK_MS = 220;
+const GRID_MODE_SWITCH_FEEDBACK_MS = 320;
 // Include the next viewport of cards so a denser grid does not pop newly
 // exposed cards into place. Keep this bounded; animating an entire feed makes
 // the mode switch compete with scrolling and image decoding.
 const GRID_MODE_ANIMATION_OVERSCAN_VIEWPORTS = 1;
 
-type VisibleGridCard = {
+type GridCardLayout = {
   left: number
   top: number
+  width: number
+  height: number
 };
 
 const getGridAnimationOverscan = () => Math.max(
@@ -61,26 +63,37 @@ const getGridAnimationOverscan = () => Math.max(
   window.innerHeight * GRID_MODE_ANIMATION_OVERSCAN_VIEWPORTS,
 );
 
+const getGridAnimationSurface = (card: HTMLElement) =>
+  card.parentElement ?? card;
+
 const captureGridCards = () => {
-  const cards = new Map<string, VisibleGridCard>();
+  const cards = new Map<string, GridCardLayout>();
   const overscan = getGridAnimationOverscan();
   document.querySelectorAll<HTMLElement>(
     '[data-media-smart-preview-card][data-preview-id]',
   ).forEach(element => {
-    // Framer's entrance transforms and the mode-switch FLIP animation must
-    // never own the same transform at the same time.
-    element.getAnimations().forEach(animation => animation.cancel());
-    const rect = element.getBoundingClientRect();
+    const surface = getGridAnimationSurface(element);
+    // The outer motion item owns the grid layout and therefore needs to own
+    // the complete position-and-size FLIP animation as well.
+    surface.getAnimations().forEach(animation => animation.cancel());
+    const rect = surface.getBoundingClientRect();
     if (rect.bottom <= -overscan || rect.top >= window.innerHeight + overscan) {
       return;
     }
     const id = element.dataset.previewId;
-    if (id) { cards.set(id, { left: rect.left, top: rect.top }); }
+    if (id) {
+      cards.set(id, {
+        left: rect.left,
+        top: rect.top,
+        width: rect.width,
+        height: rect.height,
+      });
+    }
   });
   return cards;
 };
 
-const animateGridCards = (previous: Map<string, VisibleGridCard>) => {
+const animateGridCards = (previous: Map<string, GridCardLayout>) => {
   if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) { return; }
   // Wait for the browser to commit the new grid columns, then perform one
   // read/animate pass. Measuring immediately after flushSync can still read
@@ -94,22 +107,41 @@ const animateGridCards = (previous: Map<string, VisibleGridCard>) => {
         const id = element.dataset.previewId;
         const from = id ? previous.get(id) : undefined;
         if (!from) { return; }
-        const rect = element.getBoundingClientRect();
+        const surface = getGridAnimationSurface(element);
+        surface.getAnimations().forEach(animation => animation.cancel());
+        const rect = surface.getBoundingClientRect();
         if (rect.bottom <= -overscan || rect.top >= window.innerHeight + overscan) {
           return;
         }
         const x = from.left - rect.left;
         const y = from.top - rect.top;
-        if (Math.abs(x) < 0.5 && Math.abs(y) < 0.5) { return; }
-        element.getAnimations().forEach(animation => animation.cancel());
-        element.animate([
-          { transform: `translate3d(${x}px, ${y}px, 0)` },
-          { transform: 'translate3d(0, 0, 0)' },
+        const scaleX = rect.width > 0 ? from.width / rect.width : 1;
+        const scaleY = rect.height > 0 ? from.height / rect.height : 1;
+        if (
+          Math.abs(x) < 0.5 &&
+          Math.abs(y) < 0.5 &&
+          Math.abs(scaleX - 1) < 0.005 &&
+          Math.abs(scaleY - 1) < 0.005
+        ) { return; }
+        const animation = surface.animate([
+          {
+            transform: `translate3d(${x}px, ${y}px, 0) ` +
+              `scale(${scaleX}, ${scaleY})`,
+            transformOrigin: 'top left',
+          },
+          {
+            transform: 'translate3d(0, 0, 0) scale(1, 1)',
+            transformOrigin: 'top left',
+          },
         ], {
-          duration: 260,
-          easing: 'cubic-bezier(0.22, 1, 0.36, 1)',
+          duration: 320,
+          easing: 'cubic-bezier(0.16, 1, 0.3, 1)',
           fill: 'both',
         });
+        void animation.finished.then(
+          () => animation.cancel(),
+          () => undefined,
+        );
       });
     });
   });
@@ -264,6 +296,7 @@ export default function AppViewSwitcher({
         keyCommand: KEY_COMMANDS.full,
       }}}
       noPadding
+      showLoader={false}
     />;
 
   const renderItemGrid =
@@ -294,6 +327,7 @@ export default function AppViewSwitcher({
         keyCommand: KEY_COMMANDS.grid,
       }}}
       noPadding
+      showLoader={false}
     />;
 
   return (

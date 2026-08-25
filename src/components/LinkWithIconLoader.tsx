@@ -9,7 +9,7 @@ export default function LinkWithIconLoader({
   ...props
 }: Omit<ComponentProps<typeof LinkWithStatus>, 'children'> & {
   icon: ReactNode
-  loader: ReactNode
+  loader?: ReactNode
 }) {
   return (
     <LinkWithStatus
@@ -19,11 +19,11 @@ export default function LinkWithIconLoader({
       {({ isLoading }) => <>
         <span className={clsx(
           'flex transition-opacity',
-          isLoading ? 'opacity-0' : 'opacity-100',
+          isLoading && loader ? 'opacity-0' : 'opacity-100',
         )}>
           {icon}
         </span>
-        {isLoading && <span className={clsx(
+        {isLoading && loader && <span className={clsx(
           'absolute inset-0',
           'flex items-center justify-center',
         )}>
