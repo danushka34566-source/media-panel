@@ -1,6 +1,6 @@
 import { clsx } from 'clsx/lite';
 import { IconBaseProps } from 'react-icons';
-import { FaRegStar, FaStar } from 'react-icons/fa6';
+import { IoHeart, IoHeartOutline } from 'react-icons/io5';
 
 export default function IconFavs({
   highlight,
@@ -8,9 +8,9 @@ export default function IconFavs({
   ...props
 }: IconBaseProps & { highlight?: boolean}) {
   return highlight
-    ? <FaStar
+    ? <IoHeart
       {...props}
-      className={clsx('text-amber-500', className)}
+      className={clsx('text-rose-500 dark:text-pink-400', className)}
     />
-    : <FaRegStar {...{ ...props, className }} />;
+    : <IoHeartOutline {...{ ...props, className }} />;
 }

@@ -30,6 +30,8 @@ export default function SelectMediaProvider({
 
   const [canCurrentPageSelectMedia, setCanCurrentPageSelectMedia] =
     useState(false);
+  const [selectionRedirectPending, setSelectionRedirectPending] =
+    useState(false);
   const [selectedMediaIds, setSelectedMediaIds] =
     useState<string[]>([]);
   const [selectableMediaIds, setSelectableMediaIds] = useState<string[]>([]);
@@ -75,20 +77,29 @@ export default function SelectMediaProvider({
 
   const isSelectingMedia = useMemo(() =>
     canEdit &&
-    searchParamsSelect === 'true'
-  , [canEdit, searchParamsSelect]);
+    (searchParamsSelect === 'true' || selectionRedirectPending)
+  , [canEdit, searchParamsSelect, selectionRedirectPending]);
     
-  const startSelectingMedia = useCallback(() =>
-    canCurrentPageSelectMedia
-      // Use replacePathWithEvent because only query params change
-      ? replacePathWithEvent(`${pathname}?${PARAM_SELECT}=true`)
-      // Full view and non-grid pages use the shared Grid selection surface
-      : router.push(`${PATH_GRID_INFERRED}?${PARAM_SELECT}=true`)
-  , [router, canCurrentPageSelectMedia, pathname]);
+  const startSelectingMedia = useCallback(() => {
+    // The DOM is the source of truth at click time. React state can still be
+    // one render behind while a type page's grid is mounting.
+    const canSelectCurrentPage = getMediaGridElements().length > 0;
+
+    // Use replacePathWithEvent because only query params change.
+    if (canSelectCurrentPage) {
+      replacePathWithEvent(`${pathname}?${PARAM_SELECT}=true`);
+      return;
+    }
+
+    // Full view and non-grid pages use the shared Grid selection surface.
+    setSelectionRedirectPending(true);
+    router.push(`${PATH_GRID_INFERRED}?${PARAM_SELECT}=true`);
+  }, [getMediaGridElements, pathname, router]);
   
-  const stopSelectingMedia = useCallback(() =>
-    replacePathWithEvent(pathname)
-  , [pathname]);
+  const stopSelectingMedia = useCallback(() => {
+    setSelectionRedirectPending(false);
+    replacePathWithEvent(pathname);
+  }, [pathname]);
 
   useEffect(() => {
     if (isSelectingMedia) {

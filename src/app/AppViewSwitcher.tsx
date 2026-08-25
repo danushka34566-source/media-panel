@@ -147,11 +147,15 @@ export default function AppViewSwitcher({
   className,
   animate = true,
   accessoryAfter,
+  isAdminMenuOpen,
+  setIsAdminMenuOpen,
 }: {
   currentSelection?: SwitcherSelection
   className?: string
   animate?: boolean
   accessoryAfter?: ReactNode
+  isAdminMenuOpen: boolean
+  setIsAdminMenuOpen: (isOpen: boolean) => void
 }) {
   const pathname = usePathname();
   const router = useRouter();
@@ -223,7 +227,6 @@ export default function AppViewSwitcher({
   const refHrefFull = useRef<HTMLAnchorElement>(null);
   const refHrefGrid = useRef<HTMLAnchorElement>(null);
 
-  const [isAdminMenuOpen, setIsAdminMenuOpen] = useState(false);
   const [isSearchOpening, setIsSearchOpening] = useState(false);
   const [isGridModeSwitching, setIsGridModeSwitching] = useState(false);
   const gridModeSwitchTimeoutRef =
@@ -340,24 +343,6 @@ export default function AppViewSwitcher({
       >
         {GRID_HOMEPAGE_ENABLED ? renderItemGrid : renderItemFull}
         {GRID_HOMEPAGE_ENABLED ? renderItemFull : renderItemGrid}
-        {canEdit &&
-          <SwitcherItem
-            icon={<AdminAppMenu
-              isOpen={isAdminMenuOpen}
-              setIsOpen={isOpen => {
-                setIsAdminMenuOpen(isOpen);
-                if (isOpen) { setShouldLoadAdminData?.(true); }
-                if (isOpen) { setIsSortMenuOpen(false); }
-              }}
-            />}
-            tooltip={{
-              ...!isAdminMenuOpen && SHOW_KEYBOARD_SHORTCUT_TOOLTIPS && {
-                content: appText.nav.admin,
-                keyCommand: KEY_COMMANDS.admin,
-              },
-            }}
-            noPadding
-        />}
         <SwitcherItem
           icon={<motion.span
             animate={{ scale: isSearchOpening ? 0.9 : 1 }}
@@ -383,6 +368,24 @@ export default function AppViewSwitcher({
             keyCommand: KEY_COMMANDS.search[1],
           }}}
         />
+        {canEdit &&
+          <SwitcherItem
+            icon={<AdminAppMenu
+              isOpen={isAdminMenuOpen}
+              setIsOpen={isOpen => {
+                setIsAdminMenuOpen(isOpen);
+                if (isOpen) { setShouldLoadAdminData?.(true); }
+                if (isOpen) { setIsSortMenuOpen(false); }
+              }}
+            />}
+            tooltip={{
+              ...!isAdminMenuOpen && SHOW_KEYBOARD_SHORTCUT_TOOLTIPS && {
+                content: appText.nav.admin,
+                keyCommand: KEY_COMMANDS.admin,
+              },
+            }}
+            noPadding
+          />}
       </Switcher>
       <motion.div
         initial={animate ? { opacity: 0, width: '0' } : false}
@@ -434,7 +437,7 @@ export default function AppViewSwitcher({
             />}
         </Switcher>
       </motion.div>
-      <Switcher type="borderless" className="ml-0 gap-1 divide-x-0">
+      <Switcher type="borderless" className="ml-1 sm:ml-1.5 gap-1 divide-x-0">
         {accessoryAfter}
       </Switcher>
     </div>

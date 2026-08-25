@@ -282,6 +282,8 @@ export default function MediaLarge({
   }>>({});
   const [isMainVideoActuallyPlaying, setIsMainVideoActuallyPlaying] =
     useState(false);
+  const [hasStartedMainVideoPlayback, setHasStartedMainVideoPlayback] =
+    useState(false);
   const [isVideoFullscreen, setIsVideoFullscreen] = useState(false);
   const [failedGeneratedPreviewSrc, setFailedGeneratedPreviewSrc] =
     useState<string>();
@@ -342,6 +344,7 @@ export default function MediaLarge({
     setFullVideoDeliveryUrl(undefined);
     setPreparedFullVideoDownloads({});
     setIsMainVideoActuallyPlaying(false);
+    setHasStartedMainVideoPlayback(false);
     setFailedGeneratedPreviewSrc(undefined);
     setReadyPreviewSrc(undefined);
     setReadyPreviewActivationId(undefined);
@@ -1258,6 +1261,7 @@ export default function MediaLarge({
                     onContextMenu={(e) => e.preventDefault()}
                     onPlay={() => {
                       if (isFullVideoPlaying) {
+                        setHasStartedMainVideoPlayback(true);
                         setIsMainVideoActuallyPlaying(true);
                       }
                     }}
@@ -1534,7 +1538,7 @@ export default function MediaLarge({
       : !MATTE_COLOR && 'dark:bg-gray-700/30'),
   );
   const shouldWrapInLink = !showZoomControls && !isVideo;
-  const hideFavoriteButton = isVideo && isMainVideoActuallyPlaying;
+  const hideFavoriteButton = isVideo && hasStartedMainVideoPlayback;
 
   const renderMediaWithFavorite = (media: ReactNode) =>
     <div
@@ -1542,12 +1546,15 @@ export default function MediaLarge({
       data-media-id={photo.id}
     >
       {media}
-      <PersonalFavoriteButton
-        mediaId={photo.id}
-        hidden={hideFavoriteButton}
-        className="right-1 top-1"
-      />
     </div>;
+
+  const renderMetadataFavorite =
+    <PersonalFavoriteButton
+      mediaId={photo.id}
+      hidden={hideFavoriteButton}
+      inline
+      className="size-7"
+    />;
 
   return (
     <>
@@ -1580,7 +1587,8 @@ export default function MediaLarge({
                 'gap-x-0.5 sm:gap-x-1 gap-y-baseline',
                 'mb-6 md:mb-4',
               )}>
-                <div className="absolute right-0 top-0 hidden md:block">
+                <div className="absolute right-0 top-0 hidden items-center gap-1 md:flex">
+                  {renderMetadataFavorite}
                   {renderAdminMenu}
                 </div>
                 {/* Meta */}
@@ -1704,7 +1712,8 @@ export default function MediaLarge({
                   'space-y-baseline',
                   !hasTitleContent && 'md:pr-7',
                 )}>
-                  <div className="float-end md:hidden">
+                  <div className="float-end flex items-center gap-1 md:hidden">
+                    {renderMetadataFavorite}
                     {renderAdminMenu}
                   </div>
                   {showVideoMeta &&

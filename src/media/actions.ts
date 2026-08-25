@@ -111,6 +111,7 @@ import {
   createAlbumsAndGetIds,
   upgradeTagToAlbum,
 } from '@/album/server';
+import type { AdminBatchSetType } from '@/admin/select/types';
 import {
   addMediaAlbumIds,
   getAlbumTitlesForMedia,
@@ -1576,6 +1577,83 @@ export const tagMultipleMediaAction = async (
       convertStringToArray(tags, false) ?? [],
       photoIds,
     );
+    revalidateAllKeysAndPaths();
+  });
+
+export const addMediaToSetAction = async (
+  setType: AdminBatchSetType,
+  value: string,
+  photoIds: string[],
+) =>
+  runAuthenticatedAdminServerAction(async () => {
+    const mediaItems = await Promise.all(
+      photoIds.map(photoId => getMedia(photoId, true)),
+    );
+    const values = convertStringToArray(value, false) ?? [];
+
+    for (const photo of mediaItems) {
+      if (!photo) { continue; }
+
+      switch (setType) {
+        case 'tag':
+          photo.tags = Array.from(new Set([
+            ...(photo.tags ?? []),
+            ...values,
+          ]));
+          break;
+        case 'category':
+          photo.categories = Array.from(new Set([
+            ...(photo.categories ?? []),
+            ...values,
+          ]));
+          break;
+        case 'performer':
+          photo.performers = Array.from(new Set([
+            ...(photo.performers ?? []),
+            ...values,
+          ]));
+          break;
+        case 'contentType':
+          photo.contentType = Array.from(new Set([
+            ...(photo.contentType ?? []),
+            ...values,
+          ]));
+          break;
+        case 'studio':
+          photo.studio = values[0];
+          break;
+        case 'recipe':
+          photo.recipeTitle = values[0];
+          break;
+        case 'film':
+          photo.film = values[0];
+          break;
+        case 'focalLength':
+          photo.focalLength = Number.parseInt(values[0], 10);
+          break;
+        case 'camera': {
+          const camera = JSON.parse(decodeURIComponent(value)) as {
+            make: string
+            model: string
+          };
+          photo.make = camera.make;
+          photo.model = camera.model;
+          break;
+        }
+        case 'lens': {
+          const lens = JSON.parse(decodeURIComponent(value)) as {
+            make?: string
+            model: string
+          };
+          photo.lensMake = lens.make;
+          photo.lensModel = lens.model;
+          break;
+        }
+      }
+
+      await updateMedia(convertMediaToMediaDbInsert(photo));
+    }
+
     revalidateAllKeysAndPaths();
   });
 

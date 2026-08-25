@@ -1,18 +1,15 @@
-import { getUniqueTagsCached } from '@/media/cache';
 import AdminBatchEditPanelClient from './AdminBatchEditPanelClient';
-import { getAlbumsWithMeta } from '@/album/query';
+import { getAdminBatchEditOptionsAction } from './actions';
 
 export default async function AdminBatchEditPanel({
   onBatchActionComplete,
 }: {
   onBatchActionComplete?: () => Promise<void>
 }) {
-  const uniqueAlbums = await getAlbumsWithMeta().catch(() => []);
-  const uniqueTags = await getUniqueTagsCached().catch(() => []);
+  const options = await getAdminBatchEditOptionsAction();
   return (
     <AdminBatchEditPanelClient {...{
-      uniqueAlbums,
-      uniqueTags,
+      ...options,
       onBatchActionComplete,
     }} />
   );

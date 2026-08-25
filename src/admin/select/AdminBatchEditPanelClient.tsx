@@ -2,33 +2,60 @@
 
 import Note from '@/components/Note';
 import LoaderButton from '@/components/primitives/LoaderButton';
+import FieldsetWithStatus from '@/components/FieldsetWithStatus';
 import AppGrid from '@/components/AppGrid';
 import { clsx } from 'clsx/lite';
 import { IoCloseSharp } from 'react-icons/io5';
 import { useEffect, useRef, useState } from 'react';
 import { TAG_FAVS, Tags } from '@/tag';
-import FieldsetTag from '@/tag/FieldsetTag';
-import { tagMultipleMediaAction } from '@/media/actions';
+import { addMediaToSetAction, tagMultipleMediaAction } from '@/media/actions';
 import { toastSuccess } from '@/toast';
 import DeleteMediaButton from '@/admin/DeleteMediaButtonGroup';
 import { photoQuantityText } from '@/media';
-import { FaArrowDown, FaCheck, FaCheckDouble } from 'react-icons/fa6';
+import { FaArrowDown, FaCheck, FaCheckDouble, FaLayerGroup } from 'react-icons/fa6';
 import ResponsiveText from '@/components/primitives/ResponsiveText';
 import IconFavs from '@/components/icons/IconFavs';
-import IconTag from '@/components/icons/IconTag';
 import { useAppText } from '@/i18n/state/client';
 import { useSelectMediaState } from './SelectMediaState';
 import { Albums } from '@/album';
 import FieldsetAlbum from '@/album/FieldsetAlbum';
 import IconAlbum from '@/components/icons/IconAlbum';
 import { addMediaToAlbumsAction } from '@/album/actions';
+import type { AdminBatchSetType } from './types';
+import type { AnnotatedTag } from '@/media/form';
+import type { Cameras } from '@/camera';
+import { formatCameraText } from '@/camera';
+import type { Lenses } from '@/lens';
+import { formatLensText } from '@/lens';
+import type { Recipes } from '@/recipe';
+import type { Films } from '@/film';
+import type { FocalLengths } from '@/focal';
+import { formatFocalLength } from '@/focal';
 
 export default function AdminBatchEditPanelClient({
   uniqueAlbums,
   uniqueTags,
+  uniqueCategories,
+  uniqueStudios,
+  uniquePerformers,
+  uniqueContentTypes,
+  uniqueRecipes,
+  uniqueFilms,
+  uniqueCameras,
+  uniqueLenses,
+  uniqueFocalLengths,
 }: {
   uniqueAlbums: Albums
   uniqueTags: Tags
+  uniqueCategories: { category: string, count: number, lastModified: Date }[]
+  uniqueStudios: string[]
+  uniquePerformers: string[]
+  uniqueContentTypes: string[]
+  uniqueRecipes: Recipes
+  uniqueFilms: Films
+  uniqueCameras: Cameras
+  uniqueLenses: Lenses
+  uniqueFocalLengths: FocalLengths
 }) {
   const refNote = useRef<HTMLDivElement>(null);
 
@@ -49,9 +76,10 @@ export default function AdminBatchEditPanelClient({
   const [albumTitles, setAlbumsTitles] = useState<string>();
   const isInAlbumMode = albumTitles !== undefined;
 
-  const [tags, setTags] = useState<string>();
+  const [batchSetType, setBatchSetType] = useState<AdminBatchSetType>();
+  const [batchSetValue, setBatchSetValue] = useState('');
+  const isInBatchSetMode = batchSetType !== undefined;
   const [tagErrorMessage, setTagErrorMessage] = useState('');
-  const isInTagMode = tags !== undefined;
 
   const photosText = photoQuantityText(
     selectedMediaIds?.length ?? 0,
@@ -79,7 +107,70 @@ export default function AdminBatchEditPanelClient({
       {photosText} selected
     </ResponsiveText>;
 
-  const renderActions = isInTagMode || isInAlbumMode
+  const batchSetTypeOptions = [
+    { value: 'category', label: 'Categories' },
+    { value: 'studio', label: 'Studio' },
+    { value: 'performer', label: 'Performers' },
+    { value: 'contentType', label: 'Content types' },
+    { value: 'tag', label: 'Tags' },
+    { value: 'recipe', label: 'Recipes' },
+    { value: 'film', label: 'Films' },
+    { value: 'camera', label: 'Cameras' },
+    { value: 'lens', label: 'Lenses' },
+    { value: 'focalLength', label: 'Focal lengths' },
+  ];
+
+  const batchSetLabel = batchSetTypeOptions.find(option =>
+    option.value === batchSetType)?.label ?? 'Set';
+
+  const batchSetTagOptions: AnnotatedTag[] = (() => {
+    switch (batchSetType) {
+      case 'tag':
+        return uniqueTags.map(({ tag }) => ({ value: tag, label: tag }));
+      case 'category':
+        return uniqueCategories.map(({ category }) => ({
+          value: category,
+          label: category,
+        }));
+      case 'studio':
+        return uniqueStudios.map(value => ({ value, label: value }));
+      case 'performer':
+        return uniquePerformers.map(value => ({ value, label: value }));
+      case 'contentType':
+        return uniqueContentTypes.map(value => ({ value, label: value }));
+      case 'recipe':
+        return uniqueRecipes.map(({ recipe }) => ({
+          value: recipe,
+          label: recipe,
+        }));
+      case 'film':
+        return uniqueFilms.map(({ film }) => ({ value: film, label: film }));
+      case 'camera':
+        return uniqueCameras.map(({ camera }) => ({
+          value: encodeURIComponent(JSON.stringify(camera)),
+          label: formatCameraText(camera, 'long'),
+        }));
+      case 'lens':
+        return uniqueLenses.map(({ lens }) => ({
+          value: encodeURIComponent(JSON.stringify(lens)),
+          label: formatLensText(lens, 'long'),
+        }));
+      case 'focalLength':
+        return uniqueFocalLengths.map(({ focal }) => ({
+          value: String(focal),
+          label: formatFocalLength(focal),
+        }));
+      default:
+        return [];
+    }
+  })();
+
+  const batchSetLimit = batchSetType === 'studio' ||
+    batchSetType === 'camera' ||
+    batchSetType === 'lens' ||
+    batchSetType === 'focalLength' ? 1 : undefined;
+
+  const renderActions = isInBatchSetMode || isInAlbumMode
     ? <>
       <LoaderButton
         className="min-h-[2.5rem]"
@@ -89,7 +180,8 @@ export default function AdminBatchEditPanelClient({
         />}
         onClick={() => {
           setAlbumsTitles(undefined);
-          setTags(undefined);
+          setBatchSetType(undefined);
+          setBatchSetValue('');
           setTagErrorMessage('');
         }}
         disabled={isPerformingSelectEdit}
@@ -97,20 +189,19 @@ export default function AdminBatchEditPanelClient({
       <LoaderButton
         className="min-h-[2.5rem]"
         icon={<FaCheck size={15} />}
-        confirmText={isInTagMode
-          // eslint-disable-next-line max-len
-          ? `Are you sure you want to apply tags to ${photosText}? This action cannot be undone.`
-          // eslint-disable-next-line max-len
+        confirmText={isInBatchSetMode
+          ? `Are you sure you want to set ${batchSetLabel.toLowerCase()} on ${photosText}? This action cannot be undone.`
           : `Are you sure you want to add ${photosText} to these albums? This action cannot be undone.`}
         onClick={() => {
           setIsPerformingSelectEdit?.(true);
-          if (isInTagMode) {
-            tagMultipleMediaAction(
-              tags,
+          if (isInBatchSetMode) {
+            addMediaToSetAction(
+              batchSetType,
+              batchSetValue,
               selectedMediaIds ?? [],
             )
               .then(() => {
-                toastSuccess(`${photosText} tagged`);
+                toastSuccess(`${photosText} updated`);
                 stopSelectingMedia?.();
               })
               .finally(() => setIsPerformingSelectEdit?.(false));
@@ -127,10 +218,7 @@ export default function AdminBatchEditPanelClient({
           }
         }}
         disabled={
-          (
-            (!tags || Boolean(tagErrorMessage)) &&
-            !albumTitles
-          ) ||
+          (!batchSetValue || Boolean(tagErrorMessage)) && !albumTitles ||
           (selectedMediaIds?.length ?? 0) === 0 ||
           isPerformingSelectEdit
         }
@@ -181,11 +269,15 @@ export default function AdminBatchEditPanelClient({
         Album
       </LoaderButton>
       <LoaderButton
-        onClick={() => setTags('')}
+        onClick={() => {
+          setBatchSetType('category');
+          setBatchSetValue('');
+          setTagErrorMessage('');
+        }}
         disabled={isFormDisabled}
-        icon={<IconTag size={15} className="translate-y-[1.5px]" />}
+        icon={<FaLayerGroup size={15} className="translate-y-[1px]" />}
       >
-        Tag
+        Add to
       </LoaderButton>
       <LoaderButton
         icon={<IoCloseSharp size={19} />}
@@ -195,7 +287,7 @@ export default function AdminBatchEditPanelClient({
 
   const shouldShowPanel =
     isSelectingMedia &&
-    canCurrentPageSelectMedia;
+    (canCurrentPageSelectMedia || hasSelectableMedia);
 
   useEffect(() => {
     // Steal focus from Admin Menu to hide tooltip
@@ -209,7 +301,7 @@ export default function AdminBatchEditPanelClient({
       className={clsx(
         // Keep the toolbox in normal page flow below the header. It should
         // never cover media, the header, or the visible edge of a sidebar.
-        'relative z-20 mb-3 pointer-events-auto',
+        'relative z-10 mb-3 pointer-events-auto',
       )}
       classNameMain="md:col-span-12"
       contentMain={<div className="flex flex-col gap-2">
@@ -224,7 +316,7 @@ export default function AdminBatchEditPanelClient({
             // Override default <Note /> content spacing
             '[&>*>*:first-child]:gap-1.5 sm:[&>*>*:first-child]:gap-2.5',
           )}
-          padding={isInTagMode ? 'tight-cta-right-left' : 'tight-cta-right'}
+          padding={isInBatchSetMode ? 'tight-cta-right-left' : 'tight-cta-right'}
           cta={<div className="flex items-center gap-1.5 sm:gap-2.5">
             {renderActions}
           </div>}
@@ -240,17 +332,32 @@ export default function AdminBatchEditPanelClient({
               openOnLoad
               hideLabel
             />
-            : isInTagMode
-              ? <FieldsetTag
-                tags={tags}
-                tagOptions={uniqueTags}
-                placeholder={`Tag ${photosText} ...`}
-                onChange={setTags}
-                onError={setTagErrorMessage}
-                readOnly={isPerformingSelectEdit}
-                openOnLoad
-                hideLabel
-              />
+            : isInBatchSetMode
+              ? <div className="grid gap-2 sm:grid-cols-[minmax(10rem,0.7fr)_minmax(12rem,1.3fr)]">
+                <FieldsetWithStatus
+                  label="Type"
+                  value={batchSetType}
+                  selectOptions={batchSetTypeOptions}
+                  onChange={value => {
+                    setBatchSetType(value as AdminBatchSetType);
+                    setBatchSetValue('');
+                    setTagErrorMessage('');
+                  }}
+                  hideLabel
+                  readOnly={isPerformingSelectEdit}
+                />
+                <FieldsetWithStatus
+                  label={batchSetLabel}
+                  value={batchSetValue}
+                  tagOptions={batchSetTagOptions}
+                  tagOptionsLimit={batchSetLimit}
+                  tagOptionsAllowNewValues
+                  placeholder={`Choose ${batchSetLabel.toLowerCase()} ...`}
+                  onChange={setBatchSetValue}
+                  readOnly={isPerformingSelectEdit}
+                  hideLabel
+                />
+              </div>
               : <div className="text-base flex gap-2 items-center">
                 {renderMediaCTA}
               </div>}

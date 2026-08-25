@@ -23,7 +23,6 @@ const ENTITY_LINK_PROPS: Partial<ComponentProps<typeof EntityLink>> = {
   badged: true,
   badgeType: 'medium',
   truncate: false,
-  suppressSpinner: true,
 };
 
 export default function TopMediaEntities({

@@ -27,7 +27,12 @@ import { useAppState } from '@/app/AppState';
 import { signOutAction } from '@/auth/actions';
 import UserAvatar from '@/components/UserAvatar';
 import IconSignOut from '@/components/icons/IconSignOut';
-import { IoChevronDown, IoHeartOutline, IoPersonOutline } from 'react-icons/io5';
+import {
+  IoChevronDown,
+  IoHeartOutline,
+  IoPersonCircleOutline,
+  IoPersonOutline,
+} from 'react-icons/io5';
 import LinkWithStatus from '@/components/LinkWithStatus';
 import Spinner from '@/components/Spinner';
 import type { ReactNode } from 'react';
@@ -98,6 +103,7 @@ export default function NavClient({
   const isSignedIn = Boolean(effectiveUser?.email || effectiveUser?.name);
   const avatarLabel = effectiveUser?.name || effectiveUser?.email || 'Sign in';
   const [isAvatarMenuOpen, setIsAvatarMenuOpen] = useState(false);
+  const [isAdminMenuOpen, setIsAdminMenuOpen] = useState(false);
   const renderAvatarMenuLink = (
     href: string,
     label: string,
@@ -105,6 +111,7 @@ export default function NavClient({
   ) => <DropdownMenu.Item asChild>
     <LinkWithStatus
       href={href}
+      flickerThreshold={0}
       className="flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm hover:bg-dim"
     >
       {({ isLoading }) => <>
@@ -122,27 +129,39 @@ export default function NavClient({
 
   const avatarDropdown = <DropdownMenu.Root
     open={isAvatarMenuOpen}
-    onOpenChange={setIsAvatarMenuOpen}
+    onOpenChange={isOpen => {
+      setIsAvatarMenuOpen(isOpen);
+      if (isOpen) { setIsAdminMenuOpen(false); }
+    }}
   >
     <DropdownMenu.Trigger asChild>
       <button
         type="button"
         className={clsx(
-          'flex h-7 items-center justify-center gap-0.5 rounded-md px-0.5',
+          'flex h-7 items-center justify-center gap-1 rounded-full pl-0 pr-1.5',
           'text-main hover:text-main',
+          'focus:outline-none',
+          'transition-colors duration-150',
           isAvatarMenuOpen && 'bg-dim',
         )}
         title={avatarLabel}
         aria-label={isSignedIn ? 'Profile menu' : 'Sign in menu'}
       >
-        <UserAvatar
-          name={effectiveUser?.name}
-          email={effectiveUser?.email}
-          profileImageUrl={effectiveUser?.profileImageUrl}
-          sizeClass="size-7"
-          textClassName="text-[10px]"
-          showInitialsFallback={false}
-        />
+        {isSignedIn
+          ? <UserAvatar
+            name={effectiveUser?.name}
+            email={effectiveUser?.email}
+            profileImageUrl={effectiveUser?.profileImageUrl}
+            sizeClass="size-7"
+            textClassName="text-[10px]"
+            showInitialsFallback={false}
+            borderless
+          />
+          : <IoPersonCircleOutline
+            aria-hidden="true"
+            size={27}
+            className="text-dim"
+          />}
         <IoChevronDown
           aria-hidden="true"
           size={13}
@@ -172,6 +191,7 @@ export default function NavClient({
                 sizeClass="size-9"
                 textClassName="text-xs"
                 showInitialsFallback
+                borderless
               />
               <span className="min-w-0">
                 <span className="block truncate text-sm font-semibold">
@@ -217,6 +237,7 @@ export default function NavClient({
           : <DropdownMenu.Item asChild>
             <LinkWithStatus
               href="/sign-in"
+              flickerThreshold={0}
               className="flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm hover:bg-dim"
             >
               {({ isLoading }) => <>
@@ -273,6 +294,11 @@ export default function NavClient({
                 className="translate-x-[-1px]"
                 animate={hasLoadedWithAnimations && isNavVisible}
                 accessoryAfter={avatarDropdown}
+                isAdminMenuOpen={isAdminMenuOpen}
+                setIsAdminMenuOpen={isOpen => {
+                  setIsAdminMenuOpen(isOpen);
+                  if (isOpen) { setIsAvatarMenuOpen(false); }
+                }}
               />
               <div className={clsx(
                 'grow text-right min-w-0',

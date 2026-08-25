@@ -17,6 +17,7 @@ export default function UserAvatar({
   sizeClass = 'size-10',
   textClassName,
   showInitialsFallback = false,
+  borderless = false,
   className,
 }: {
   name?: string
@@ -25,13 +26,15 @@ export default function UserAvatar({
   sizeClass?: string
   textClassName?: string
   showInitialsFallback?: boolean
+  borderless?: boolean
   className?: string
 }) {
   return (
     <span
       className={clsx(
         'relative inline-flex shrink-0 items-center justify-center overflow-hidden rounded-full',
-        'border border-medium bg-dim text-main',
+        !borderless && 'border border-medium',
+        'bg-dim text-main',
         sizeClass,
         className,
       )}

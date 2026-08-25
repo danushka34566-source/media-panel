@@ -29,7 +29,7 @@ export default function useStickyNav(
 
   const classNames = useMemo(() => ({
     classNameStickyContainer: clsx(
-      isNavSticky && 'sticky top-0 z-10 pointer-events-none',
+      isNavSticky && 'sticky top-0 z-40 pointer-events-none',
     ),
     classNameStickyNav: clsx(
       shouldHideStickyNav ? 'translate-y-[-100%]' : 'translate-y-0',
