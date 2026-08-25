@@ -44,6 +44,22 @@ const PREVIEW_PRELOAD_AHEAD_PX = 2400;
 const MAX_WARM_DESKTOP_PREVIEWS = 6;
 const MAX_WARM_MOBILE_PREVIEWS = 2;
 
+type PreviewGeometryCache = Map<HTMLElement, DOMRect>;
+
+// Reuse each card's geometry during one refresh. The visibility and warm-up
+// passes need the same measurements, so reading them once avoids duplicate
+// layout work without changing any lifecycle decisions.
+const getPreviewRect = (
+  element: HTMLElement,
+  geometryCache: PreviewGeometryCache,
+) => {
+  const cached = geometryCache.get(element);
+  if (cached) { return cached; }
+  const rect = element.getBoundingClientRect();
+  geometryCache.set(element, rect);
+  return rect;
+};
+
 const getReducedMotionQuery = () =>
   reducedMotionQuery ??= window.matchMedia('(prefers-reduced-motion: reduce)');
 
@@ -91,8 +107,11 @@ const getCurrentDeviceCapabilities = (): DeviceCapabilities => {
   };
 };
 
-const isInPreviewPreloadRange = (element: HTMLElement) => {
-  const { bottom, left, right, top } = element.getBoundingClientRect();
+const isInPreviewPreloadRange = (
+  element: HTMLElement,
+  geometryCache: PreviewGeometryCache,
+) => {
+  const { bottom, left, right, top } = getPreviewRect(element, geometryCache);
   return bottom > -PREVIEW_PRELOAD_AHEAD_PX &&
     right > 0 &&
     top < window.innerHeight + PREVIEW_PRELOAD_AHEAD_PX &&
@@ -105,7 +124,9 @@ const setPreviewMounted = (entry: PreviewEntry, mounted: boolean) => {
   entry.setMounted(mounted);
 };
 
-const updateActivePreviews = () => {
+const updateActivePreviews = (
+  geometryCache: PreviewGeometryCache = new Map(),
+) => {
   const capabilities = typeof window !== 'undefined'
     ? getCurrentDeviceCapabilities()
     : undefined;
@@ -135,10 +156,10 @@ const updateActivePreviews = () => {
       !entry.mountOnlyWhenVisible &&
       Boolean(entry.preloadUrl) &&
       !isFullVideoPlaybackActive &&
-      isInPreviewPreloadRange(entry.element))
+      isInPreviewPreloadRange(entry.element, geometryCache))
     .sort((a, b) => {
-      const aRect = a.element.getBoundingClientRect();
-      const bRect = b.element.getBoundingClientRect();
+      const aRect = getPreviewRect(a.element, geometryCache);
+      const bRect = getPreviewRect(b.element, geometryCache);
       const aCenter = aRect.top + aRect.height / 2;
       const bCenter = bRect.top + bRect.height / 2;
       return Math.abs(aCenter - viewportCenter) -
@@ -165,9 +186,9 @@ const updateActivePreviews = () => {
   });
 };
 
-// A detail page can register hundreds of cards in one React commit. Running
-// a full geometry scan once per card creates an O(n²) layout storm and makes
-// navigation lag. Coalesce lifecycle updates to one animation frame.
+// A detail page can register hundreds of cards in one React commit. Coalesce
+// lifecycle updates to one animation frame and share geometry reads between
+// the visibility and warm-preview passes.
 const scheduleActivePreviewUpdate = () => {
   if (activePreviewUpdateFrame !== undefined) { return; }
   activePreviewUpdateFrame = window.requestAnimationFrame(() => {
@@ -196,8 +217,11 @@ const getObserver = () => {
   return observer;
 };
 
-const isInViewport = (element: HTMLElement) => {
-  const { bottom, left, right, top } = element.getBoundingClientRect();
+const isInViewport = (
+  element: HTMLElement,
+  geometryCache: PreviewGeometryCache,
+) => {
+  const { bottom, left, right, top } = getPreviewRect(element, geometryCache);
   return bottom > 0 &&
     right > 0 &&
     top < window.innerHeight &&
@@ -231,10 +255,11 @@ const refreshViewportIntersections = () => {
   // callback runs. Reconcile against the browser state so a stale module-level
   // flag cannot keep newly mounted grid previews suspended.
   releaseStaleFullVideoPlayback();
+  const geometryCache: PreviewGeometryCache = new Map();
   entries.forEach(entry => {
-    entry.intersectionRatio = isInViewport(entry.element) ? 1 : 0;
+    entry.intersectionRatio = isInViewport(entry.element, geometryCache) ? 1 : 0;
   });
-  updateActivePreviews();
+  updateActivePreviews(geometryCache);
 };
 
 const scheduleViewportRefresh = () => {
@@ -428,12 +453,13 @@ export default function useVideoPreviewLifecycle({
     // synchronously so visible full-list cards can mount their previews on the
     // first paint instead of waiting for a later scroll or observer callback.
     releaseStaleFullVideoPlayback();
-    entry.intersectionRatio = isInViewport(element) ? 1 : 0;
+    const geometryCache: PreviewGeometryCache = new Map();
+    entry.intersectionRatio = isInViewport(element, geometryCache) ? 1 : 0;
     // Small lists benefit from immediate activation (and avoid a blank first
     // frame). Once a detail/full page has many cards, defer repeated geometry
     // scans to one frame instead of doing O(n²) work during mount.
     if (entries.size <= 20) {
-      updateActivePreviews();
+      updateActivePreviews(geometryCache);
     } else {
       scheduleActivePreviewUpdate();
     }
