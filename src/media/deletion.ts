@@ -99,10 +99,11 @@ export const getMediaDeletionQueueStatuses = async (mediaIds: string[]) => {
   if (mediaIds.length === 0) { return []; }
   const { rows } = await query<{
     media_id: string
+    title: string | null
     status: string
     error_message: string | null
   }>(`
-    SELECT media_id, status, error_message
+    SELECT media_id, title, status, error_message
     FROM media_deletion_queue
     WHERE media_id = ANY($1::text[])
   `, [mediaIds]);

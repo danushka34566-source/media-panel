@@ -27,6 +27,7 @@ export async function POST(request: NextRequest) {
       return queued
         ? {
           mediaId,
+          title: queued.title || undefined,
           status: queued.status,
           error: queued.error_message || undefined,
         }

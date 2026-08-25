@@ -8,40 +8,7 @@ import { toastSuccess, toastWarning } from '@/toast';
 import { ComponentProps, useState } from 'react';
 import DeleteButton from './DeleteButton';
 import { useAppText } from '@/i18n/state/client';
-
-const DELETION_WAIT_TIMEOUT_MS = 2 * 60 * 1000;
-
-const waitForMediaDeletion = async (mediaIds: string[]) => {
-  const deadline = Date.now() + DELETION_WAIT_TIMEOUT_MS;
-  while (Date.now() < deadline) {
-    const response = await fetch('/api/media/deletion-status', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ mediaIds }),
-      cache: 'no-store',
-    });
-    const data = await response.json().catch(() => ({})) as {
-      error?: string
-      items?: Array<{ status?: string, error?: string }>
-    };
-    if (!response.ok) {
-      throw new Error(data.error || 'Unable to check deletion progress');
-    }
-    const items = data.items || [];
-    const failed = items.find(item => item.status === 'failed');
-    if (failed) {
-      throw new Error(failed.error || 'Backend deletion failed');
-    }
-    if (
-      items.length === mediaIds.length &&
-      items.every(item => item.status === 'completed')
-    ) {
-      return true;
-    }
-    await new Promise(resolve => window.setTimeout(resolve, 1_000));
-  }
-  return false;
-};
+import { monitorMediaDeletion } from './deletion-progress';
 
 export default function DeleteMediaButtonGroup({
   photoIds = [],
@@ -80,16 +47,17 @@ export default function DeleteMediaButtonGroup({
         onClick?.();
         setIsLoading(true);
         deleteMediaItemsAction(photoIds)
-          .then(async () => {
-            const completed = await waitForMediaDeletion(photoIds);
-            toastSuccess(toastText ?? (completed
-              ? `${photosText} deleted`
-              : `${photosText} queued; cleanup is still running`));
+          .then(() => {
+            toastSuccess(`${photosText} added to delete queue`);
             if (clearLocalState) {
               invalidateSwr?.();
               registerAdminUpdate?.();
             }
             onDelete?.();
+            void monitorMediaDeletion(
+              photoIds,
+              toastText ?? `${photosText} deleted`,
+            );
           })
           .catch(error => toastWarning(
             error instanceof Error

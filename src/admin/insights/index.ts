@@ -9,9 +9,7 @@ import {
   MATTE_MEDIA,
   IS_META_DESCRIPTION_CONFIGURED,
   IS_META_TITLE_CONFIGURED,
-  HAS_STATIC_OPTIMIZATION,
   GRID_HOMEPAGE_ENABLED,
-  AI_CONTENT_GENERATION_ENABLED,
   HAS_DEPRECATED_ENV_VARS,
 } from '@/app/config';
 import { MediaDateRangePostgres } from '@/media';
@@ -27,7 +25,6 @@ type AdminAppInsightCode = typeof AdminAppInsightCode[number];
 
 const _INSIGHTS_TEMPLATE = [
   'deprecatedEnvVars',
-  'noAi',
   'noRateLimiting',
   'noConfiguredDomain',
   'noConfiguredMetaTitle',
@@ -39,7 +36,7 @@ const _INSIGHTS_TEMPLATE = [
 type AdminAppInsightRecommendation = typeof _INSIGHTS_TEMPLATE[number];
 
 const _INSIGHTS_LIBRARY = [
-  'photosNeedSync',
+  'mediaNeedSync',
 ] as const;
 type AdminAppInsightLibrary = typeof _INSIGHTS_LIBRARY[number];
 
@@ -56,15 +53,20 @@ export const hasTemplateRecommendations = (insights: AdminAppInsights) =>
   _INSIGHTS_TEMPLATE.some(insight => insights[insight]);
 
 export interface MediaStats {
-  photosCount: number
-  photosCountHidden: number
-  photosCountNeedSync: number
+  mediaCount: number
+  hiddenMediaCount: number
+  mediaCountNeedSync: number
+  categoriesCount: number
   camerasCount: number
+  albumsCount: number
   lensesCount: number
+  studiosCount: number
+  performersCount: number
   tagsCount: number
   recipesCount: number
   filmsCount: number
   focalLengthsCount: number
+  yearsCount: number
   dateRange?: MediaDateRangePostgres
   mediaCounts?: { photos: number, videos: number, total: number }
   mediaCountsHidden?: { photos: number, videos: number, total: number }
@@ -82,10 +84,10 @@ export const getGitHubMetaForCurrentApp = () =>
 
 export const getSignificantInsights = ({
   codeMeta,
-  photosCountNeedSync,
+  mediaCountNeedSync,
 }: {
   codeMeta: Awaited<ReturnType<typeof getGitHubMetaForCurrentApp>>
-  photosCountNeedSync: number
+  mediaCountNeedSync: number
 }) => {
   const {
     isAiTextGenerationEnabled,
@@ -102,19 +104,19 @@ export const getSignificantInsights = ({
       hasLocationServices
     ) && !hasRedisStorage,
     noConfiguredDomain: !hasDomain,
-    photosNeedSync: Boolean(photosCountNeedSync),
+    mediaNeedSync: Boolean(mediaCountNeedSync),
   };
 };
 
 export const indicatorStatusForSignificantInsights = ({
   codeMeta,
-  photosCountNeedSync,
+  mediaCountNeedSync,
 }: Parameters<typeof getSignificantInsights>[0] & {
-  photosCountNeedSync: number
+  mediaCountNeedSync: number
 }) => {
   const insights = getSignificantInsights({
     codeMeta,
-    photosCountNeedSync,
+    mediaCountNeedSync,
   });
 
   const {
@@ -122,34 +124,35 @@ export const indicatorStatusForSignificantInsights = ({
     forkBehind,
     noRateLimiting,
     noConfiguredDomain,
-    photosNeedSync,
+    mediaNeedSync,
   } = insights;
 
   if (deprecatedEnvVars || noRateLimiting || noConfiguredDomain) {
     return 'yellow';
-  } else if (forkBehind || photosNeedSync) {
+  } else if (forkBehind || mediaNeedSync) {
     return 'blue';
   }
 };
 
 export const getAllInsights = ({
   codeMeta,
-  photosCountNeedSync,
-  photosCount,
-  photosCountPortrait,
+  mediaCountNeedSync,
+  mediaCount,
+  portraitMediaCount,
+  isStaticOptimizationEnabled,
 }: Parameters<typeof getSignificantInsights>[0] & {
-  photosCount: number
-  photosCountPortrait: number
+  mediaCount: number
+  portraitMediaCount: number
+  isStaticOptimizationEnabled: boolean
 }) => ({
-  ...getSignificantInsights({ codeMeta, photosCountNeedSync }),
+  ...getSignificantInsights({ codeMeta, mediaCountNeedSync }),
   noFork: !codeMeta?.isForkedFromBase && !codeMeta?.isBaseRepo,
-  noAi: !AI_CONTENT_GENERATION_ENABLED,
   noConfiguredMetaTitle: !IS_META_TITLE_CONFIGURED,
   noConfiguredMetaDescription: !IS_META_DESCRIPTION_CONFIGURED,
-  photoMatting: photosCountPortrait > 0 && !MATTE_MEDIA,
+  photoMatting: portraitMediaCount > 0 && !MATTE_MEDIA,
   gridFirst: (
-    photosCount >= BASIC_MEDIA_INSTALLATION_COUNT &&
+    mediaCount >= BASIC_MEDIA_INSTALLATION_COUNT &&
     !GRID_HOMEPAGE_ENABLED
   ),
-  noStaticOptimization: !HAS_STATIC_OPTIMIZATION,
+  noStaticOptimization: !isStaticOptimizationEnabled,
 });

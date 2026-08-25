@@ -1,15 +1,31 @@
 # Media Panel
 
-Media Panel is a private, self-hosted media library for photos and videos. It
-combines a Next.js panel, PostgreSQL metadata, Drive or Cloudflare R2 storage,
-a Cloudflare Worker registration service, and an optional background video
-processor.
+### A private home for your photos and videos
 
-It is based on and substantially evolved from [Sam Becker's EXIF Photo Blog](https://github.com/sambecker/exif-photo-blog).
-This repository is its own media application and does not bundle or present
-itself as the EXIF Photo Blog photo-library project.
+Media Panel is a self-hosted media library for people who want their own
+collection, their own storage, and a little more control than a typical photo
+service offers. It brings together a calm browsing experience, rich metadata,
+albums and tags, full video support, and an administration panel for the work
+that happens behind the scenes.
 
-## Features and architecture
+The application is built with Next.js and PostgreSQL. Media bytes live in a
+Drive gateway or Cloudflare R2, while a Cloudflare Worker takes care of durable
+registration and an optional processor creates video derivatives.
+
+This project grew out of and is substantially evolved from
+[Sam Becker's EXIF Photo Blog](https://github.com/sambecker/exif-photo-blog),
+especially its metadata-focused browsing ideas. It is now its own application,
+with its own storage model, authentication, workers, registration lifecycle,
+and deployment workflow.
+
+> Project status: this is a vibe-coded, AI-assisted project under active
+> development. It can contain bugs, incomplete behavior, and rough edges even
+> when a feature appears to work. Review changes before production use, keep
+> database and storage backups, test uploads and deletions with non-critical
+> media first, and report reproducible failures with the relevant logs and
+> deployment version. The project is being continuously audited and improved.
+
+## What you get
 
 - Authenticated media library with albums, tags, favourites, search, sorting,
   public pages, and responsive photo/video views.
@@ -20,6 +36,26 @@ itself as the EXIF Photo Blog photo-library project.
 - FIFO, resumable registration with per-file status and safe source cleanup.
 - Optional video processing for previews, posters, subtitles, stream files, and
   HLS artifacts.
+
+If you only want the short version: configure PostgreSQL and one storage
+provider, start the panel, create the first admin at `/setup`, upload one test
+file, and then connect the registration Worker. The rest of the system can be
+added as your library grows.
+
+## Contents
+
+- [Requirements](#requirements)
+- [Local setup](#local-setup)
+- [Main environment variables](#main-required-environment-variables)
+- [Database and storage](#database-setup-neon-or-supabase)
+- [Admin configuration](#admin-panel-configuration-map)
+- [Media lifecycle](#media-lifecycle-and-worker-states)
+- [Uploading and video processing](#uploading-media)
+- [Worker deployment](#deploying-the-cloudflare-registration-worker)
+- [Development and release checks](#development-and-verification)
+- [Troubleshooting](#troubleshooting-quick-reference)
+- [Contributing and adapting](#contributing-and-adapting)
+- [Security](#security-and-operations)
 
 ```text
 Browser / folder uploader
@@ -67,6 +103,167 @@ behavior.
 
 Never commit `.env`. Use different long random values for `AUTH_SECRET`, the
 orchestrator secret, the processor secret, and automation secrets.
+
+### Main required environment variables
+
+For the panel itself, start with these values:
+
+```env
+NEXT_PUBLIC_DOMAIN=https://your-panel.example.com
+AUTH_SECRET=generate-a-long-random-secret
+POSTGRES_URL=postgresql://user:password@host/database?sslmode=require
+```
+
+Configure exactly one complete storage provider. Drive takes priority when its
+four main values are present:
+
+```env
+DRIVE_STORAGE_BASE_URL=https://your-drive.example.com/storage
+DRIVE_STORAGE_API_KEY=your-drive-project-api-key
+NEXT_PUBLIC_DRIVE_STORAGE_PROJECT_ID=your-drive-project-id
+NEXT_PUBLIC_DRIVE_STORAGE_BUCKET=your-bucket
+```
+
+If using Cloudflare R2 instead, leave the Drive values unset and configure:
+
+```env
+CLOUDFLARE_R2_ACCESS_KEY=your-r2-access-key
+CLOUDFLARE_R2_SECRET_ACCESS_KEY=your-r2-secret-key
+NEXT_PUBLIC_CLOUDFLARE_R2_ACCOUNT_ID=your-cloudflare-account-id
+NEXT_PUBLIC_CLOUDFLARE_R2_BUCKET=your-bucket
+NEXT_PUBLIC_CLOUDFLARE_R2_PUBLIC_DOMAIN=https://your-public-r2-domain.example.com
+```
+
+The registration Worker additionally needs these values available to its
+deployment bootstrap and panel connection:
+
+```env
+MEDIA_PANEL_BASE_URL=https://your-panel.example.com
+BACKEND_ORCHESTRATOR_BASE_URL=https://your-orchestrator.workers.dev
+BACKEND_ORCHESTRATOR_SHARED_SECRET=another-long-random-secret
+```
+
+The optional video processor needs:
+
+```env
+BACKEND_PROCESSOR_SHARED_SECRET=a-separate-long-random-secret
+```
+
+### Environment files and their variables
+
+These are the variables currently present in the checked-out environment
+files. Values are intentionally omitted from the README.
+
+#### Root `.env` - Media Panel
+
+```env
+# Main panel, authentication, and database
+NEXT_PUBLIC_DOMAIN=
+NEXT_PUBLIC_META_TITLE=
+AUTH_SECRET=
+POSTGRES_URL=
+
+# Drive storage used by the current panel setup
+DRIVE_STORAGE_BASE_URL=
+DRIVE_STORAGE_API_KEY=
+NEXT_PUBLIC_DRIVE_STORAGE_PROJECT_ID=
+NEXT_PUBLIC_DRIVE_STORAGE_BUCKET=
+
+# Worker connection and automation
+BACKEND_ORCHESTRATOR_BASE_URL=
+BACKEND_ORCHESTRATOR_SHARED_SECRET=
+BACKEND_PROCESSOR_SHARED_SECRET=
+AUTOMATION_API_SECRET=
+
+# Current media/performance options
+NEXT_PUBLIC_UNIQUE_MEDIA_NAMES=
+NEXT_PUBLIC_STATICALLY_OPTIMIZE_MEDIA=
+NEXT_PUBLIC_STATICALLY_OPTIMIZE_MEDIA_CATEGORIES=
+
+# Optional services currently configured in this file
+AUTH_GOOGLE_ID=
+AUTH_GOOGLE_SECRET=
+RESEND_API_KEY=
+RESEND_FROM_EMAIL=
+
+# Optional SMS verification; Text.lk is the current gateway integration
+TEXTLK_API_TOKEN=
+TEXTLK_SENDER_ID=
+```
+
+For a new setup, the main required root values are `NEXT_PUBLIC_DOMAIN`,
+`AUTH_SECRET`, `POSTGRES_URL`, and one complete storage provider. The Worker
+variables are needed when registration is enabled. Google login and Resend are
+optional. Text.lk is the current SMS gateway used by the built-in SMS
+verification flow:
+
+```env
+TEXTLK_API_TOKEN=your-textlk-api-token
+TEXTLK_SENDER_ID=your-sender-id
+```
+
+SMS is optional; email verification remains available without it. If you
+prefer another SMS provider, replace the provider request in
+`src/auth/users.ts` and adjust the corresponding environment variable names,
+request format, sender configuration, and error handling for that provider.
+
+#### `workers/backend-orchestrator/.env`
+
+```env
+MEDIA_PANEL_BASE_URL=
+BACKEND_ORCHESTRATOR_SHARED_SECRET=
+```
+
+These are used by the panel-assisted Wrangler deployment. Production Worker
+runtime secrets are supplied by the panel deployment configuration.
+
+#### `workers/backend-processor/.env`
+
+This file is not currently present in the checkout. Create it from
+[`workers/backend-processor/.env.example`](workers/backend-processor/.env.example):
+
+```env
+BACKEND_ORCHESTRATOR_BASE_URL=
+BACKEND_PROCESSOR_SHARED_SECRET=
+```
+
+The remaining supported defaults are documented in [`.env.example`](.env.example).
+Do not copy unrelated or legacy values into a deployment without checking the
+current Admin Configuration page and source.
+
+### First-run order
+
+1. Create PostgreSQL and a storage provider.
+2. Create `.env` from `.env.example` and set only the required values for the
+   provider you selected.
+3. Start the panel and finish `/setup` to create the first super-admin.
+4. Open **Admin -> Configuration** and complete **Storage**, **Authentication**,
+   and **Processing**. The panel creates its required application tables on
+   demand; do not manually invent a schema for a fresh installation.
+5. Upload one small test image and confirm it appears in the library before
+   uploading a larger folder.
+6. Deploy the Backend Orchestrator and confirm `/health`, `/status`, and the
+   Admin **Processing** page.
+7. Start the optional Backend Processor only after registration is healthy and
+   video processing is enabled for the features you need.
+
+The first test should cover the complete lifecycle: upload, registration,
+library display, playback, metadata editing, and deletion. Keep the original
+test file until the deletion queue reports completion.
+
+### What creates the database schema
+
+The panel and orchestrator use idempotent `CREATE TABLE IF NOT EXISTS` setup
+for their own runtime tables. The core media, album, authentication, subtitle,
+processing-configuration, application-configuration, upload-registration,
+registration-status, activity-log, scan-lease, registered-file-map, and
+deletion-queue tables are created or upgraded when the corresponding feature is
+used. Older installations can run migrations automatically when a known schema
+error is detected.
+
+This is not a substitute for backups or a migration review. Do not delete
+tables to fix an application error, and do not run destructive SQL against a
+production database without a verified backup.
 
 ## Database setup: Neon or Supabase
 
@@ -152,7 +349,6 @@ first-install fallback.
 | `BACKEND_ORCHESTRATOR_BASE_URL` | Deployed registration Worker URL. |
 | `BACKEND_ORCHESTRATOR_SHARED_SECRET` | Panel-to-orchestrator authentication. |
 | `BACKEND_PROCESSOR_SHARED_SECRET` | Processor-to-orchestrator authentication. |
-| `BACKEND_PROCESSOR_ID` | Optional stable processor identity. |
 | `MEDIA_PANEL_BASE_URL` | Panel URL used by Worker deployment bootstrap. |
 | `AUTOMATION_API_SECRET` | Server-side automation/revalidation secret. |
 | `DRIVE_STORAGE_PROJECT_ID`, `DRIVE_STORAGE_BUCKET` | Worker-side Drive settings. |
@@ -167,7 +363,6 @@ first-install fallback.
 | `BACKEND_PROCESSOR_IDLE_INTERVAL_MS` | Processor idle delay. |
 | `BACKEND_PROCESSOR_HEARTBEAT_INTERVAL_MS` | Processor lease heartbeat. |
 | `BACKEND_PROCESSOR_CLAIM_LIMIT` | Processor jobs claimed per cycle. |
-| `RUN_ONCE` | Processor mode: process one batch and exit when `1`. |
 
 The registration worker uses a bounded FIFO slice on every scheduled run.
 Waiting for one Drive copy does not block later files in the same slice, and
@@ -180,7 +375,7 @@ unbounded number of database connections.
 | --- | --- |
 | `AUTH_GOOGLE_ID`, `AUTH_GOOGLE_SECRET` | Google OAuth credentials. |
 | `RESEND_API_KEY`, `RESEND_FROM_EMAIL` | Email verification and password reset. |
-| `TEXTLK_API_TOKEN`, `TEXTLK_SENDER_ID` | Text.lk SMS verification/2FA. |
+| `TEXTLK_API_TOKEN`, `TEXTLK_SENDER_ID` | Current Text.lk SMS gateway for optional SMS verification and 2FA. |
 
 Google's callback URL is `https://YOUR_DOMAIN/api/auth/callback/google`.
 
@@ -205,36 +400,191 @@ the project database, so no environment-variable edit is required. The
 matching `NEXT_PUBLIC_STATICALLY_*` variables remain supported as defaults for
 existing deployments until an administrator saves the panel settings.
 
-These remaining supported variables are also available in `.env.example`:
-
-```text
-NEXT_PUBLIC_UNIQUE_MEDIA_NAMES NEXT_PUBLIC_PRESERVE_ORIGINAL_UPLOADS
-NEXT_PUBLIC_TRANSCODE_VIDEOS_ON_ADD NEXT_PUBLIC_GENERATE_STREAM_DERIVATIVES
-NEXT_PUBLIC_IMAGE_QUALITY NEXT_PUBLIC_BLUR_DISABLED
-NEXT_PUBLIC_STATICALLY_OPTIMIZE_MEDIA NEXT_PUBLIC_STATICALLY_OPTIMIZE_MEDIA_OG_IMAGES
-NEXT_PUBLIC_STATICALLY_OPTIMIZE_MEDIA_CATEGORIES NEXT_PUBLIC_STATICALLY_OPTIMIZE_MEDIA_CATEGORY_OG_IMAGES
-NEXT_PUBLIC_CATEGORY_VISIBILITY NEXT_PUBLIC_HIDE_CATEGORIES_ON_MOBILE
-NEXT_PUBLIC_HIDE_CATEGORY_IMAGE_HOVERS NEXT_PUBLIC_EXHAUSTIVE_SIDEBAR_CATEGORIES
-NEXT_PUBLIC_HIDE_TAGS_WITH_ONE_MEDIA NEXT_PUBLIC_DEFAULT_SORT
-NEXT_PUBLIC_PRIORITY_BASED_SORTING NEXT_PUBLIC_COLOR_SORT
-NEXT_PUBLIC_COLOR_SORT_STARTING_HUE NEXT_PUBLIC_COLOR_SORT_CHROMA_CUTOFF
-NEXT_PUBLIC_NAV_SORT_CONTROL NEXT_PUBLIC_HIDE_KEYBOARD_SHORTCUT_TOOLTIPS
-NEXT_PUBLIC_HIDE_EXIF_DATA NEXT_PUBLIC_HIDE_ZOOM_CONTROLS NEXT_PUBLIC_HIDE_TAKEN_AT_TIME
-NEXT_PUBLIC_HIDE_REPO_LINK NEXT_PUBLIC_GRID_HOMEPAGE NEXT_PUBLIC_GRID_ASPECT_RATIO
-NEXT_PUBLIC_SHOW_LARGE_THUMBNAILS NEXT_PUBLIC_DEFAULT_THEME NEXT_PUBLIC_MATTE_MEDIA
-NEXT_PUBLIC_MATTE_COLOR NEXT_PUBLIC_MATTE_COLOR_DARK NEXT_PUBLIC_GEO_PRIVACY
-NEXT_PUBLIC_ALLOW_PUBLIC_DOWNLOADS NEXT_PUBLIC_SOCIAL_NETWORKS NEXT_PUBLIC_SITE_FEEDS
-NEXT_PUBLIC_OG_TEXT_ALIGNMENT PAGE_SCRIPT_URLS VERCEL_AUTOMATION_BYPASS_SECRET
-ADMIN_DEBUG_TOOLS ADMIN_SQL_DEBUG ANALYZE
-```
+Only the variables shown in the verified tables above and the relevant section
+of [`.env.example`](.env.example) should be configured. The example file also
+contains optional and compatibility switches for features that are not enabled
+in every deployment; an unused variable does not activate a feature by itself.
+The Admin Configuration page is the source of truth for settings that have a
+panel toggle. Do not copy an arbitrary variable from an old deployment or a
+search result without checking that the current source reads it.
 
 Legacy aliases remain supported for existing deployments:
 `NEXTAUTH_SECRET`, `CLOUDFLARE_WORKER_SHARED_SECRET`, `RESEND_FROM`,
-`TEXT_LK_API_TOKEN`, `TEXT_LK_SENDER_ID`, `NEXT_PUBLIC_SITE_DOMAIN`,
+`NEXT_PUBLIC_SITE_DOMAIN`,
 `NEXT_PUBLIC_SITE_DESCRIPTION`, `NEXT_PUBLIC_SITE_TITLE`,
 `NEXT_PUBLIC_SITE_ABOUT`, `NEXT_PUBLIC_STATICALLY_OPTIMIZE_PAGES`,
 `NEXT_PUBLIC_STATICALLY_OPTIMIZE_OG_IMAGES`, `NEXT_PUBLIC_PRO_MODE`, and
 `NEXT_PUBLIC_HIDE_SOCIAL`.
+
+## Admin panel configuration map
+
+The configuration page is grouped by the setting's ownership:
+
+| Section | What it controls |
+| --- | --- |
+| Storage | Drive/R2 selection, bucket and delivery behavior. |
+| Processing | Orchestrator connection, processor connection, queue limits, retries, leases, and recovery. |
+| Authentication | Site access, OAuth, email verification, and role behavior. |
+| Content | Media metadata, upload behavior, and content defaults. |
+| External Services | Optional location, Redis, email, and other integrations. |
+| AI Text | AI provider and automatic metadata generation. |
+| Performance | Static page and social-image generation switches stored in the database. |
+| Categories | Public category visibility and category behavior. |
+| Sorting | Default and priority/color sort behavior. |
+| Display / Grid / Design | EXIF, grid density, themes, matting, and visual preferences. |
+| Settings | Privacy, downloads, feeds, and other site settings. |
+| Scripts & Analytics | Optional page scripts and analytics settings. |
+| Internal | Debug-only controls; keep disabled in production. |
+
+Panel-managed settings are persisted in PostgreSQL and normally take priority
+over environment defaults after the first save. A setting that is shown as a
+panel switch should not be documented as an env-var-only action.
+
+## Media lifecycle and worker states
+
+The system deliberately separates the following stages:
+
+```text
+local file -> upload -> storage object -> worker detection
+           -> registration -> media row + registered file map
+           -> optional video processing -> playback derivatives
+           -> deletion queue -> storage cleanup + media removal
+```
+
+Useful registration states include `detected`, `registering`, `registered`,
+`completed`, `retrying`, `failed`, and `cancelled` (the exact display text may
+vary by page). Registration is durable and resumable. The Worker uses bounded,
+oldest-first work, leases, per-file status, and retry/backoff handling; a large
+file can remain in a waiting state while Drive completes a copy. Do not upload
+the same file repeatedly just because the UI still says `registering`.
+
+For a registration incident, check in this order:
+
+1. Storage object existence, size, and read permissions.
+2. Panel **Admin -> Processing** status and per-file registration records.
+3. Worker `/health`, then authorized `/status` and `/logs`.
+4. Worker deployment/build marker and cron activity.
+5. PostgreSQL registration status, scan lease, and registered-file mapping.
+
+Deletion is also asynchronous. The panel should immediately report the number
+of files queued, then update per-file progress while the worker removes source,
+poster, preview, and registered-upload objects. A UI spinner is not proof that
+the file is still being deleted; the queue status and Worker logs are the
+authoritative evidence.
+
+## Main routes and operational endpoints
+
+| Area | Routes |
+| --- | --- |
+| Public library | `/`, `/full`, `/grid`, `/recents`, `/favorites`, `/search`, and entity pages such as `/album/...`, `/tag/...`, `/studio/...`, `/performer/...`, `/year/...`, `/lens/...`, `/shot-on/...`, `/recipe/...`, `/film/...`, and `/focal/...`. |
+| Public media | `/<photoId>` and entity-scoped media detail routes. |
+| Admin | `/admin/media`, `/admin/uploads`, `/admin/processing`, `/admin/insights`, `/admin/stats`, `/admin/configuration`, and entity management pages. |
+| Auth/setup | `/setup`, `/sign-in`, `/sign-up`, `/profile`, password reset, and verification routes. |
+| Panel APIs | Authenticated media, upload, processing, deletion-status, full-video, subtitle, storage, revalidation, and deployment-config endpoints. |
+| Worker | `/health`, `/status`, `/logs`, registration/recovery endpoints, and the scheduled scan. |
+
+Do not expose authenticated Worker endpoints publicly. Use the configured
+Bearer secret and least-privilege Cloudflare credentials.
+
+## Uploading media
+
+The browser uploader is suitable for normal uploads and uses the configured
+storage provider. The Windows folder uploader is resumable and stores its state
+outside the repository under the platform's application-data directory. It
+keeps completed multipart work, supports retries and bounded file/part
+concurrency, and uploads files only; the Worker remains responsible for
+registration.
+
+```powershell
+pnpm upload:folder
+```
+
+Use the GUI to enter the Drive URL, API key, project, bucket, source folder,
+recursive mode, file/part concurrency, and part size. For a stopped upload,
+restart the uploader with the same profile and source folder so its state can
+resume. Do not delete its state file while recovery is needed. Credentials are
+kept separately from the upload trace and should never be committed.
+
+The uploader's successful message means the object reached storage, not that a
+media row already exists. Wait for the Worker scan and verify the file in Admin
+Processing before treating the upload as registered.
+
+## Video processing and playback
+
+Video registration and video derivative processing are independent. The
+optional processor can create posters, previews, subtitles, compatibility
+streams, and HLS artifacts depending on the enabled configuration and source
+media. Original video delivery remains the fallback and should be tested before
+relying on a derivative.
+
+For large files, keep processing concurrency bounded, allow enough temporary
+disk space for FFmpeg, and use a bounded one-batch diagnostic run when
+investigating processor failures.
+Inspect orchestrator job state and processor output before retrying a failed
+job. Repeated retries without checking the underlying storage, range request,
+or FFmpeg error can create unnecessary work.
+
+## Testing and release checklist
+
+Before a release or deployment:
+
+```bash
+pnpm install
+pnpm exec tsc --noEmit
+pnpm lint
+pnpm test -- --runInBand
+pnpm build
+
+cd workers/backend-orchestrator
+pnpm install
+pnpm test
+pnpm run build
+
+cd ../backend-processor
+pnpm install
+pnpm test
+pnpm run build
+```
+
+Then verify a staging or test account with one image, one video, a large or
+slow registration, a delete of one file and a batch delete, a public page, a
+media detail page, and an authenticated admin page. Confirm that the deployed
+Worker health response reports the expected build marker. A local build does
+not prove that the deployed Worker, database, Drive endpoint, or storage CORS
+configuration is healthy.
+
+## Troubleshooting quick reference
+
+| Symptom | First checks |
+| --- | --- |
+| Upload completed but media is missing | Confirm the storage object, Worker cron/health, registration record, and scan lease. |
+| Registration retries repeatedly | Check Drive copy/readability, object size, endpoint logs, stale lease recovery, and the deployed Worker version before increasing retries. |
+| Large files take a long time | Keep one bounded job per pass, verify range/copy support and timeouts, and allow the next scheduled pass to resume it. |
+| Admin stats are empty | Confirm auth capability, database connection, automatic table creation, and Worker status tables. |
+| Video will not play | Test original delivery and an authorized range request, then inspect poster/stream/HLS/processor status. |
+| Public page is slow | Check static optimization switches in **Configuration -> Performance**, storage delivery latency, image derivatives, and cache headers. |
+| Delete appears stuck | Check the deletion queue endpoint and Worker logs; queue acceptance and storage cleanup are separate events. |
+| Browser upload fails | Check provider CORS, allowed methods/headers, public origin, multipart part size, and presigned URL expiry. |
+| TLS/database errors | Verify the actual PostgreSQL provider/URI and SSL mode. A TLS handshake error is not a SQL query error. |
+
+When reporting a bug, include the route, browser/device, media ID or safe file
+identifier, timestamp with timezone, panel deployment version, Worker build
+marker, and the relevant redacted log lines. Never include passwords, bearer
+tokens, database URIs, or storage secrets.
+
+## Contributing and adapting
+
+Make the project your own. Anyone working with the repository can fork it,
+modify the UI, replace a storage or messaging provider, add features, fix bugs,
+or adapt the deployment to fit their own library. The codebase is intentionally
+open to experimentation while it is being actively improved.
+
+Before sharing a change, run the relevant tests and build, check the complete
+media lifecycle with safe test files, and document any new environment
+variables or database behavior. Keep credentials, personal media, generated
+`.env` files, and production data out of commits. There is currently no license
+file in this repository, so add the license that matches your intended use
+before redistributing it as a separate product.
 
 ## Deploying the Cloudflare registration Worker
 
@@ -293,7 +643,7 @@ npm start
 ```
 
 It requires `BACKEND_ORCHESTRATOR_BASE_URL` and
-`BACKEND_PROCESSOR_SHARED_SECRET`. Set `RUN_ONCE=1` for one-batch checks.
+`BACKEND_PROCESSOR_SHARED_SECRET`.
 
 ## GitHub Actions
 

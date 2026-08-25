@@ -1,25 +1,13 @@
 'use client';
 
 import { usePathname } from 'next/navigation';
-import {
-  AdminPageSkeleton,
-  MediaDetailSkeleton,
-  MediaFullSkeleton,
-  MediaGridSkeleton,
-} from './PageSkeletons';
-
-const isDetailPath = (pathname: string) => {
-  const segments = pathname.split('/').filter(Boolean);
-  const lastSegment = segments[segments.length - 1];
-  return Boolean(lastSegment && /^\d{12}$/.test(lastSegment));
-};
+import { AdminPageSkeleton } from './PageSkeletons';
 
 export default function RouteSkeleton() {
   const pathname = usePathname() ?? '/';
   if (pathname.startsWith('/admin')) { return <AdminPageSkeleton />; }
-  if (isDetailPath(pathname)) { return <MediaDetailSkeleton />; }
-  if (pathname === '/full' || pathname.endsWith('/full')) {
-    return <MediaFullSkeleton />;
-  }
-  return <MediaGridSkeleton withSidebar={!pathname.startsWith('/search')} />;
+  // Public grid, full-list, and detail routes render their own media-aware
+  // loading states. The generic app fallback only caused a second skeleton to
+  // flash over those pages during navigation.
+  return null;
 }

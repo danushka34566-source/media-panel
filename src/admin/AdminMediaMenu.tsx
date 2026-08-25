@@ -19,7 +19,7 @@ import {
   downloadFileNameForMedia,
 } from '@/media';
 import { isPathFavs, isMediaFav, TAG_PRIVATE } from '@/tag';
-import { usePathname } from 'next/navigation';
+import { usePathname, useRouter } from 'next/navigation';
 import MoreMenu, { MoreMenuSection } from '@/components/more/MoreMenu';
 import { useAppState } from '@/app/AppState';
 import { RevalidateMedia } from '@/media/InfiniteMediaScroll';
@@ -37,6 +37,8 @@ import IconTrash from '@/components/icons/IconTrash';
 import IconTag from '@/components/icons/IconTag';
 import AdminMediaQuickEditModal from './AdminMediaQuickEditModal';
 import useKeydownHandler from '@/utility/useKeydownHandler';
+import { monitorMediaDeletion } from './deletion-progress';
+import { toastSuccess } from '@/toast';
 
 export default function AdminMediaMenu({
   photo,
@@ -69,6 +71,7 @@ export default function AdminMediaMenu({
   const appText = useAppText();
 
   const path = usePathname();
+  const router = useRouter();
   const pathComponents = getPathComponents(path);
   const isOnMediaDetail = pathComponents.photoId === photo.id;
   const isFav = isMediaFav(photo);
@@ -192,13 +195,20 @@ export default function AdminMediaMenu({
           tone: 'danger',
         });
         if (!didConfirm) { return false; }
-        return deleteMediaAction(
-          photo.id,
-          photo.url,
-          shouldRedirectDelete,
-        ).then(() => {
-          revalidateMedia?.(photo.id, true);
+        // Direct server-action redirects do not settle reliably from inside a
+        // Radix menu item. Finish the action first, then navigate explicitly
+        // so the menu can clean up and the detail page cannot remain mounted.
+        return deleteMediaAction(photo.id, photo.url).then(async () => {
+          await revalidateMedia?.(photo.id, true);
           registerAdminUpdate?.();
+          toastSuccess(`"${photo.title || photo.id}" added to delete queue`);
+          void monitorMediaDeletion(
+            [photo.id],
+            `"${photo.title || photo.id}" deleted`,
+          );
+          if (shouldRedirectDelete) {
+            router.replace(PATH_ROOT, { scroll: false });
+          }
         });
       },
       ...showKeyCommands && {
@@ -213,6 +223,7 @@ export default function AdminMediaMenu({
     revalidateMedia,
     shouldRedirectDelete,
     registerAdminUpdate,
+    router,
   ]);
 
   const sections = useMemo(() =>

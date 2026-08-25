@@ -88,7 +88,10 @@ export default function MoreMenu({
           align={align}
           sideOffset={sideOffset}
           className={clsx(
-            'z-10',
+            // Menus are portalled to the document body. Keep them above the
+            // sticky navigation, selection toolbar, and media overlays so
+            // every item remains reachable at any scroll position.
+            'z-50',
             'min-w-[8rem]',
             'component-surface',
             'py-1',

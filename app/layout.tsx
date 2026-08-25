@@ -29,6 +29,7 @@ import Script from 'next/script';
 import DeferredGlobalFeatures from '@/app/DeferredGlobalFeatures';
 import IdleSessionLogout from '@/auth/IdleSessionLogout';
 import PageResumeRecovery from '@/app/PageResumeRecovery';
+import DeferredAdminBatchEditPanel from '@/admin/select/DeferredAdminBatchEditPanel';
 
 import '../tailwind.css';
 import { Geist } from "next/font/google";
@@ -122,6 +123,7 @@ export default async function RootLayout({
                       'lg:mx-6 lg:mb-6',
                     )}>
                       <Nav />
+                      <DeferredAdminBatchEditPanel />
                       <main>
                         <div
                           data-page-content

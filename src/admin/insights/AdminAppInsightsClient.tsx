@@ -3,10 +3,15 @@
 import ScoreCard from '@/components/ScoreCard';
 import ScoreCardRow from '@/components/ScoreCardRow';
 import { formattedDateRangeForMedia } from '@/media';
-import { FaArrowRight, FaCircleInfo, FaRegCalendar } from 'react-icons/fa6';
+import {
+  FaArrowRight,
+  FaBuilding,
+  FaCircleInfo,
+  FaRegCalendar,
+  FaUsers,
+} from 'react-icons/fa6';
 import { MdAspectRatio } from 'react-icons/md';
 import { PiWarningBold } from 'react-icons/pi';
-import { TbSparkles } from 'react-icons/tb';
 import { BiGitBranch, BiGitCommit, BiLogoGithub } from 'react-icons/bi';
 import {
   TEMPLATE_REPO_BRANCH,
@@ -16,7 +21,6 @@ import {
   VERCEL_GIT_COMMIT_MESSAGE,
   TEMPLATE_REPO_URL_FORK,
   TEMPLATE_REPO_URL_README,
-  CATEGORY_VISIBILITY,
   USED_DEPRECATED_ENV_VARS,
 } from '@/app/config';
 import {
@@ -28,7 +32,10 @@ import {
 import EnvVar from '@/components/EnvVar';
 import { IoSyncCircle } from 'react-icons/io5';
 import clsx from 'clsx/lite';
-import { PATH_ADMIN_MEDIA_UPDATES } from '@/app/path';
+import {
+  PATH_ADMIN_CONFIGURATION,
+  PATH_ADMIN_MEDIA_UPDATES,
+} from '@/app/path';
 import { LiaBroomSolid } from 'react-icons/lia';
 import { IoMdGrid } from 'react-icons/io';
 import { RiSpeedMiniLine } from 'react-icons/ri';
@@ -45,6 +52,8 @@ import IconFilm from '@/components/icons/IconFilm';
 import IconFocalLength from '@/components/icons/IconFocalLength';
 import IconTag from '@/components/icons/IconTag';
 import IconMedia from '@/components/icons/IconMedia';
+import IconAlbum from '@/components/icons/IconAlbum';
+import IconYear from '@/components/icons/IconYear';
 import { LuPlay } from 'react-icons/lu';
 import { HiOutlineDocumentText } from 'react-icons/hi';
 import { ReactNode } from 'react';
@@ -119,16 +128,19 @@ export default function AdminAppInsightsClient({
   nextVersion,
   insights,
   usedDeprecatedEnvVars,
-  photoStats: {
-    photosCount,
-    photosCountHidden,
-    photosCountNeedSync,
+  mediaStats: {
+    mediaCountNeedSync,
+    categoriesCount,
     camerasCount,
+    albumsCount,
     lensesCount,
+    studiosCount,
+    performersCount,
     tagsCount,
     recipesCount,
     filmsCount,
     focalLengthsCount,
+    yearsCount,
     dateRange,
     mediaCounts,
     mediaCountsHidden,
@@ -138,7 +150,7 @@ export default function AdminAppInsightsClient({
   nextVersion: string
   insights: ReturnType<typeof getAllInsights>
   usedDeprecatedEnvVars: typeof USED_DEPRECATED_ENV_VARS
-  photoStats: MediaStats
+  mediaStats: MediaStats
 }) {
   const { shouldDebugInsights: debug } = useAppState();
 
@@ -146,12 +158,11 @@ export default function AdminAppInsightsClient({
     deprecatedEnvVars,
     noFork,
     forkBehind,
-    noAi,
     noRateLimiting,
     noConfiguredDomain,
     noConfiguredMetaTitle,
     noConfiguredMetaDescription,
-    photosNeedSync,
+    mediaNeedSync,
     photoMatting,
     gridFirst,
     noStaticOptimization,
@@ -404,48 +415,24 @@ export default function AdminAppInsightsClient({
               />}
               content="Speed up page load times"
               expandContent={<>
-                Improve load times by enabling static optimization:
-                <div className="flex flex-col gap-y-4 mt-3">
-                  {renderLabeledEnvVar(
-                    'Media pages',
-                    'NEXT_PUBLIC_STATICALLY_OPTIMIZE_MEDIA',
-                    '1',
-                  )}
-                  {renderLabeledEnvVar(
-                    'Media OG images',
-                    'NEXT_PUBLIC_STATICALLY_OPTIMIZE_MEDIA_OG_IMAGES',
-                    '1',
-                  )}
-                  {renderLabeledEnvVar(
-                    'Category pages (tags, cameras, etc.)',
-                    'NEXT_PUBLIC_STATICALLY_OPTIMIZE_MEDIA_CATEGORIES',
-                    '1',
-                  )}
-                  {renderLabeledEnvVar(
-                    'Category OG images',
-                    'NEXT_PUBLIC_STATICALLY_OPTIMIZE_MEDIA_CATEGORY_OG_IMAGES',
-                    '1',
-                  )}
-                  <span>
-                    See {readmeAnchor('performance')} for cost implications.
-                  </span>
-                </div>
-              </>}
-            />}
-            {(noAi || debug) && <ScoreCardRow
-              icon={<TbSparkles size={17} />}
-              content="Improve SEO + accessibility with AI"
-              expandContent={<>
-                Enable automatic AI text generation
+                Improve load times by enabling one or more static
+                optimization options in the
                 {' '}
-                by setting <EnvVar
-                  variable="OPENAI_SECRET_KEY"
-                  trailingContent="."
-                />
-                {' '}
-                Further instruction and cost considerations in
-                {' '}
-                {readmeAnchor('ai-text-generation')}.
+                <AdminLink
+                  href={`${PATH_ADMIN_CONFIGURATION}#performance`}
+                >
+                  Performance settings
+                </AdminLink>
+                :
+                <ul className="mt-3 list-disc space-y-1 pl-5">
+                  <li>Media pages</li>
+                  <li>Media social images</li>
+                  <li>Category pages</li>
+                  <li>Category social images</li>
+                </ul>
+                <span className="mt-3 block">
+                  See {readmeAnchor('performance')} for cost implications.
+                </span>
               </>}
             />}
             {(photoMatting || debug) && <ScoreCardRow
@@ -487,7 +474,7 @@ export default function AdminAppInsightsClient({
           </AdminEmptyState>}
       </ScoreCard>
       <ScoreCard title="Library Stats">
-        {(photosNeedSync || debug) && <ScoreCardRow
+        {(mediaNeedSync || debug) && <ScoreCardRow
           icon={<LiaBroomSolid
             size={19}
             className={clsx(
@@ -498,7 +485,7 @@ export default function AdminAppInsightsClient({
           content={<>
             {renderHighlightText(
               pluralize(
-                photosCountNeedSync || DEBUG_MEDIA_NEED_SYNC_COUNT,
+                mediaCountNeedSync || DEBUG_MEDIA_NEED_SYNC_COUNT,
                 'photo',
               ),
               'blue',
@@ -511,88 +498,79 @@ export default function AdminAppInsightsClient({
           </>}
           expandPath={PATH_ADMIN_MEDIA_UPDATES}
         />}
-        <ScoreCardRow
+        {mediaCounts?.photos && mediaCounts.videos ? <ScoreCardRow
           icon={<IconMedia
             size={15}
             className="translate-y-[0.5px]"
           />}
           content={<>
-            {mediaCounts
-              ? `${mediaCounts.total} media`
-              : pluralize(photosCount, 'photo')}
+            {mediaCounts.total} media
             {mediaCountsHidden && mediaCountsHidden.total > 0
               ? ` (${mediaCountsHidden.total} hidden)`
-              : (!mediaCounts && photosCountHidden > 0
-                ? ` (${photosCountHidden} hidden)`
-                : '')}
+              : ''}
           </>}
-        />
-        {mediaCounts && <>
-          <ScoreCardRow
-            icon={<IconMedia size={15} className="translate-y-[0.5px]" />}
-            content={`${mediaCounts.photos} photos`}
-          />
-          <ScoreCardRow
-            icon={<LuPlay size={14} className="translate-y-[1px]" />}
-            content={`${mediaCounts.videos} videos`}
-          />
-        </>}
-        {CATEGORY_VISIBILITY.map(category => {
-          switch (category) {
-            case 'cameras':
-              return <ScoreCardRow
-                key={category}
-                icon={<IconCamera
-                  size={15}
-                  className="translate-y-[0.5px]"
-                />}
-                content={pluralize(camerasCount, 'camera')}
-              />;
-            case 'lenses':
-              return <ScoreCardRow
-                key={category}
-                icon={<IconLens
-                  size={15}
-                  className="translate-y-[0.5px]"
-                />}
-                content={pluralize(lensesCount, 'lens', 'lenses')}
-              />;
-            case 'tags':
-              return <ScoreCardRow
-                key={category}
-                icon={<IconTag
-                  size={15}
-                  className="translate-x-[1px] translate-y-[1px]"
-                />}
-                content={pluralize(tagsCount, 'tag')}
-              />;
-            case 'recipes':
-              return recipesCount > 0
-                ? <ScoreCardRow
-                  key={category}
-                  icon={<IconRecipe
-                    size={18}
-                    className="translate-x-[0.5px] translate-y-[-0.5px]"
-                  />}
-                  content={pluralize(recipesCount, 'recipe')}
-                />
-                : null;
-            case 'films':
-              return filmsCount > 0
-                ? <ScoreCardRow
-                  key={category}
-                  icon={<IconFilm size={15} />}
-                  content={pluralize(filmsCount, 'film')}
-                />
-                : null;
-            case 'focal-lengths':
-              return <ScoreCardRow
-                key={category}
-                icon={<IconFocalLength size={14} />}
-                content={pluralize(focalLengthsCount, 'focal length')}
-              />;
-          }
-        })}
+        /> : null}
+        {mediaCounts?.photos ? <ScoreCardRow
+          icon={<IconMedia size={15} className="translate-y-[0.5px]" />}
+          content={`${mediaCounts.photos} photos`}
+        /> : null}
+        {mediaCounts?.videos ? <ScoreCardRow
+          icon={<LuPlay size={14} className="translate-y-[1px]" />}
+          content={`${mediaCounts.videos} videos`}
+        /> : null}
+        {yearsCount > 0 && <ScoreCardRow
+          icon={<IconYear size={15} />}
+          content={pluralize(yearsCount, 'year')}
+        />}
+        {albumsCount > 0 && <ScoreCardRow
+          icon={<IconAlbum size={15} />}
+          content={pluralize(albumsCount, 'album')}
+        />}
+        {categoriesCount > 0 && <ScoreCardRow
+          icon={<IconTag
+            size={15}
+            className="translate-x-[1px] translate-y-[1px]"
+          />}
+          content={pluralize(categoriesCount, 'category')}
+        />}
+        {studiosCount > 0 && <ScoreCardRow
+          icon={<FaBuilding size={14} />}
+          content={pluralize(studiosCount, 'studio')}
+        />}
+        {performersCount > 0 && <ScoreCardRow
+          icon={<FaUsers size={15} />}
+          content={pluralize(performersCount, 'performer')}
+        />}
+        {camerasCount > 0 && <ScoreCardRow
+          icon={<IconCamera size={15} className="translate-y-[0.5px]" />}
+          content={pluralize(camerasCount, 'camera')}
+        />}
+        {lensesCount > 0 && <ScoreCardRow
+          icon={<IconLens size={15} className="translate-y-[0.5px]" />}
+          content={pluralize(lensesCount, 'lens', 'lenses')}
+        />}
+        {tagsCount > 0 && <ScoreCardRow
+          icon={<IconTag
+            size={15}
+            className="translate-x-[1px] translate-y-[1px]"
+          />}
+          content={pluralize(tagsCount, 'tag')}
+        />}
+        {recipesCount > 0 && <ScoreCardRow
+          icon={<IconRecipe
+            size={18}
+            className="translate-x-[0.5px] translate-y-[-0.5px]"
+          />}
+          content={pluralize(recipesCount, 'recipe')}
+        />}
+        {filmsCount > 0 && <ScoreCardRow
+          icon={<IconFilm size={15} />}
+          content={pluralize(filmsCount, 'film')}
+        />}
+        {focalLengthsCount > 0 && <ScoreCardRow
+          icon={<IconFocalLength size={14} />}
+          content={pluralize(focalLengthsCount, 'focal length')}
+        />}
         {descriptionWithSpaces && <ScoreCardRow
           icon={<FaRegCalendar
             size={13}

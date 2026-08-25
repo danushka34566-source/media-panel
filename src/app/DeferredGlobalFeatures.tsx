@@ -7,9 +7,6 @@ import DeferredCommandK from '@/cmdk/DeferredCommandK';
 const GlobalMediaUpload = dynamic(() => import('@/media/GlobalMediaUpload'));
 const ShareModals = dynamic(() => import('@/share/ShareModals'));
 const RecipeModal = dynamic(() => import('@/recipe/RecipeModal'));
-const AdminBatchEditPanel = dynamic(
-  () => import('@/admin/select/DeferredAdminBatchEditPanel'),
-);
 
 export default function DeferredGlobalFeatures({
   onLastUpload,
@@ -47,7 +44,6 @@ export default function DeferredGlobalFeatures({
       <GlobalMediaUpload shouldResize={false} onLastUpload={onLastUpload} />
       <ShareModals />
       <RecipeModal />
-      <AdminBatchEditPanel />
     </>}
   </>;
 }

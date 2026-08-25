@@ -190,7 +190,12 @@ export default function AdminBatchEditPanelClient({
 
   return shouldShowPanel
     ? <AppGrid
-      className="sticky top-0 z-10 -mt-2 pt-2"
+      className={clsx(
+        // Keep the toolbox in normal page flow below the header. It should
+        // never cover media, the header, or the visible edge of a sidebar.
+        'relative z-20 mb-3 pointer-events-auto',
+      )}
+      classNameMain="md:col-span-12"
       contentMain={<div className="flex flex-col gap-2">
         <Note
           ref={refNote}

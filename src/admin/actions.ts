@@ -63,7 +63,7 @@ export const getAdminDataAction = async () =>
     const [
       photosCount,
       photosCountHidden,
-      photosCountNeedSync,
+      mediaCountNeedSync,
       codeMeta,
       albumsCount,
       categoriesCount,
@@ -90,7 +90,7 @@ export const getAdminDataAction = async () =>
 
     const insightsIndicatorStatus = indicatorStatusForSignificantInsights({
       codeMeta,
-      photosCountNeedSync,
+      mediaCountNeedSync,
     });
 
     const photosCountTotal = (
@@ -103,7 +103,7 @@ export const getAdminDataAction = async () =>
     return {
       photosCount,
       photosCountHidden,
-      photosCountNeedSync,
+      photosCountNeedSync: mediaCountNeedSync,
       photosCountTotal,
       mediaCounts: {
         photos: mediaTypeCounts.photos,
