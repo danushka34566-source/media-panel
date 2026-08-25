@@ -213,6 +213,7 @@ export default function MediaDetailPage({
             priority
             preloadSubtitleManifest={false}
             broadcastDetailVideoPlayback
+            mountPreviewOnlyWhenVisible
             prefetchRelatedLinks
             recent={recent}
             year={year}

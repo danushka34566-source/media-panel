@@ -217,6 +217,7 @@ export default function MediaLarge({
   resolveOptimizedPlaybackUrl = true,
   preloadSubtitleManifest = false,
   broadcastDetailVideoPlayback = false,
+  mountPreviewOnlyWhenVisible = false,
 }: {
   photo: Media
   className?: string
@@ -255,6 +256,7 @@ export default function MediaLarge({
   resolveOptimizedPlaybackUrl?: boolean
   preloadSubtitleManifest?: boolean
   broadcastDetailVideoPlayback?: boolean
+  mountPreviewOnlyWhenVisible?: boolean
 } & Pick<MediaSetCategory, 'camera' | 'lens' | 'tag' | 'category' |
   'studio' | 'performer' | 'contentType' | 'film' | 'recipe' | 'focal'>) {
   const router = useRouter();
@@ -550,8 +552,10 @@ export default function MediaLarge({
       isVideo &&
       videoPreviewMode !== 'off' &&
       automaticPreviewSrc &&
-      !isFullVideoPlaying,
+      !isFullVideoPlaying &&
+      !mountPreviewOnlyWhenVisible,
     ),
+    mountOnlyWhenVisible: mountPreviewOnlyWhenVisible,
     preloadUrl: automaticPreviewSrc,
   });
   const shouldRenderPreview = shouldMountPreview || isPreviewExiting;

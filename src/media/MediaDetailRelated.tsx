@@ -45,6 +45,7 @@ export default function MediaDetailRelated({
     {...categories}
     autoplaySmartPreviews
     suspendSmartPreviewsOnMainPlayback
+    mountPreviewsOnlyWhenVisible
     animateOnFirstLoadOnly
   />} />;
 }

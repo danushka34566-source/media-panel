@@ -14,6 +14,7 @@ type PreviewEntry = {
   element: HTMLElement
   enabled: boolean
   preloadEnabled: boolean
+  mountOnlyWhenVisible: boolean
   requiresCapableDevice: boolean
   preloadUrl?: string
   isMounted: boolean
@@ -131,6 +132,7 @@ const updateActivePreviews = () => {
   const viewportCenter = window.innerHeight / 2;
   const warmEntries = new Set([...entries.values()]
     .filter(entry => entry.preloadEnabled &&
+      !entry.mountOnlyWhenVisible &&
       Boolean(entry.preloadUrl) &&
       !isFullVideoPlaybackActive &&
       isInPreviewPreloadRange(entry.element))
@@ -150,7 +152,12 @@ const updateActivePreviews = () => {
       entry.intersectionRatio > 0 &&
       !isFullVideoPlaybackActive &&
       (!entry.requiresCapableDevice || allowLargeVideoPreview);
-    setPreviewMounted(entry, shouldBeActive || warmEntries.has(entry));
+    setPreviewMounted(
+      entry,
+      shouldBeActive || (
+        !entry.mountOnlyWhenVisible && warmEntries.has(entry)
+      ),
+    );
     if (entry.isActive !== shouldBeActive) {
       entry.isActive = shouldBeActive;
       entry.setActive(shouldBeActive);
@@ -350,12 +357,16 @@ export default function useVideoPreviewLifecycle({
   ref,
   enabled,
   preloadEnabled = false,
+  mountOnlyWhenVisible = false,
   requiresCapableDevice = false,
   preloadUrl,
 }: {
   ref: RefObject<HTMLElement | null>
   enabled: boolean
   preloadEnabled?: boolean
+  // Detail-page previews should not keep paused video elements mounted ahead
+  // of the viewport. Posters remain mounted by the card component.
+  mountOnlyWhenVisible?: boolean
   requiresCapableDevice?: boolean
   preloadUrl?: string
 }) {
@@ -377,6 +388,7 @@ export default function useVideoPreviewLifecycle({
       element,
       enabled,
       preloadEnabled,
+      mountOnlyWhenVisible,
       requiresCapableDevice,
       preloadUrl,
       isMounted: false,
@@ -443,6 +455,7 @@ export default function useVideoPreviewLifecycle({
   }, [
     activationKey,
     enabled,
+    mountOnlyWhenVisible,
     preloadEnabled,
     preloadUrl,
     reactId,

@@ -56,6 +56,7 @@ export default function MediaGrid({
   selectable = true,
   autoplaySmartPreviews = false,
   suspendSmartPreviewsOnMainPlayback = false,
+  mountPreviewsOnlyWhenVisible = false,
   onLastMediaVisible,
   onAnimationComplete,
   ...categories
@@ -74,6 +75,7 @@ export default function MediaGrid({
   selectable?: boolean
   autoplaySmartPreviews?: boolean
   suspendSmartPreviewsOnMainPlayback?: boolean
+  mountPreviewsOnlyWhenVisible?: boolean
   onLastMediaVisible?: () => void
   onAnimationComplete?: () => void
 } & MediaSetCategory) {
@@ -275,6 +277,7 @@ export default function MediaGrid({
                 initiallyLoadPreviewImage:
                   prioritizeInitialMedia && index < 2,
                 preloadVideoPreview: !areSmartPreviewsSuspended &&
+                  !mountPreviewsOnlyWhenVisible &&
                   shouldPreloadGridPreview(
                     videoPreviewMode,
                     autoplaySmartPreviews,
@@ -289,6 +292,7 @@ export default function MediaGrid({
                     autoplaySmartPreviews,
                     smartPreviewIds.has(photo.id),
                   ),
+                mountPreviewOnlyWhenVisible: mountPreviewsOnlyWhenVisible,
                 // Smart mode is coordinated at grid level: a desktop hover
                 // activates the complete row and mobile activates three rows.
                 hoverPreviewEnabled: videoPreviewMode === 'off',

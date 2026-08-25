@@ -35,6 +35,7 @@ export default function MediaMedium({
   initiallyLoadPreviewImage = false,
   preloadVideoPreview = false,
   autoPreviewEnabled = true,
+  mountPreviewOnlyWhenVisible = false,
   hoverPreviewEnabled = false,
   ...categories
 }: {
@@ -49,6 +50,7 @@ export default function MediaMedium({
   initiallyLoadPreviewImage?: boolean
   preloadVideoPreview?: boolean
   autoPreviewEnabled?: boolean
+  mountPreviewOnlyWhenVisible?: boolean
   hoverPreviewEnabled?: boolean
 } & MediaSetCategory) {
   const ref = useRef<HTMLAnchorElement>(null);
@@ -76,9 +78,11 @@ export default function MediaMedium({
       isVideoMedia(photo) &&
       enableVideoPreview &&
       preloadVideoPreview &&
+      !mountPreviewOnlyWhenVisible &&
       previewSrc &&
       !hasVideoFailed,
     ),
+    mountOnlyWhenVisible: mountPreviewOnlyWhenVisible,
     preloadUrl: previewSrc,
   });
   const shouldRenderPreview = shouldMountPreview || isPreviewExiting;

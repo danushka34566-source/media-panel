@@ -42,12 +42,14 @@ function PreviewProbe({
   enabled = true,
   preloadEnabled,
   preloadUrl,
+  mountOnlyWhenVisible = false,
   requiresCapableDevice = false,
 }: {
   id?: string
   enabled?: boolean
   preloadEnabled?: boolean
   preloadUrl?: string
+  mountOnlyWhenVisible?: boolean
   requiresCapableDevice?: boolean
 }) {
   const ref = useRef<HTMLDivElement>(null);
@@ -56,6 +58,7 @@ function PreviewProbe({
     enabled,
     preloadEnabled,
     preloadUrl,
+    mountOnlyWhenVisible,
     requiresCapableDevice,
   });
   return createElement(
@@ -401,6 +404,35 @@ describe('video preview lifecycle policy', () => {
 
     act(() => window.dispatchEvent(new Event('scroll')));
     expect(screen.getByTestId('card-preview')).toBe(preview);
+
+    unmount();
+    rectSpy.mockRestore();
+  });
+
+  it('does not warm detail previews outside the viewport', () => {
+    const rect = {
+      bottom: 300,
+      height: 200,
+      left: 0,
+      right: 300,
+      top: 100,
+      width: 300,
+      x: 0,
+      y: 100,
+      toJSON: () => ({}),
+    };
+    const rectSpy = jest.spyOn(
+      HTMLElement.prototype,
+      'getBoundingClientRect',
+    ).mockReturnValue(rect);
+    const { unmount } = render(createElement(PreviewProbe, {
+      enabled: false,
+      preloadEnabled: true,
+      preloadUrl: 'https://example.com/preview.mp4',
+      mountOnlyWhenVisible: true,
+    }));
+
+    expect(screen.queryByTestId('card-preview')).toBeNull();
 
     unmount();
     rectSpy.mockRestore();
