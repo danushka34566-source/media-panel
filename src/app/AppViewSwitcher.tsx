@@ -29,12 +29,11 @@ import { usePathname, useRouter } from 'next/navigation';
 import { KEY_COMMANDS } from '@/media/key-commands';
 import { useAppText } from '@/i18n/state/client';
 import IconSort from '@/components/icons/IconSort';
-import { getPathForSortBy, getSortStateFromPath } from '@/media/sort/path';
+import { getSortStateFromPath } from '@/media/sort/path';
 import { motion } from 'framer-motion';
 import SortMenu from '@/media/sort/SortMenu';
 import { SWR_KEYS } from '@/swr';
 import {
-  getMediaSortPreferenceAction,
   setMediaSortPreferenceAction,
 } from '@/auth/actions';
 import {
@@ -47,14 +46,19 @@ export type SwitcherSelection = 'full' | 'grid' | 'admin';
 const GAP_CLASS_RIGHT = 'mr-1.5 sm:mr-2';
 const GAP_CLASS_LEFT  = 'ml-0.5 sm:ml-1';
 const GRID_MODE_SWITCH_FEEDBACK_MS = 220;
+const GRID_MODE_ANIMATION_OVERSCAN_VIEWPORTS = 1;
 
 type VisibleGridCard = {
   left: number
   top: number
 };
 
-const captureVisibleGridCards = () => {
+const captureGridCards = () => {
   const cards = new Map<string, VisibleGridCard>();
+  const overscan = Math.max(
+    640,
+    window.innerHeight * GRID_MODE_ANIMATION_OVERSCAN_VIEWPORTS,
+  );
   document.querySelectorAll<HTMLElement>(
     '[data-media-smart-preview-card][data-preview-id]',
   ).forEach(element => {
@@ -62,20 +66,28 @@ const captureVisibleGridCards = () => {
     // never own the same transform at the same time.
     element.getAnimations().forEach(animation => animation.cancel());
     const rect = element.getBoundingClientRect();
-    if (rect.bottom <= 0 || rect.top >= window.innerHeight) { return; }
+    if (rect.bottom <= -overscan || rect.top >= window.innerHeight + overscan) {
+      return;
+    }
     const id = element.dataset.previewId;
     if (id) { cards.set(id, { left: rect.left, top: rect.top }); }
   });
   return cards;
 };
 
-const animateVisibleGridCards = (previous: Map<string, VisibleGridCard>) => {
+const animateGridCards = (previous: Map<string, VisibleGridCard>) => {
   if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) { return; }
   // Wait for the browser to commit the new grid columns, then perform one
   // read/animate pass. Measuring immediately after flushSync can still read
-  // the old grid track sizes on mobile browsers.
+  // the old grid track sizes on mobile browsers. Keep this bounded to the
+  // viewport plus one viewport of overscan on either side; animating an
+  // entire long feed creates too many simultaneous layout animations.
   window.requestAnimationFrame(() => {
     window.requestAnimationFrame(() => {
+      const overscan = Math.max(
+        640,
+        window.innerHeight * GRID_MODE_ANIMATION_OVERSCAN_VIEWPORTS,
+      );
       document.querySelectorAll<HTMLElement>(
         '[data-media-smart-preview-card][data-preview-id]',
       ).forEach(element => {
@@ -83,18 +95,29 @@ const animateVisibleGridCards = (previous: Map<string, VisibleGridCard>) => {
         const from = id ? previous.get(id) : undefined;
         if (!from) { return; }
         const rect = element.getBoundingClientRect();
-        if (rect.bottom <= 0 || rect.top >= window.innerHeight) { return; }
+        if (rect.bottom <= -overscan || rect.top >= window.innerHeight + overscan) {
+          return;
+        }
         const x = from.left - rect.left;
         const y = from.top - rect.top;
         if (Math.abs(x) < 0.5 && Math.abs(y) < 0.5) { return; }
         element.getAnimations().forEach(animation => animation.cancel());
-        element.animate([
-          { transform: `translate3d(${x}px, ${y}px, 0)` },
-          { transform: 'translate3d(0, 0, 0)' },
+        const animation = element.animate([
+          {
+            transform: `translate3d(${x}px, ${y}px, 0) scale(0.985)`,
+          },
+          {
+            offset: 0.78,
+            transform: 'translate3d(0, 0, 0) scale(1.006)',
+          },
+          { transform: 'translate3d(0, 0, 0) scale(1)' },
         ], {
-          duration: 260,
-          easing: 'cubic-bezier(0.22, 1, 0.36, 1)',
+          duration: 380,
+          easing: 'cubic-bezier(0.16, 1, 0.3, 1)',
           fill: 'both',
+        });
+        animation.addEventListener('finish', () => animation.cancel(), {
+          once: true,
         });
       });
     });
@@ -157,31 +180,24 @@ export default function AppViewSwitcher({
   }, [invalidateSwr, sortBy]);
 
   useEffect(() => {
-    if (!isUserSignedIn || !userEmail || !doesPathOfferSort) { return; }
+    // Bare feed routes resolve the saved preference on the server before the
+    // first render. Reading it here and replacing the URL after hydration
+    // caused a visible order correction and a second feed request. Explicit
+    // sort routes are already authoritative, so only persist those choices.
+    if (
+      !isUserSignedIn ||
+      !userEmail ||
+      !doesPathOfferSort ||
+      isSortedByDefault
+    ) { return; }
 
-    let cancelled = false;
-    void (async () => {
-      try {
-        const preference = await getMediaSortPreferenceAction();
-        if (cancelled) { return; }
-        if (preference && preference !== sortBy && isSortedByDefault) {
-          router.replace(getPathForSortBy(pathname, preference));
-          return;
-        }
-        if (preference !== sortBy) {
-          await setMediaSortPreferenceAction(sortBy);
-        }
-      } catch {
-        // Sorting stays fully usable when the preference store is unavailable.
-      }
-    })();
-    return () => { cancelled = true; };
+    void setMediaSortPreferenceAction(sortBy).catch(() => {
+      // Sorting stays fully usable when the preference store is unavailable.
+    });
   }, [
     doesPathOfferSort,
     isSortedByDefault,
     isUserSignedIn,
-    pathname,
-    router,
     sortBy,
     userEmail,
   ]);
@@ -195,7 +211,7 @@ export default function AppViewSwitcher({
     useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const toggleGridMode = useCallback(() => {
     const viewportAnchor = captureMediaViewportAnchor();
-    const visibleCards = captureVisibleGridCards();
+    const gridCards = captureGridCards();
     document.documentElement.dataset.gridModeSwitching = 'true';
     // Commit the new column layout before restoring the visible card. This
     // prevents the same scrollTop from pointing at unrelated media when the
@@ -205,7 +221,7 @@ export default function AppViewSwitcher({
       setIsWideGrid?.(prev => !prev);
     });
     restoreMediaViewportAnchor(viewportAnchor);
-    animateVisibleGridCards(visibleCards);
+    animateGridCards(gridCards);
     if (gridModeSwitchTimeoutRef.current) {
       clearTimeout(gridModeSwitchTimeoutRef.current);
     }

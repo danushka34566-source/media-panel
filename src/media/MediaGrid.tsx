@@ -222,6 +222,7 @@ export default function MediaGrid({
           'items-center',
         )}
         type={animate === false ? 'none' : undefined}
+        fade={false}
         canStart={canStart}
         duration={0.7}
         staggerDelay={0.04}

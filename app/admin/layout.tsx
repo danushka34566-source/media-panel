@@ -1,6 +1,7 @@
 import AdminNav from '@/admin/AdminNav';
 import { Suspense } from 'react';
 import { AdminNavSkeleton } from '@/components/PageSkeletons';
+import AdminPageTransition from '@/admin/AdminPageTransition';
 
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
@@ -15,7 +16,7 @@ export default async function AdminLayout({
       <Suspense fallback={<AdminNavSkeleton />}>
         <AdminNav />
       </Suspense>
-      {children}
+      <AdminPageTransition>{children}</AdminPageTransition>
     </div>
   );
 }

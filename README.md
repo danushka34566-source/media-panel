@@ -313,7 +313,6 @@ the related feature is enabled.
 | `AUTH_SECRET` | Auth.js session/signing secret. |
 | `POSTGRES_URL` | Neon or Supabase PostgreSQL URI. |
 | `DISABLE_POSTGRES_SSL` | Optional `1`/`0` override; otherwise provider-aware automatically. |
-| `MEDIA_ID_FORWARDING_TABLE` | Optional legacy media-ID forwarding table. |
 
 ### Storage and uploads
 

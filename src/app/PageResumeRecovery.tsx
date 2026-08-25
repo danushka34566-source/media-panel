@@ -39,8 +39,14 @@ export default function PageResumeRecovery() {
       const hiddenFor = hiddenAtRef.current
         ? Date.now() - hiddenAtRef.current
         : 0;
-      hiddenAtRef.current = undefined;
+      // iOS may emit pageshow/focus without a preceding visibilitychange. The
+      // pagehide/freeze handlers below seed hiddenAtRef for that path. Keep a
+      // short hidden interval recorded until the next lifecycle event so a
+      // duplicate early visibility event cannot consume the only recovery
+      // signal.
+      if (!force && hiddenAtRef.current === undefined) { return; }
       if (!force && hiddenFor < 500) { return; }
+      hiddenAtRef.current = undefined;
       if (recoveringRef.current) { return; }
       recoveringRef.current = true;
       clearTimers();
@@ -52,6 +58,10 @@ export default function PageResumeRecovery() {
         recoveryTimer = undefined;
         requestAnimationFrame(() => {
           requestAnimationFrame(() => {
+            if (document.visibilityState === 'hidden') {
+              recoveringRef.current = false;
+              return;
+            }
             // iOS can keep a stale composited layer after a tab resumes even
             // though the React tree still contains all of its content. A
             // short display toggle forces that layer to be rebuilt without
@@ -106,17 +116,33 @@ export default function PageResumeRecovery() {
     };
 
     const onVisibilityChange = () => recover();
-    const onPageShow = (event: PageTransitionEvent) => recover(event.persisted);
+    const onPageHide = () => {
+      hiddenAtRef.current = Date.now();
+      recoveringRef.current = false;
+      clearTimers();
+    };
+    const onPageShow = (event: PageTransitionEvent) =>
+      recover(event.persisted || hiddenAtRef.current !== undefined);
+    const onFreeze = () => onPageHide();
+    const onFocus = () => {
+      if (hiddenAtRef.current !== undefined) { recover(true); }
+    };
     const onResume = () => recover(true);
 
     document.addEventListener('visibilitychange', onVisibilityChange);
+    document.addEventListener('freeze', onFreeze);
     document.addEventListener('resume', onResume);
+    window.addEventListener('pagehide', onPageHide);
     window.addEventListener('pageshow', onPageShow);
+    window.addEventListener('focus', onFocus);
     return () => {
       clearTimers();
       document.removeEventListener('visibilitychange', onVisibilityChange);
+      document.removeEventListener('freeze', onFreeze);
       document.removeEventListener('resume', onResume);
+      window.removeEventListener('pagehide', onPageHide);
       window.removeEventListener('pageshow', onPageShow);
+      window.removeEventListener('focus', onFocus);
     };
   }, [router]);
 

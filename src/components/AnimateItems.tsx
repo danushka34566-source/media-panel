@@ -24,6 +24,9 @@ interface Props extends AnimationConfig {
   itemKeys?: string[]
   canStart?: boolean
   animateFromAppState?: boolean
+  // Keep route content visible while its media asset loads. This preserves
+  // directional/scale motion without leaving a blank page during navigation.
+  fade?: boolean
   // Fixed descendants need their ancestor's transform removed after motion
   // settles. The animation itself still uses the original identity-transform
   // target so its interpolation remains identical to upstream.
@@ -50,6 +53,7 @@ function AnimateItems({
   scaleOffset = 0.9,
   distanceOffset = 20,
   animateFromAppState,
+  fade = true,
   removeTransformAfterAnimation = false,
   layoutItems = false,
   layoutDependency,
@@ -90,19 +94,19 @@ function AnimateItems({
     (() => {
       switch (typeResolved) {
         case 'left': return {
-          opacity: 0,
+          opacity: fade ? 0 : 1,
           transform: `translateX(${distanceOffset}px)`,
         };
         case 'right': return {
-          opacity: 0,
+          opacity: fade ? 0 : 1,
           transform: `translateX(${-distanceOffset}px)`,
         };
         case 'bottom': return {
-          opacity: 0,
+          opacity: fade ? 0 : 1,
           transform: `translateY(${distanceOffset}px)`,
         };
         default: return {
-          opacity: 0,
+          opacity: fade ? 0 : 1,
           transform: `translateY(${distanceOffset}px) scale(${scaleOffset})`,
         };
       }})();

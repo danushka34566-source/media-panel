@@ -192,6 +192,7 @@ export default function MediaDetailPage({
       <AnimateItems
         className="md:mb-8"
         animateFromAppState
+        fade={false}
         removeTransformAfterAnimation
         items={[
           <MediaLarge

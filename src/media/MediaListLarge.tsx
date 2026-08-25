@@ -22,6 +22,7 @@ export default function MediaListLarge({
     <AnimateItems
       className="space-y-1"
       type={animate ? 'scale' : 'none'}
+      fade={false}
       duration={0.7}
       staggerDelay={0.15}
       distanceOffset={0}
