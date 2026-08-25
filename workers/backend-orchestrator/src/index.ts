@@ -6621,6 +6621,11 @@ const status = async (
   env: Env,
   { jobLimit = 20 }: { jobLimit?: number } = {},
 ) => {
+  // The status endpoint is also the first request after a fresh deployment.
+  // Make the registration metadata migration self-healing here so stats do
+  // not fail just because no admin processing page has opened yet. Scheduled
+  // registration still bypasses this DDL through its existing guard.
+  await ensureRegistrationStatusTable(env);
   const processingJobLimit = Math.min(Math.max(Math.round(jobLimit), 1), 5_000);
   const registrationJobLimit = Math.min(
     Math.max(Math.round(jobLimit * 2.5), 1),

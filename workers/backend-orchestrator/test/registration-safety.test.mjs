@@ -137,6 +137,10 @@ test('scheduled registration skips schema DDL on the hot path', () => {
   const end = workerSource.indexOf('const clearStaleRegistrationStatuses', start);
   const source = workerSource.slice(start, end);
   assert.match(source, /if \(env\.REGISTRATION_SCHEDULED === '1'\) return/);
+
+  const statusStart = workerSource.indexOf('const status = async');
+  const statusSource = workerSource.slice(statusStart, statusStart + 700);
+  assert.match(statusSource, /await ensureRegistrationStatusTable\(env\)/);
 });
 
 test('terminal registration errors re-enter a bounded retry cycle automatically', () => {
