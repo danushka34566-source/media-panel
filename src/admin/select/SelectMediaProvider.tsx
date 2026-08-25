@@ -32,6 +32,7 @@ export default function SelectMediaProvider({
     useState(false);
   const [selectedMediaIds, setSelectedMediaIds] =
     useState<string[]>([]);
+  const [selectableMediaIds, setSelectableMediaIds] = useState<string[]>([]);
   const [isPerformingSelectEdit, setIsPerformingSelectEdit] =
     useState(false);
 
@@ -39,13 +40,38 @@ export default function SelectMediaProvider({
     document.querySelectorAll(`[${DATA_KEY_MEDIA_GRID}=true]`)
   , []);
 
+  const syncSelectableMedia = useCallback(() => {
+    const ids = Array.from(document.querySelectorAll<HTMLElement>(
+      `[${DATA_KEY_MEDIA_GRID}=true] [data-preview-id]`,
+    ))
+      .map(element => element.dataset.previewId)
+      .filter((id): id is string => Boolean(id));
+    const uniqueIds = [...new Set(ids)];
+    setSelectableMediaIds(current =>
+      current.length === uniqueIds.length &&
+      current.every((id, index) => id === uniqueIds[index])
+        ? current
+        : uniqueIds,
+    );
+    setCanCurrentPageSelectMedia(current => {
+      const next = getMediaGridElements().length > 0;
+      return current === next ? current : next;
+    });
+  }, [getMediaGridElements]);
+
   useEffect(() => {
-    if (canEdit) {
-      const doesPageHaveMediaGrids = getMediaGridElements().length > 0;
-      // eslint-disable-next-line react-hooks/set-state-in-effect
-      setCanCurrentPageSelectMedia(doesPageHaveMediaGrids);
+    if (!canEdit) {
+      return;
     }
-  }, [pathname, canEdit, getMediaGridElements]);
+
+    const observer = new MutationObserver(syncSelectableMedia);
+    observer.observe(document.body, { childList: true, subtree: true });
+    const frame = window.requestAnimationFrame(syncSelectableMedia);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      observer.disconnect();
+    };
+  }, [pathname, canEdit, syncSelectableMedia]);
 
   const isSelectingMedia = useMemo(() =>
     canEdit &&
@@ -56,7 +82,7 @@ export default function SelectMediaProvider({
     canCurrentPageSelectMedia
       // Use replacePathWithEvent because only query params change
       ? replacePathWithEvent(`${pathname}?${PARAM_SELECT}=true`)
-      // Redirect to grid if current view does not support photo selection
+      // Full view and non-grid pages use the shared Grid selection surface
       : router.push(`${PATH_GRID_INFERRED}?${PARAM_SELECT}=true`)
   , [router, canCurrentPageSelectMedia, pathname]);
   
@@ -86,6 +112,9 @@ export default function SelectMediaProvider({
       stopSelectingMedia,
       selectedMediaIds,
       setSelectedMediaIds,
+      selectableMediaIds,
+      selectAllMedia: () => setSelectedMediaIds(selectableMediaIds),
+      clearSelectedMedia: () => setSelectedMediaIds([]),
       isPerformingSelectEdit,
       setIsPerformingSelectEdit,
     }}>

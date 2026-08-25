@@ -12,6 +12,8 @@ import EntityHover from './EntityHover';
 import { getMediaCachedAction } from '@/media/actions';
 import { MediaQueryOptions } from '@/db';
 import { MAX_MEDIA_TO_SHOW_PER_CATEGORY } from '@/image-response';
+import { PARAM_SELECT } from '@/app/path';
+import { useSelectMediaState } from '@/admin/select/SelectMediaState';
 
 export interface EntityLinkExternalProps {
   ref?: RefObject<HTMLSpanElement | null>
@@ -73,6 +75,10 @@ export default function EntityLink({
   debug?: boolean
 } & EntityLinkExternalProps) {
   const [isLoading, setIsLoading] = useState(false);
+  const { isSelectingMedia } = useSelectMediaState();
+  const selectionPath = isSelectingMedia && path
+    ? `${path}${path.includes('?') ? '&' : '?'}${PARAM_SELECT}=true`
+    : path;
 
   const hasBadgeIcon = Boolean(
     iconBadgeStart ||
@@ -116,7 +122,7 @@ export default function EntityLink({
 
   const renderLink = (useForHover?: boolean) =>
     <LinkWithStatus
-      href={path}
+      href={selectionPath}
       className={clsx(
         'peer',
         'inline-flex items-center gap-2 max-w-full truncate',

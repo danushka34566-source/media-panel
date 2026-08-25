@@ -7,6 +7,9 @@ export type SelectMediaState = {
   stopSelectingMedia?: () => void
   selectedMediaIds?: string[]
   setSelectedMediaIds?: (photoIds: string[]) => void
+  selectableMediaIds?: string[]
+  selectAllMedia?: () => void
+  clearSelectedMedia?: () => void
   isPerformingSelectEdit?: boolean
   setIsPerformingSelectEdit?: Dispatch<SetStateAction<boolean>>
 };

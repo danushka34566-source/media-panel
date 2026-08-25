@@ -146,12 +146,12 @@ export default function AppViewSwitcher({
   currentSelection,
   className,
   animate = true,
-  accessoryBeforeSearch,
+  accessoryAfter,
 }: {
   currentSelection?: SwitcherSelection
   className?: string
   animate?: boolean
-  accessoryBeforeSearch?: ReactNode
+  accessoryAfter?: ReactNode
 }) {
   const pathname = usePathname();
   const router = useRouter();
@@ -224,8 +224,11 @@ export default function AppViewSwitcher({
   const refHrefGrid = useRef<HTMLAnchorElement>(null);
 
   const [isAdminMenuOpen, setIsAdminMenuOpen] = useState(false);
+  const [isSearchOpening, setIsSearchOpening] = useState(false);
   const [isGridModeSwitching, setIsGridModeSwitching] = useState(false);
   const gridModeSwitchTimeoutRef =
+    useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const searchFeedbackTimeoutRef =
     useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const toggleGridMode = useCallback(() => {
     const viewportAnchor = captureMediaViewportAnchor();
@@ -255,6 +258,9 @@ export default function AppViewSwitcher({
       clearTimeout(gridModeSwitchTimeoutRef.current);
       delete document.documentElement.dataset.gridModeSwitching;
     }
+    if (searchFeedbackTimeoutRef.current) {
+      clearTimeout(searchFeedbackTimeoutRef.current);
+    }
   }, []);
   
   const onKeyDown = useCallback((e: KeyboardEvent) => {
@@ -283,7 +289,7 @@ export default function AppViewSwitcher({
   const renderItemFull =
     <SwitcherItem
       icon={<IconFull includeTitle={false} />}
-      href={pathFull}
+      href={pathname === pathFull ? undefined : pathFull}
       hrefRef={refHrefFull}
       active={currentSelection === 'full'}
       tooltip={{...SHOW_KEYBOARD_SHORTCUT_TOOLTIPS && {
@@ -351,7 +357,32 @@ export default function AppViewSwitcher({
               },
             }}
             noPadding
-          />}
+        />}
+        <SwitcherItem
+          icon={<motion.span
+            animate={{ scale: isSearchOpening ? 0.9 : 1 }}
+            transition={{ duration: 0.14, ease: 'easeOut' }}
+          >
+            <IconSearch includeTitle={false} />
+          </motion.span>}
+          onClick={() => {
+            setIsSearchOpening(true);
+            setIsCommandKOpen?.(true);
+            if (searchFeedbackTimeoutRef.current) {
+              clearTimeout(searchFeedbackTimeoutRef.current);
+            }
+            searchFeedbackTimeoutRef.current = setTimeout(() => {
+              setIsSearchOpening(false);
+              searchFeedbackTimeoutRef.current = undefined;
+            }, 180);
+          }}
+          className="translate-y-[-0.5px]"
+          tooltip={{...SHOW_KEYBOARD_SHORTCUT_TOOLTIPS && {
+            content: appText.nav.search,
+            keyCommandModifier: KEY_COMMANDS.search[0],
+            keyCommand: KEY_COMMANDS.search[1],
+          }}}
+        />
       </Switcher>
       <motion.div
         initial={animate ? { opacity: 0, width: '0' } : false}
@@ -404,18 +435,7 @@ export default function AppViewSwitcher({
         </Switcher>
       </motion.div>
       <Switcher type="borderless" className="ml-0 gap-1 divide-x-0">
-        <SwitcherItem
-          icon={<IconSearch includeTitle={false} />}
-          onClick={() => setIsCommandKOpen?.(true)}
-          className="w-[38px]! translate-y-[-0.5px]"
-          tooltip={{...SHOW_KEYBOARD_SHORTCUT_TOOLTIPS && {
-            content: appText.nav.search,
-            keyCommandModifier: KEY_COMMANDS.search[0],
-            keyCommand: KEY_COMMANDS.search[1],
-          }}}
-          width="narrow"
-        />
-        {accessoryBeforeSearch}
+        {accessoryAfter}
       </Switcher>
     </div>
   );

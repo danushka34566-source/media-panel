@@ -12,7 +12,7 @@ import { tagMultipleMediaAction } from '@/media/actions';
 import { toastSuccess } from '@/toast';
 import DeleteMediaButton from '@/admin/DeleteMediaButtonGroup';
 import { photoQuantityText } from '@/media';
-import { FaArrowDown, FaCheck } from 'react-icons/fa6';
+import { FaArrowDown, FaCheck, FaCheckDouble } from 'react-icons/fa6';
 import ResponsiveText from '@/components/primitives/ResponsiveText';
 import IconFavs from '@/components/icons/IconFavs';
 import IconTag from '@/components/icons/IconTag';
@@ -37,6 +37,9 @@ export default function AdminBatchEditPanelClient({
     isSelectingMedia,
     stopSelectingMedia,
     selectedMediaIds,
+    selectableMediaIds,
+    selectAllMedia,
+    clearSelectedMedia,
     isPerformingSelectEdit,
     setIsPerformingSelectEdit,
   } = useSelectMediaState();
@@ -56,6 +59,10 @@ export default function AdminBatchEditPanelClient({
     false,
     false,
   );
+
+  const hasSelectableMedia = (selectableMediaIds?.length ?? 0) > 0;
+  const areAllMediaSelected = hasSelectableMedia &&
+    selectableMediaIds?.every(id => selectedMediaIds?.includes(id));
 
   const isFormDisabled =
     isPerformingSelectEdit ||
@@ -133,6 +140,15 @@ export default function AdminBatchEditPanelClient({
       </LoaderButton>
     </>
     : <>
+      <LoaderButton
+        icon={<FaCheckDouble size={15} />}
+        onClick={() => areAllMediaSelected
+          ? clearSelectedMedia?.()
+          : selectAllMedia?.()}
+        disabled={isPerformingSelectEdit || !hasSelectableMedia}
+      >
+        {areAllMediaSelected ? 'Clear all' : 'Select all'}
+      </LoaderButton>
       <DeleteMediaButton
         photoIds={selectedMediaIds}
         disabled={isFormDisabled}
