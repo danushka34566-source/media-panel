@@ -30,7 +30,6 @@ import DeferredGlobalFeatures from '@/app/DeferredGlobalFeatures';
 import IdleSessionLogout from '@/auth/IdleSessionLogout';
 import PageResumeRecovery from '@/app/PageResumeRecovery';
 import DeferredAdminBatchEditPanel from '@/admin/select/DeferredAdminBatchEditPanel';
-import { authCachedSafe } from '@/auth/cache';
 
 import '../tailwind.css';
 import { Geist } from "next/font/google";
@@ -93,11 +92,6 @@ export default async function RootLayout({
 }: {
   children: React.ReactNode
 }) {
-  // The header is present on every route. Resolve the session once on the
-  // server and hydrate both the header and the client app state from it so
-  // the profile menu does not wait for a second client-side auth request.
-  const initialAuth = await authCachedSafe();
-
   return (
     <html
       lang={HTML_LANG}
@@ -110,7 +104,6 @@ export default async function RootLayout({
       )}>
         <AppStateProvider
           areAdminDebugToolsEnabled={ADMIN_DEBUG_TOOLS_ENABLED}
-          initialAuth={initialAuth}
         >
           <AppTextProvider>
             <SelectMediaProvider>
@@ -129,7 +122,7 @@ export default async function RootLayout({
                       'mx-3 mb-3',
                       'lg:mx-6 lg:mb-6',
                     )}>
-                      <Nav session={initialAuth} />
+                      <Nav />
                       <DeferredAdminBatchEditPanel />
                       <main>
                         <div

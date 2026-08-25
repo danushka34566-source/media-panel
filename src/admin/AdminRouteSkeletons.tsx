@@ -81,7 +81,6 @@ function TablePageSkeleton({
       aria-busy="true"
     >
       <div className="space-y-3">
-        <Skeleton className="h-5 w-36" />
         <EntityTableSkeleton rows={rows} variant={variant} />
       </div>
     </div>}
@@ -118,13 +117,6 @@ export function AdminTagsSkeleton() {
 
 export function AdminMediaSkeleton() {
   return <AppGrid contentMain={<div className="space-y-4" aria-busy="true">
-    <div className="flex items-center justify-between gap-3">
-      <Skeleton className="h-5 w-32" />
-      <div className="flex gap-2">
-        <Skeleton className="h-8 w-20 rounded-md" />
-        <Skeleton className="h-8 w-8 rounded-md" />
-      </div>
-    </div>
     <EntityTableSkeleton rows={15} variant="media" />
     <div className="flex justify-center gap-2 pt-2">
       <Skeleton className="h-8 w-8 rounded-md" />
@@ -136,13 +128,6 @@ export function AdminMediaSkeleton() {
 
 export function AdminMediaUpdatesSkeleton() {
   return <AppGrid contentMain={<div className="space-y-4" aria-busy="true">
-    <div className="flex flex-wrap items-center justify-between gap-3">
-      <div className="space-y-2">
-        <Skeleton className="h-5 w-44" />
-        <SkeletonLine className="w-64" />
-      </div>
-      <Skeleton className="h-9 w-28 rounded-md" />
-    </div>
     <EntityTableSkeleton rows={12} variant="media" />
   </div>} />;
 }
@@ -151,16 +136,14 @@ export function AdminProcessingSkeleton() {
   return <AppGrid contentMain={<div className="space-y-8" aria-busy="true">
     <section className="space-y-3">
       <div className="flex items-center justify-between gap-3">
-        <Skeleton className="h-5 w-44" />
-        <Skeleton className="h-8 w-20 rounded-md" />
+        <SkeletonLine className="w-24" />
       </div>
       <EntityTableSkeleton rows={6} variant="processing" />
       <div className="flex justify-center"><Skeleton className="h-8 w-32 rounded-md" /></div>
     </section>
     <section className="space-y-3">
       <div className="flex items-center justify-between gap-3">
-        <Skeleton className="h-5 w-40" />
-        <Skeleton className="h-8 w-20 rounded-md" />
+        <SkeletonLine className="w-24" />
       </div>
       <EntityTableSkeleton rows={6} variant="processing" />
       <div className="flex justify-center"><Skeleton className="h-8 w-32 rounded-md" /></div>
@@ -289,10 +272,6 @@ export function AdminComponentsSkeleton() {
 
 export function AdminAlbumEditSkeleton() {
   return <AppGrid contentMain={<div className="space-y-5" aria-busy="true">
-    <div className="flex min-h-9 items-center gap-2">
-      <Skeleton className="h-5 w-20" />
-      <Skeleton className="h-6 w-40 rounded-md" />
-    </div>
     <div className="space-y-4">
       <Skeleton className="h-10 w-full rounded-md" />
       <div className="grid gap-3 sm:grid-cols-2">
@@ -311,10 +290,6 @@ export function AdminAlbumEditSkeleton() {
 
 export function AdminLibraryValueEditSkeleton() {
   return <AppGrid contentMain={<div className="space-y-5" aria-busy="true">
-    <div className="flex min-h-9 items-center gap-2">
-      <Skeleton className="h-5 w-24" />
-      <Skeleton className="h-6 w-36 rounded-md" />
-    </div>
     <div className="space-y-4">
       <Skeleton className="h-10 w-full rounded-md" />
       <div className="flex flex-wrap gap-2">
@@ -332,11 +307,6 @@ export function AdminLibraryValueEditSkeleton() {
 
 export function AdminRecipeEditSkeleton() {
   return <AppGrid contentMain={<div className="space-y-5" aria-busy="true">
-    <div className="flex min-h-9 items-center gap-2">
-      <Skeleton className="h-5 w-24" />
-      <Skeleton className="h-6 w-36 rounded-md" />
-      <Skeleton className="ml-auto h-9 w-28 rounded-md" />
-    </div>
     <div className="space-y-4">
       <Skeleton className="h-10 w-full rounded-md" />
       <Skeleton className="h-28 w-full rounded-md" />
@@ -351,10 +321,6 @@ export function AdminRecipeEditSkeleton() {
 
 export function AdminMediaEditSkeleton() {
   return <AppGrid contentMain={<div className="space-y-5" aria-busy="true">
-    <div className="flex min-h-9 items-center gap-2">
-      <Skeleton className="h-5 w-20" />
-      <SkeletonLine className="w-52" />
-    </div>
     <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_20rem]">
       <div className="space-y-4">
         <Skeleton className="aspect-video w-full rounded-md" />
@@ -373,10 +339,6 @@ export function AdminMediaEditSkeleton() {
 
 export function AdminUploadDetailSkeleton() {
   return <AppGrid contentMain={<div className="space-y-5" aria-busy="true">
-    <div className="flex min-h-9 items-center gap-2">
-      <Skeleton className="h-5 w-20" />
-      <SkeletonLine className="w-48" />
-    </div>
     <div className="grid gap-5 md:grid-cols-[minmax(0,1fr)_18rem]">
       <div className="space-y-4">
         <Skeleton className="aspect-video w-full rounded-md" />

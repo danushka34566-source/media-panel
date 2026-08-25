@@ -63,7 +63,10 @@ export const pluralize = (
   const numberFormatted = padPlaces
     ? String(count).padStart(padPlaces, '0')
     : count;
-  const label = count === 1 ? singular : plural ?? `${singular}s`;
+  const inferredPlural = /[^aeiou]y$/i.test(singular)
+    ? `${singular.slice(0, -1)}ies`
+    : `${singular}s`;
+  const label = count === 1 ? singular : plural ?? inferredPlural;
   return `${numberFormatted} ${label}`;
 };
 

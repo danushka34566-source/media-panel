@@ -45,6 +45,9 @@ export default function MediaGridInfinite({
       sortWithPriority={sortWithPriority}
       excludeFromFeeds={excludeFromFeeds}
       query={query}
+      // Fetch the next grid page well before the current page reaches the
+      // viewport end, giving its cards and images time to mount and decode.
+      loadAheadViewports={3}
       {...categories}
     >
       {({ key, photos, onLastMediaVisible }) =>

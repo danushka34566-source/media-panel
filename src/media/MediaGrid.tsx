@@ -248,8 +248,10 @@ export default function MediaGrid({
                   ? WIDE_GRID_ASPECT_RATIO
                   : GRID_ASPECT_RATIO,
                 },
-              contentVisibility: 'auto',
-              containIntrinsicSize: '320px',
+              // Keep the card renderable ahead of the viewport. Mobile
+              // browsers can defer image painting behind content-visibility,
+              // which makes an already-mounted image appear to mount only
+              // when it reaches the screen.
             }}
           >
             <MediaMedium

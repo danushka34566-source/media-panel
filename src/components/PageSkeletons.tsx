@@ -114,8 +114,7 @@ export function AdminNavSkeleton() {
 }
 
 export function AdminPageSkeleton() {
-  return <div className="mt-4 space-y-4" aria-busy="true">
-    <AdminNavSkeleton />
+  return <div className="mt-4" aria-busy="true">
     <AppGrid contentMain={
       <div className="space-y-4">
         {Array.from({ length: 8 }, (_, index) =>

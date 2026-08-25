@@ -2,7 +2,7 @@
 
 import { RefObject, useEffect, useId, useState } from 'react';
 
-// Images are prepared shortly before they enter the viewport. Once a card has
+// Images are prepared well before they enter the viewport. Once a card has
 // entered that window its image stays mounted, so scrolling back does not
 // visibly remove and recreate the poster. Native lazy loading and the browser
 // cache still control when bytes are fetched and decoded.

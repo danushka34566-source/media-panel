@@ -57,6 +57,7 @@ export default function NavClient({
     isUserSignedIn,
     isCheckingAuth,
     userEmail,
+    userEmailEager,
     userName,
     userProfileImageUrl,
     clearAuthStateAndRedirectIfNecessary,
@@ -77,12 +78,12 @@ export default function NavClient({
       : <button onClick={linkOrAction} type="button">{text}</button>;
 
   const hasHydratedUser = Boolean(
-    userEmail || userName || userProfileImageUrl,
+    userEmail || userEmailEager || userName || userProfileImageUrl,
   );
   const hydratedUser = hasHydratedUser
     ? {
         name: userName,
-        email: userEmail,
+        email: userEmail || userEmailEager,
         profileImageUrl: userProfileImageUrl,
       }
     : undefined;

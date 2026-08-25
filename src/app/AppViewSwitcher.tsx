@@ -46,6 +46,9 @@ export type SwitcherSelection = 'full' | 'grid' | 'admin';
 const GAP_CLASS_RIGHT = 'mr-1.5 sm:mr-2';
 const GAP_CLASS_LEFT  = 'ml-0.5 sm:ml-1';
 const GRID_MODE_SWITCH_FEEDBACK_MS = 220;
+// Include the next viewport of cards so a denser grid does not pop newly
+// exposed cards into place. Keep this bounded; animating an entire feed makes
+// the mode switch compete with scrolling and image decoding.
 const GRID_MODE_ANIMATION_OVERSCAN_VIEWPORTS = 1;
 
 type VisibleGridCard = {
@@ -53,12 +56,14 @@ type VisibleGridCard = {
   top: number
 };
 
+const getGridAnimationOverscan = () => Math.max(
+  480,
+  window.innerHeight * GRID_MODE_ANIMATION_OVERSCAN_VIEWPORTS,
+);
+
 const captureGridCards = () => {
   const cards = new Map<string, VisibleGridCard>();
-  const overscan = Math.max(
-    640,
-    window.innerHeight * GRID_MODE_ANIMATION_OVERSCAN_VIEWPORTS,
-  );
+  const overscan = getGridAnimationOverscan();
   document.querySelectorAll<HTMLElement>(
     '[data-media-smart-preview-card][data-preview-id]',
   ).forEach(element => {
@@ -79,15 +84,10 @@ const animateGridCards = (previous: Map<string, VisibleGridCard>) => {
   if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) { return; }
   // Wait for the browser to commit the new grid columns, then perform one
   // read/animate pass. Measuring immediately after flushSync can still read
-  // the old grid track sizes on mobile browsers. Keep this bounded to the
-  // viewport plus one viewport of overscan on either side; animating an
-  // entire long feed creates too many simultaneous layout animations.
+  // the old grid track sizes on mobile browsers.
   window.requestAnimationFrame(() => {
     window.requestAnimationFrame(() => {
-      const overscan = Math.max(
-        640,
-        window.innerHeight * GRID_MODE_ANIMATION_OVERSCAN_VIEWPORTS,
-      );
+      const overscan = getGridAnimationOverscan();
       document.querySelectorAll<HTMLElement>(
         '[data-media-smart-preview-card][data-preview-id]',
       ).forEach(element => {
@@ -102,22 +102,13 @@ const animateGridCards = (previous: Map<string, VisibleGridCard>) => {
         const y = from.top - rect.top;
         if (Math.abs(x) < 0.5 && Math.abs(y) < 0.5) { return; }
         element.getAnimations().forEach(animation => animation.cancel());
-        const animation = element.animate([
-          {
-            transform: `translate3d(${x}px, ${y}px, 0) scale(0.985)`,
-          },
-          {
-            offset: 0.78,
-            transform: 'translate3d(0, 0, 0) scale(1.006)',
-          },
-          { transform: 'translate3d(0, 0, 0) scale(1)' },
+        element.animate([
+          { transform: `translate3d(${x}px, ${y}px, 0)` },
+          { transform: 'translate3d(0, 0, 0)' },
         ], {
-          duration: 380,
-          easing: 'cubic-bezier(0.16, 1, 0.3, 1)',
+          duration: 260,
+          easing: 'cubic-bezier(0.22, 1, 0.36, 1)',
           fill: 'both',
-        });
-        animation.addEventListener('finish', () => animation.cancel(), {
-          once: true,
         });
       });
     });
