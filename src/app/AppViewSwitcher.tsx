@@ -60,8 +60,9 @@ const getGridAnimationOverscan = () => Math.max(
   window.innerHeight * GRID_MODE_ANIMATION_OVERSCAN_VIEWPORTS,
 );
 
-const getGridAnimationSurface = (card: HTMLElement) =>
-  card.parentElement ?? card;
+// Animate the plain card element, not its Framer Motion wrapper. Framer owns
+// the wrapper transform and can overwrite a simultaneous WAAPI FLIP.
+const getGridAnimationSurface = (card: HTMLElement) => card;
 
 const captureGridCards = () => {
   const cards = new Map<string, GridCardLayout>();
@@ -70,7 +71,7 @@ const captureGridCards = () => {
     '[data-media-smart-preview-card][data-preview-id]',
   ).forEach(element => {
     const surface = getGridAnimationSurface(element);
-    // The outer motion item owns grid positioning, so it also owns the FLIP.
+    // Keep the custom transform isolated from the outer Framer Motion item.
     surface.getAnimations().forEach(animation => animation.cancel());
     const rect = surface.getBoundingClientRect();
     if (rect.bottom <= -overscan || rect.top >= window.innerHeight + overscan) {

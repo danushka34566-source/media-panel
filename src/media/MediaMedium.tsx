@@ -115,6 +115,7 @@ export default function MediaMedium({
         className,
       )}
       prefetch={prefetch}
+      flickerThreshold={0}
       onClick={event => rememberMediaScrollPosition(photo.id, event.currentTarget)}
       onPointerEnter={event => event.pointerType === 'mouse' && setIsHovered(true)}
       onPointerLeave={() => setIsHovered(false)}

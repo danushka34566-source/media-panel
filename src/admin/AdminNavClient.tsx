@@ -38,6 +38,7 @@ import LinkWithLoaderBackground from '@/components/LinkWithLoaderBackground';
 import MaskedScroll from '@/components/MaskedScroll';
 import { useAppText } from '@/i18n/state/client';
 import { ADMIN_CREATE_USER_EVENT } from './users/events';
+import { ADMIN_INFO_CONTENT_READY_EVENT } from './navigation-events';
 
 // Updates from past 5 minutes considered recent
 const areTimesRecent = (dates: Date[]) => dates
@@ -45,6 +46,7 @@ const areTimesRecent = (dates: Date[]) => dates
 const ACTIVE_ADMIN_REFRESH_INTERVAL_MS = 30_000;
 const IDLE_ADMIN_REFRESH_INTERVAL_MS = 180_000;
 const ADMIN_INFO_NAVIGATION_DELAY_MS = 1_000;
+const ADMIN_INFO_LOADING_TIMEOUT_MS = 120_000;
 
 export default function AdminNavClient({
   items,
@@ -67,11 +69,32 @@ export default function AdminNavClient({
     : PATH_ADMIN_STATS;
   const [isAdminInfoLoading, setIsAdminInfoLoading] = useState(false);
   const adminInfoNavigationTimerRef = useRef<number | undefined>(undefined);
+  const adminInfoLoadingTimerRef = useRef<number | undefined>(undefined);
 
-  useEffect(() => () => {
-    if (adminInfoNavigationTimerRef.current !== undefined) {
-      window.clearTimeout(adminInfoNavigationTimerRef.current);
-    }
+  useEffect(() => {
+    const stopAdminInfoLoading = () => {
+      setIsAdminInfoLoading(false);
+      if (adminInfoLoadingTimerRef.current !== undefined) {
+        window.clearTimeout(adminInfoLoadingTimerRef.current);
+        adminInfoLoadingTimerRef.current = undefined;
+      }
+    };
+    window.addEventListener(
+      ADMIN_INFO_CONTENT_READY_EVENT,
+      stopAdminInfoLoading,
+    );
+    return () => {
+      window.removeEventListener(
+        ADMIN_INFO_CONTENT_READY_EVENT,
+        stopAdminInfoLoading,
+      );
+      if (adminInfoNavigationTimerRef.current !== undefined) {
+        window.clearTimeout(adminInfoNavigationTimerRef.current);
+      }
+      if (adminInfoLoadingTimerRef.current !== undefined) {
+        window.clearTimeout(adminInfoLoadingTimerRef.current);
+      }
+    };
   }, []);
 
   const onAdminInfoClick = (event: ReactMouseEvent<HTMLAnchorElement>) => {
@@ -87,6 +110,10 @@ export default function AdminNavClient({
     if (isAdminInfoLoading) { return; }
     setIsAdminInfoLoading(true);
     router.prefetch(adminInfoPath);
+    adminInfoLoadingTimerRef.current = window.setTimeout(() => {
+      adminInfoLoadingTimerRef.current = undefined;
+      setIsAdminInfoLoading(false);
+    }, ADMIN_INFO_LOADING_TIMEOUT_MS);
     adminInfoNavigationTimerRef.current = window.setTimeout(() => {
       adminInfoNavigationTimerRef.current = undefined;
       router.push(adminInfoPath);

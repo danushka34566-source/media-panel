@@ -87,7 +87,7 @@ export default function MediaLink({
   return (
     photo && linkProps
       ? loaderType === 'spinner'
-        ? <LinkWithStatus {...linkProps}>
+        ? <LinkWithStatus {...linkProps} flickerThreshold={0}>
           {({ isLoading }) => <>
             {children}
             {isLoading && <>

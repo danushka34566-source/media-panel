@@ -72,6 +72,12 @@ html {
     100% { opacity: 1; transform: translateY(0); }
   }
 
+  --animate-admin-content-in: admin-content-in 0.42s ease-out both;
+  @keyframes admin-content-in {
+    0% { opacity: 0; transform: translateY(8px); }
+    100% { opacity: 1; transform: translateY(0); }
+  }
+
   --animate-rotate-pulse: rotate-pulse 0.75s linear infinite normal both running;
   @keyframes rotate-pulse {
     0% { transform: rotate(0deg) scale(1) }

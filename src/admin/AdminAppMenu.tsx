@@ -237,6 +237,7 @@ export default function AdminAppMenu({
           <div className={clsx(
             'relative flex flex-col items-center justify-center gap-2',
             'translate-y-[-18px]',
+            'transition-transform duration-300 ease-out will-change-transform',
           )}>
             <IoArrowDown size={16} className="shrink-0" />
             <IoArrowUp size={16} className="shrink-0" />
