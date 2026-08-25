@@ -159,8 +159,8 @@ first-install fallback.
 | `R2_PUBLIC_BASE_URL`, `R2_ACCOUNT_ID`, `R2_BUCKET` | Worker-side R2 settings. |
 | `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` | Worker-side R2 S3 credentials. |
 | `UNIQUE_MEDIA_NAMES` | Use generated unique media object names; enabled by default. Set `0` to disable. |
-| `REGISTER_BATCH_SIZE` | Files attempted per registration pass; default `2`. |
-| `MAX_REGISTER_PASSES` | Registration passes per scheduled run; default `2`. |
+| `REGISTER_BATCH_SIZE` | Files attempted per registration pass; default `1`. Existing database settings override this deployment default. |
+| `MAX_REGISTER_PASSES` | Registration passes per scheduled run; default `1`. Existing database settings override this deployment default. |
 | `STALE_PROCESSING_MINUTES`, `STALE_REGISTRATION_MINUTES` | Lease recovery ages. |
 | `REGISTRATION_HISTORY_DAYS` | Completed/error status retention. |
 | `BACKEND_PROCESSOR_POLL_INTERVAL_MS` | Processor polling interval. |

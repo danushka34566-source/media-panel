@@ -22,6 +22,7 @@ const STALE_REGISTRATION_MINUTES = (() => {
 
 const STALE_REGISTRATION_ERROR_MESSAGE =
   'Previous registration attempt stalled; queued for retry';
+const COPY_PENDING_CHECK_LIMIT = 15;
 
 const REGISTRATION_HISTORY_DAYS = (() => {
   const parsed = Number.parseInt(
@@ -47,6 +48,10 @@ const createWorkerRegistrationStatusTable = () => query(`
     extension TEXT,
     error_message TEXT,
     attempt_count INTEGER NOT NULL DEFAULT 0,
+    expected_size BIGINT,
+    copy_check_count INTEGER NOT NULL DEFAULT 0,
+    copy_started_at TIMESTAMP WITH TIME ZONE,
+    next_copy_check_at TIMESTAMP WITH TIME ZONE,
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
   )
@@ -74,7 +79,11 @@ const ensureWorkerRegistrationStatusColumns = () => query(`
   ADD COLUMN IF NOT EXISTS media_id TEXT,
   ADD COLUMN IF NOT EXISTS extension TEXT,
   ADD COLUMN IF NOT EXISTS error_message TEXT,
-  ADD COLUMN IF NOT EXISTS attempt_count INTEGER NOT NULL DEFAULT 0
+  ADD COLUMN IF NOT EXISTS attempt_count INTEGER NOT NULL DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS expected_size BIGINT,
+  ADD COLUMN IF NOT EXISTS copy_check_count INTEGER NOT NULL DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS copy_started_at TIMESTAMP WITH TIME ZONE,
+  ADD COLUMN IF NOT EXISTS next_copy_check_at TIMESTAMP WITH TIME ZONE
 `);
 
 const ensureWorkerRegistrationStatusColumnTypes = () => query(`
@@ -103,8 +112,12 @@ const clearStaleWorkerRegistrationStatuses = async () => {
       error_message = NULL,
       updated_at = now()
     WHERE status = 'registering'
+      AND NOT (
+        COALESCE(copy_check_count, 0) > 0
+        AND COALESCE(copy_check_count, 0) < $2
+      )
       AND updated_at < now() - ($1 || ' minutes')::interval
-  `, [String(STALE_REGISTRATION_MINUTES)]);
+  `, [String(STALE_REGISTRATION_MINUTES), COPY_PENDING_CHECK_LIMIT]);
 };
 
 const clearCompletedWorkerRegistrationStatuses = () => query(`

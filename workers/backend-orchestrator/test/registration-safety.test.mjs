@@ -128,7 +128,7 @@ test('generic registration status upsert keeps target and select columns aligned
   const start = workerSource.indexOf('const upsertRegistrationStatusBatch');
   const end = workerSource.indexOf('const upsertRegistrationStatuses', start);
   const source = workerSource.slice(start, end);
-  assert.match(source, /error_message\s*\)\s*SELECT[\s\S]*?error_message\s+FROM incoming/);
+  assert.match(source, /error_message,[\s\S]*?next_copy_check_at[\s\S]*?FROM incoming/);
   assert.doesNotMatch(source, /error_message,\s*attempt_count\s*\)\s*SELECT/);
 });
 
@@ -165,12 +165,45 @@ test('terminal registration errors re-enter a bounded retry cycle automatically'
 });
 
 test('registration scans process a bounded slice instead of one file per cron', () => {
-  assert.match(workerSource, /registerBatchSize: getNumber\(env\.REGISTER_BATCH_SIZE, 2/);
-  assert.match(workerSource, /maxRegisterPasses: getNumber\(env\.MAX_REGISTER_PASSES, 2/);
-  assert.match(workerSource, /getNumber\(env\.REGISTER_BATCH_SIZE, 2, \{[\s\S]*?min: 1/);
-  assert.match(workerSource, /getNumber\(env\.MAX_REGISTER_PASSES, 2, \{[\s\S]*?min: 1/);
+  assert.match(workerSource, /registerBatchSize: getNumber\(env\.REGISTER_BATCH_SIZE, 1/);
+  assert.match(workerSource, /maxRegisterPasses: getNumber\(env\.MAX_REGISTER_PASSES, 1/);
+  assert.match(workerSource, /getNumber\(env\.REGISTER_BATCH_SIZE, 1, \{[\s\S]*?min: 1/);
+  assert.match(workerSource, /getNumber\(env\.MAX_REGISTER_PASSES, 1, \{[\s\S]*?min: 1/);
   assert.match(workerSource, /deferredRegistrationKeys/);
   assert.match(workerSource, /error_message,\s*updated_at/);
+});
+
+test('slow Drive copies use durable minute checks without duplicate copy requests', () => {
+  assert.match(workerSource, /DRIVE_COPY_PENDING_CHECK_INTERVAL_MS = 60_000/);
+  assert.match(workerSource, /DRIVE_COPY_PENDING_CHECK_LIMIT = 15/);
+  assert.match(workerSource, /expected_size BIGINT/);
+  assert.match(workerSource, /copy_check_count INTEGER NOT NULL DEFAULT 0/);
+  assert.match(workerSource, /next_copy_check_at TIMESTAMP WITH TIME ZONE/);
+
+  const claimStart = workerSource.indexOf('const claimRegistrationQueueRow');
+  const claimEnd = workerSource.indexOf('const getRegistrationStatusRowsByUrls', claimStart);
+  const claimSource = workerSource.slice(claimStart, claimEnd);
+  assert.match(claimSource, /was_pending_check/);
+  assert.match(claimSource, /was_pending_cycle_exhausted/);
+  assert.match(claimSource, /COALESCE\(next_copy_check_at, TIMESTAMP 'epoch'\) <= now\(\)/);
+
+  const scanStart = workerSource.indexOf('const scanAndRegisterWithLease');
+  const pendingStart = workerSource.indexOf(
+    'if (claimedRegistrationRow?.was_pending_check)',
+    scanStart,
+  );
+  const pendingEnd = workerSource.indexOf(
+    '// A scheduled invocation without a claim must finish immediately.',
+    pendingStart,
+  );
+  const pendingSource = workerSource.slice(pendingStart, pendingEnd);
+  assert.match(pendingSource, /deferRegistrationCopyCheck/);
+  assert.match(pendingSource, /return \{/);
+  assert.doesNotMatch(pendingSource, /copyAndVerifyObject/);
+
+  const staleStart = workerSource.indexOf('const clearStaleRegistrationStatuses');
+  const staleEnd = workerSource.indexOf('const clearOldCompletedRegistrationStatuses', staleStart);
+  assert.match(workerSource.slice(staleStart, staleEnd), /copy_check_count/);
 });
 
 test('worker landing links use clear configured labels', () => {

@@ -56,10 +56,16 @@ type RegistrationStatusRow = {
   extension?: string | null
   error_message?: string | null
   attempt_count?: number | null
+  expected_size?: number | string | null
+  copy_check_count?: number | null
+  copy_started_at?: string | Date | null
+  next_copy_check_at?: string | Date | null
   updated_at?: string | Date | null
   // Captured before the atomic claim refreshes updated_at. This prevents a
   // stale retry from being mistaken for a fresh in-flight copy.
   was_stale_retry?: boolean
+  was_pending_check?: boolean
+  was_pending_cycle_exhausted?: boolean
 };
 
 type UploadRegistrationHintRow = {
@@ -98,6 +104,8 @@ export interface Env {
   BACKEND_PROCESSOR_IDLE_INTERVAL_MS?: string
   BACKEND_PROCESSOR_HEARTBEAT_INTERVAL_MS?: string
   BACKEND_PROCESSOR_CLAIM_LIMIT?: string
+  DRIVE_COPY_PENDING_CHECK_INTERVAL_SECONDS?: string
+  DRIVE_COPY_PENDING_CHECK_LIMIT?: string
   REGISTRATION_HINT_LOOKUPS_ENABLED?: string
   REGISTRATION_SCAN_DEADLINE_AT?: string
   REGISTRATION_SCHEDULED?: string
@@ -208,8 +216,8 @@ const getDefaultRuntimeProcessingSettings = (env: Env): RuntimeProcessingSetting
     processorRegistrationEnabled: false,
     processorOnlyRegistration: false,
     videoProcessingEnabled: true,
-    registerBatchSize: getNumber(env.REGISTER_BATCH_SIZE, 2, { min: 1, max: 100 }),
-    maxRegisterPasses: getNumber(env.MAX_REGISTER_PASSES, 2, { min: 1, max: 20 }),
+    registerBatchSize: getNumber(env.REGISTER_BATCH_SIZE, 1, { min: 1, max: 100 }),
+    maxRegisterPasses: getNumber(env.MAX_REGISTER_PASSES, 1, { min: 1, max: 20 }),
     registrationMaxAttempts: getNumber(env.MAX_REGISTRATION_ATTEMPTS, 3, { min: 1, max: 20 }),
     staleProcessingMinutes: getNumber(env.STALE_PROCESSING_MINUTES, 2, { min: 1, max: 1440 }),
     staleRegistrationMinutes: getNumber(env.STALE_REGISTRATION_MINUTES, 5, { min: 1, max: 1440 }),
@@ -274,6 +282,13 @@ export const DRIVE_COPY_VISIBILITY_ATTEMPTS = 3;
 export const DRIVE_COPY_VISIBILITY_DELAY_MS = 2000;
 export const DRIVE_RETRY_TARGET_VISIBILITY_ATTEMPTS = 3;
 export const DRIVE_COPY_REQUEST_TIMEOUT_MS = 15_000;
+// A timed-out Drive copy may still be progressing server-side. Keep the
+// public registration state as `registering`, but poll the exact destination
+// once per scheduled minute before allowing another copy attempt. This is a
+// check budget, not a copy retry budget: large files get fifteen minutes per
+// copy attempt without creating duplicate transfers.
+export const DRIVE_COPY_PENDING_CHECK_INTERVAL_MS = 60_000;
+export const DRIVE_COPY_PENDING_CHECK_LIMIT = 15;
 // A registration scan owns a global lease. Bound every Drive operation in its
 // path so one stalled request cannot block all later scans indefinitely.
 const REGISTRATION_STORAGE_TIMEOUT_MS = 30_000;
@@ -461,6 +476,25 @@ const getNumber = (
   const parsed = parseInt(value || '', 10);
   if (!Number.isFinite(parsed)) { return fallback; }
   return Math.min(Math.max(parsed, min), max);
+};
+
+const copyPendingCheckIntervalMs = (env: Env) =>
+  getNumber(
+    env.DRIVE_COPY_PENDING_CHECK_INTERVAL_SECONDS,
+    DRIVE_COPY_PENDING_CHECK_INTERVAL_MS / 1000,
+    { min: 60, max: 15 * 60 },
+  ) * 1000;
+
+const copyPendingCheckLimit = (env: Env) =>
+  getNumber(
+    env.DRIVE_COPY_PENDING_CHECK_LIMIT,
+    DRIVE_COPY_PENDING_CHECK_LIMIT,
+    { min: 1, max: 60 },
+  );
+
+const numericSize = (value: number | string | null | undefined) => {
+  const parsed = typeof value === 'number' ? value : Number(value);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : undefined;
 };
 
 export const runSafeRegistrationCommit = async ({
@@ -2805,6 +2839,10 @@ const ensureRegistrationStatusTable = async (env: Env) => {
           extension TEXT,
           error_message TEXT,
           attempt_count INTEGER NOT NULL DEFAULT 0,
+          expected_size BIGINT,
+          copy_check_count INTEGER NOT NULL DEFAULT 0,
+          copy_started_at TIMESTAMP WITH TIME ZONE,
+          next_copy_check_at TIMESTAMP WITH TIME ZONE,
           updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
           created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
         )
@@ -2812,6 +2850,13 @@ const ensureRegistrationStatusTable = async (env: Env) => {
       await sql`
         ALTER TABLE worker_registration_status
         ADD COLUMN IF NOT EXISTS attempt_count INTEGER NOT NULL DEFAULT 0
+      `;
+      await sql`
+        ALTER TABLE worker_registration_status
+        ADD COLUMN IF NOT EXISTS expected_size BIGINT,
+        ADD COLUMN IF NOT EXISTS copy_check_count INTEGER NOT NULL DEFAULT 0,
+        ADD COLUMN IF NOT EXISTS copy_started_at TIMESTAMP WITH TIME ZONE,
+        ADD COLUMN IF NOT EXISTS next_copy_check_at TIMESTAMP WITH TIME ZONE
       `;
     })();
   }
@@ -2833,6 +2878,7 @@ const clearStaleRegistrationStatuses = async (env: Env) => {
     min: 1,
     max: 20,
   });
+  const pendingCheckLimit = copyPendingCheckLimit(env);
   // Remove the misleading legacy marker from rows that were never claimed.
   // Their normal state is detected, and they remain eligible for FIFO work.
   await sql`
@@ -2854,6 +2900,10 @@ const clearStaleRegistrationStatuses = async (env: Env) => {
     -- made an idle backlog look like every file had failed. Only recover a
     -- file that was actually claimed and left in registering.
     WHERE status='registering'
+      AND NOT (
+        COALESCE(copy_check_count, 0) > 0
+        AND COALESCE(copy_check_count, 0) < ${pendingCheckLimit}
+      )
       AND COALESCE(attempt_count, 0) < ${maxAttempts}
       AND COALESCE(updated_at, created_at, TIMESTAMP 'epoch') <
         now() - (${String(minutes)} || ' minutes')::interval
@@ -2870,6 +2920,10 @@ const clearStaleRegistrationStatuses = async (env: Env) => {
       updated_at=now()
     WHERE status='registering'
       AND COALESCE(attempt_count, 0) >= ${maxAttempts}
+      AND NOT (
+        COALESCE(copy_check_count, 0) > 0
+        AND COALESCE(copy_check_count, 0) < ${pendingCheckLimit}
+      )
       AND COALESCE(updated_at, created_at, TIMESTAMP 'epoch') <
         now() - (${String(minutes)} || ' minutes')::interval
     RETURNING url
@@ -2972,6 +3026,10 @@ const getRegistrationStatusRows = async (env: Env, limit?: number) => {
         extension,
         error_message,
         attempt_count,
+        expected_size,
+        copy_check_count,
+        copy_started_at,
+        next_copy_check_at,
         updated_at
       FROM worker_registration_status
       WHERE status='detected'
@@ -3028,6 +3086,10 @@ const getRegistrationStatusRows = async (env: Env, limit?: number) => {
         extension,
         error_message,
         attempt_count,
+        expected_size,
+        copy_check_count,
+        copy_started_at,
+        next_copy_check_at,
         updated_at
     FROM worker_registration_status
   `) as unknown as RegistrationStatusRow[];
@@ -3051,6 +3113,7 @@ const claimRegistrationQueueRow = async (
     min: 1,
     max: 20,
   });
+  const pendingCheckLimit = copyPendingCheckLimit(env);
   const concurrencyLimit = Math.max(1, Math.min(Math.round(activeRegistrationLimit), 10));
   const rows = await sql`
     WITH claim_lock AS MATERIALIZED (
@@ -3068,6 +3131,10 @@ const claimRegistrationQueueRow = async (
         updated_at=now()
       WHERE status='registering'
         AND COALESCE(attempt_count, 0) >= ${maxAttempts}
+        AND NOT (
+          COALESCE(copy_check_count, 0) > 0
+          AND COALESCE(copy_check_count, 0) < ${pendingCheckLimit}
+        )
         AND COALESCE(updated_at, created_at, TIMESTAMP 'epoch') <
           now() - (${String(staleMinutes)} || ' minutes')::interval
       RETURNING url
@@ -3077,6 +3144,10 @@ const claimRegistrationQueueRow = async (
       CROSS JOIN claim_lock
       CROSS JOIN (SELECT COUNT(*) FROM exhausted) AS reclaimed
       WHERE active_row.status='registering'
+        AND NOT (
+          COALESCE(active_row.copy_check_count, 0) > 0
+          AND COALESCE(active_row.next_copy_check_at, now()) <= now()
+        )
         AND COALESCE(active_row.updated_at, active_row.created_at, TIMESTAMP 'epoch') >= now() -
           (${String(staleMinutes)} || ' minutes')::interval
     ), candidate AS MATERIALIZED (
@@ -3084,6 +3155,10 @@ const claimRegistrationQueueRow = async (
         url,
         (
           status='registering'
+          AND NOT (
+            COALESCE(copy_check_count, 0) > 0
+            AND COALESCE(copy_check_count, 0) < ${pendingCheckLimit}
+          )
           AND COALESCE(updated_at, created_at, TIMESTAMP 'epoch') < now() -
             (${String(staleMinutes)} || ' minutes')::interval
         ) AS was_stale_retry,
@@ -3092,7 +3167,19 @@ const claimRegistrationQueueRow = async (
           AND COALESCE(attempt_count, 0) >= ${maxAttempts}
           AND COALESCE(updated_at, created_at, TIMESTAMP 'epoch') < now() -
             (${String(staleMinutes)} || ' minutes')::interval
-        ) AS was_terminal_retry
+        ) AS was_terminal_retry,
+        (
+          status='registering'
+          AND COALESCE(copy_check_count, 0) > 0
+          AND COALESCE(copy_check_count, 0) < ${pendingCheckLimit}
+          AND COALESCE(next_copy_check_at, TIMESTAMP 'epoch') <= now()
+        ) AS was_pending_check,
+        (
+          status='registering'
+          AND COALESCE(copy_check_count, 0) >= ${pendingCheckLimit}
+          AND COALESCE(attempt_count, 0) < ${maxAttempts}
+          AND COALESCE(next_copy_check_at, TIMESTAMP 'epoch') <= now()
+        ) AS was_pending_cycle_exhausted
       FROM worker_registration_status
       CROSS JOIN active
       WHERE active.active_count < ${concurrencyLimit}
@@ -3101,8 +3188,24 @@ const claimRegistrationQueueRow = async (
         OR (
           status='registering'
           AND COALESCE(attempt_count, 0) < ${maxAttempts}
+          AND NOT (
+            COALESCE(copy_check_count, 0) > 0
+            AND COALESCE(copy_check_count, 0) < ${pendingCheckLimit}
+          )
           AND COALESCE(updated_at, created_at, TIMESTAMP 'epoch') <
             now() - (${String(staleMinutes)} || ' minutes')::interval
+        )
+        OR (
+          status='registering'
+          AND COALESCE(copy_check_count, 0) > 0
+          AND COALESCE(copy_check_count, 0) < ${pendingCheckLimit}
+          AND COALESCE(next_copy_check_at, TIMESTAMP 'epoch') <= now()
+        )
+        OR (
+          status='registering'
+          AND COALESCE(copy_check_count, 0) >= ${pendingCheckLimit}
+          AND COALESCE(attempt_count, 0) < ${maxAttempts}
+          AND COALESCE(next_copy_check_at, TIMESTAMP 'epoch') <= now()
         )
         OR (
           status='error'
@@ -3170,7 +3273,23 @@ const claimRegistrationQueueRow = async (
         -- re-upload of the key.
         attempt_count=CASE
           WHEN candidate.was_terminal_retry THEN 1
+          WHEN candidate.was_pending_cycle_exhausted THEN
+            COALESCE(status_row.attempt_count, 0) + 1
+          WHEN candidate.was_pending_check THEN
+            COALESCE(status_row.attempt_count, 0)
           ELSE COALESCE(status_row.attempt_count, 0) + 1
+        END,
+        copy_check_count=CASE
+          WHEN candidate.was_pending_cycle_exhausted THEN 0
+          ELSE COALESCE(status_row.copy_check_count, 0)
+        END,
+        copy_started_at=CASE
+          WHEN candidate.was_pending_cycle_exhausted THEN NULL
+          ELSE status_row.copy_started_at
+        END,
+        next_copy_check_at=CASE
+          WHEN candidate.was_pending_cycle_exhausted THEN NULL
+          ELSE status_row.next_copy_check_at
         END
       FROM candidate
       WHERE status_row.url=candidate.url
@@ -3186,11 +3305,17 @@ const claimRegistrationQueueRow = async (
         status_row.extension,
         status_row.error_message,
         status_row.attempt_count,
+        status_row.expected_size,
+        status_row.copy_check_count,
+        status_row.copy_started_at,
+        status_row.next_copy_check_at,
         status_row.updated_at
     )
     SELECT
       claimed.url,
       candidate.was_stale_retry,
+      candidate.was_pending_check,
+      candidate.was_pending_cycle_exhausted,
       claimed.file_name,
       claimed.uploaded_at,
       claimed.status,
@@ -3201,6 +3326,10 @@ const claimRegistrationQueueRow = async (
       claimed.extension,
       claimed.error_message,
       claimed.attempt_count,
+      claimed.expected_size,
+      claimed.copy_check_count,
+      claimed.copy_started_at,
+      claimed.next_copy_check_at,
       claimed.updated_at
     FROM claimed
     JOIN candidate ON candidate.url=claimed.url
@@ -3228,8 +3357,9 @@ const getRegistrationStatusRowsByUrls = async (env: Env, urls: string[]) => {
   return (await sql`
     SELECT
       url, file_name, uploaded_at, status, source_url, original_file_name,
-      title, media_id, extension, error_message, updated_at
-      , attempt_count
+      title, media_id, extension, error_message, updated_at,
+      attempt_count, expected_size, copy_check_count, copy_started_at,
+      next_copy_check_at
     FROM worker_registration_status
     WHERE url = ANY(${uniqueUrls}) OR source_url = ANY(${uniqueUrls})
   `) as unknown as RegistrationStatusRow[];
@@ -3284,6 +3414,10 @@ type RegistrationStatusWrite = {
   mediaId?: string
   extension?: string
   errorMessage?: string
+  expectedSize?: number
+  copyCheckCount?: number
+  copyStartedAt?: string
+  nextCopyCheckAt?: string
   touchUpdatedAt?: boolean
 };
 
@@ -3312,7 +3446,11 @@ const upsertRegistrationStatusBatch = async (
         title=COALESCE(${row.title ?? null}, title),
         media_id=COALESCE(${row.mediaId ?? null}, media_id),
         extension=COALESCE(${row.extension ?? null}, extension),
-        error_message=${row.errorMessage ?? null}
+        error_message=${row.errorMessage ?? null},
+        expected_size=COALESCE(${row.expectedSize ?? null}, expected_size),
+        copy_check_count=COALESCE(${row.copyCheckCount ?? null}, copy_check_count),
+        copy_started_at=COALESCE(${row.copyStartedAt ?? null}, copy_started_at),
+        next_copy_check_at=${row.nextCopyCheckAt ?? null}
       WHERE url=${row.url} OR source_url=${row.url}
     `;
   }
@@ -3329,6 +3467,10 @@ const upsertRegistrationStatusBatch = async (
     mediaId,
     extension,
     errorMessage,
+    expectedSize,
+    copyCheckCount,
+    copyStartedAt,
+    nextCopyCheckAt,
   }) => ({
     url,
     file_name: fileName ?? null,
@@ -3340,6 +3482,10 @@ const upsertRegistrationStatusBatch = async (
     media_id: mediaId ?? null,
     extension: extension ?? null,
     error_message: errorMessage ?? null,
+    expected_size: expectedSize ?? null,
+    copy_check_count: copyCheckCount ?? 0,
+    copy_started_at: copyStartedAt ?? null,
+    next_copy_check_at: nextCopyCheckAt ?? null,
   })));
   const sql = sqlForEnv(env);
   await sql`
@@ -3355,7 +3501,11 @@ const upsertRegistrationStatusBatch = async (
         title TEXT,
         media_id TEXT,
         extension TEXT,
-        error_message TEXT
+        error_message TEXT,
+        expected_size BIGINT,
+        copy_check_count INTEGER,
+        copy_started_at TIMESTAMP WITH TIME ZONE,
+        next_copy_check_at TIMESTAMP WITH TIME ZONE
       )
     )
     INSERT INTO worker_registration_status (
@@ -3368,7 +3518,11 @@ const upsertRegistrationStatusBatch = async (
       title,
       media_id,
       extension,
-      error_message
+      error_message,
+      expected_size,
+      copy_check_count,
+      copy_started_at,
+      next_copy_check_at
     )
     SELECT
       url,
@@ -3380,7 +3534,11 @@ const upsertRegistrationStatusBatch = async (
       title,
       media_id,
       extension,
-      error_message
+      error_message,
+      expected_size,
+      copy_check_count,
+      copy_started_at,
+      next_copy_check_at
     FROM incoming
     ON CONFLICT (url) DO UPDATE SET
       file_name=COALESCE(EXCLUDED.file_name, worker_registration_status.file_name),
@@ -3390,6 +3548,10 @@ const upsertRegistrationStatusBatch = async (
       title=COALESCE(EXCLUDED.title, worker_registration_status.title),
       media_id=COALESCE(EXCLUDED.media_id, worker_registration_status.media_id),
       extension=COALESCE(EXCLUDED.extension, worker_registration_status.extension),
+      expected_size=COALESCE(EXCLUDED.expected_size, worker_registration_status.expected_size),
+      copy_check_count=COALESCE(EXCLUDED.copy_check_count, worker_registration_status.copy_check_count),
+      copy_started_at=COALESCE(EXCLUDED.copy_started_at, worker_registration_status.copy_started_at),
+      next_copy_check_at=EXCLUDED.next_copy_check_at,
       error_message=CASE
         WHEN worker_registration_status.status='registering'
           AND EXCLUDED.status='detected'
@@ -4482,17 +4644,19 @@ const recoverTrackedRegistrationDestination = async (
 
   const registrationKey = buildRegistrationKey(env, sourceKey, mediaId, extension);
   if (registrationKey === sourceKey) { return false; }
+  const recordedSourceSize = numericSize(row.expected_size);
   const sourceSize = await storageObjectSize(
     env,
     sourceKey,
     REGISTRATION_READY_CHECK_TIMEOUT_MS,
-  ).catch(() => undefined);
+  ).catch(() => recordedSourceSize);
+  const verifiedSourceSize = numericSize(sourceSize) ?? recordedSourceSize;
   const destinationSize = await storageObjectSize(
     env,
     registrationKey,
     REGISTRATION_READY_CHECK_TIMEOUT_MS,
   ).catch(() => undefined);
-  if (!isExactVerifiedStorageCopy(sourceSize, destinationSize)) {
+  if (!isExactVerifiedStorageCopy(verifiedSourceSize, destinationSize)) {
     return false;
   }
 
@@ -4590,6 +4754,62 @@ const recoverTrackedRegistrationDestination = async (
   return true;
 };
 
+const deferRegistrationCopyCheck = async (
+  env: Env,
+  {
+    sourceUrl,
+    fileName,
+    uploadedAt,
+    sourceSize,
+    sourceUrlForTracking,
+    originalFileName,
+    title,
+    mediaId,
+    extension,
+    previousCheckCount = 0,
+    copyStartedAt,
+  }: {
+    sourceUrl: string
+    fileName: string
+    uploadedAt?: string
+    sourceSize?: number
+    sourceUrlForTracking?: string
+    originalFileName?: string
+    title?: string
+    mediaId?: string
+    extension?: string
+    previousCheckCount?: number
+    copyStartedAt?: string | Date | null
+  },
+) => {
+  const checkLimit = copyPendingCheckLimit(env);
+  const checkCount = Math.min(previousCheckCount + 1, checkLimit);
+  const startedAt = parseDateValue(copyStartedAt)?.toISOString() ||
+    new Date().toISOString();
+  const nextCheckAt = new Date(
+    Date.now() + copyPendingCheckIntervalMs(env),
+  ).toISOString();
+  await setRegistrationStatus(env, {
+    url: sourceUrl,
+    fileName,
+    uploadedAt,
+    status: 'registering',
+    sourceUrl: sourceUrlForTracking,
+    originalFileName,
+    title,
+    mediaId,
+    extension,
+    expectedSize: sourceSize,
+    copyCheckCount: checkCount,
+    copyStartedAt: startedAt,
+    nextCopyCheckAt: nextCheckAt,
+    // Keep the public/admin row as plain `registering`. The check count and
+    // timestamps are backend diagnostics; exposing them through error_message
+    // makes the UI look failed even though the copy is still active.
+  });
+  return { checkCount, checkLimit, nextCheckAt };
+};
+
 const scanAndRegisterWithLease = async (
   env: Env,
   leaseToken: string | undefined,
@@ -4663,11 +4883,11 @@ const scanAndRegisterWithLease = async (
   // large tables; run them best-effort after the queue has been dispatched so
   // they can never hold the registration lease or the scheduled event open.
 
-  const configuredRegisterBatchSize = getNumber(env.REGISTER_BATCH_SIZE, 2, {
+  const configuredRegisterBatchSize = getNumber(env.REGISTER_BATCH_SIZE, 1, {
     min: 1,
     max: 10,
   });
-  const configuredMaxRegisterPasses = getNumber(env.MAX_REGISTER_PASSES, 2, {
+  const configuredMaxRegisterPasses = getNumber(env.MAX_REGISTER_PASSES, 1, {
     min: 1,
     max: 10,
   });
@@ -4753,6 +4973,37 @@ const scanAndRegisterWithLease = async (
         scanSkipped: false,
       };
     }
+  }
+  // A pending visibility check must never fall through to copyObject again.
+  // The original Drive request may still be completing, so only the exact
+  // destination probe is allowed until the bounded check budget is exhausted.
+  if (claimedRegistrationRow?.was_pending_check) {
+    const sourceUrl = trimToUndefined(claimedRegistrationRow.source_url) ||
+      claimedRegistrationRow.url;
+    await deferRegistrationCopyCheck(env, {
+      sourceUrl,
+      fileName: claimedRegistrationRow.file_name ||
+        claimedRegistrationRow.original_file_name ||
+        getFileParts(keyFromStorageUrl(env, sourceUrl)).fileName,
+      uploadedAt: claimedRegistrationRow.uploaded_at || undefined,
+      sourceSize: numericSize(claimedRegistrationRow.expected_size),
+      sourceUrlForTracking: sourceUrl,
+      originalFileName: claimedRegistrationRow.original_file_name ||
+        claimedRegistrationRow.file_name || undefined,
+      title: claimedRegistrationRow.title || undefined,
+      mediaId: claimedRegistrationRow.media_id || undefined,
+      extension: claimedRegistrationRow.extension || undefined,
+      previousCheckCount: Number(claimedRegistrationRow.copy_check_count ?? 0),
+      copyStartedAt: claimedRegistrationRow.copy_started_at,
+    });
+    return {
+      registered: 0,
+      registrationPasses: 1,
+      registrationRemaining: 1,
+      pendingVideos: 0,
+      missingProcessingSources: 0,
+      scanSkipped: false,
+    };
   }
   // A scheduled invocation without a claim must finish immediately. Discovery
   // owns the storage cursor on its separate cron, so the registration hot path
@@ -5196,6 +5447,7 @@ const scanAndRegisterWithLease = async (
       let registrationCommitted = false;
       let registrationPhase: 'allocating' | 'preparing' | 'committing' =
         'allocating';
+      let expectedRegistrationSize: number | undefined;
       let registrationAttemptNumber = Number(
         existingRegistration?.attempt_count ??
         claimedRegistrationRow?.attempt_count ??
@@ -5261,6 +5513,25 @@ const scanAndRegisterWithLease = async (
         if (typeof sourceSize !== 'number' || !Number.isFinite(sourceSize) || sourceSize < 0) {
           throw new Error(`Registration source not found in storage: ${object.key}`);
         }
+        expectedRegistrationSize = sourceSize;
+        // Persist the exact expected byte count before any copy request. This
+        // lets a later minute-based check finish safely even if source cleanup
+        // wins a race with tracking cleanup.
+        await setRegistrationStatus(env, {
+          url: sourceUrl,
+          fileName: originalFileName,
+          uploadedAt: sourceUploadedAt,
+          status: 'registering',
+          sourceUrl: persistedSourceUrl,
+          originalFileName,
+          title: registrationTitle,
+          extension,
+          mediaId,
+          expectedSize: sourceSize,
+          copyCheckCount: 0,
+          copyStartedAt: new Date().toISOString(),
+          nextCopyCheckAt: undefined,
+        });
         const targetRegistrationUrl = urlForKey(env, registrationKey);
         const existingMediaForId = rows.find(row => row.id === mediaId);
         const targetRecordedAsRegistered =
@@ -5546,20 +5817,47 @@ const scanAndRegisterWithLease = async (
           registrationUrl,
           error,
         });
-        await setRegistrationStatus(env, {
-          url: sourceUrl,
-          fileName: originalFileName,
-          uploadedAt: sourceUploadedAt,
-          status: canRetryCopy ? 'registering' : 'error',
-          sourceUrl: persistedSourceUrl,
-          originalFileName,
-          title: registrationTitle,
-          extension,
-          errorMessage: canRetryCopy
-            ? `Waiting for storage copy (attempt ${registrationAttemptNumber}/${maxRegistrationAttempts}): ${errorText}`
-            : terminalErrorMessage,
-          touchUpdatedAt: canRetryCopy ? false : undefined,
-        }).catch(() => undefined);
+        if (canRetryCopy) {
+          await deferRegistrationCopyCheck(env, {
+            sourceUrl,
+            fileName: originalFileName,
+            uploadedAt: sourceUploadedAt,
+            sourceSize: numericSize(
+              existingRegistration?.expected_size ??
+              claimedRegistrationRow?.expected_size,
+            ) ?? expectedRegistrationSize,
+            sourceUrlForTracking: persistedSourceUrl,
+            originalFileName,
+            title: registrationTitle,
+            mediaId,
+            extension,
+            previousCheckCount: Number(
+              existingRegistration?.copy_check_count ??
+              claimedRegistrationRow?.copy_check_count ??
+              0,
+            ),
+            copyStartedAt: existingRegistration?.copy_started_at ||
+              claimedRegistrationRow?.copy_started_at,
+          }).catch(() => undefined);
+        } else {
+          await setRegistrationStatus(env, {
+            url: sourceUrl,
+            fileName: originalFileName,
+            uploadedAt: sourceUploadedAt,
+            status: 'error',
+            sourceUrl: persistedSourceUrl,
+            originalFileName,
+            title: registrationTitle,
+            extension,
+            errorMessage: terminalErrorMessage,
+            expectedSize: numericSize(
+              existingRegistration?.expected_size ??
+              claimedRegistrationRow?.expected_size,
+            ) ?? expectedRegistrationSize,
+            copyCheckCount: 0,
+            nextCopyCheckAt: undefined,
+          }).catch(() => undefined);
+        }
         observe(logBackendActivity(env, {
           category: 'registration',
           event: isRecoverableCopyDelay && canRetryCopy
@@ -6391,6 +6689,10 @@ const status = async (
               extension,
               error_message,
               attempt_count,
+              expected_size,
+              copy_check_count,
+              copy_started_at,
+              next_copy_check_at,
               uploaded_at,
               updated_at
             FROM worker_registration_status
@@ -6408,6 +6710,10 @@ const status = async (
                 extension,
                 error_message,
                 attempt_count,
+                expected_size,
+                copy_check_count,
+                copy_started_at,
+                next_copy_check_at,
                 uploaded_at,
                 updated_at
               FROM worker_registration_status
