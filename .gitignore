@@ -45,6 +45,7 @@ next-env.d.ts
 temp.jpg
 temp_patch_helper.txt
 .next-dev.log
+**/.wrangler-dry-*/
 
 # local editor and Codex workspace state
 .vscode/
