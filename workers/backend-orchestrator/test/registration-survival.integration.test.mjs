@@ -271,3 +271,100 @@ test('failed commit preserves both source and verified destination for recovery'
     await environment.assertSingleSurvivor(sourceKey, bytes);
   });
 });
+
+test('ten thousand randomized interruption schedules converge without duplicates or data loss', () => {
+  const scenarioCount = 10_000;
+  let seed = 0x6d2b79f5;
+  const random = () => {
+    seed ^= seed << 13;
+    seed ^= seed >>> 17;
+    seed ^= seed << 5;
+    return seed >>> 0;
+  };
+
+  for (let scenario = 0; scenario < scenarioCount; scenario += 1) {
+    const sources = Array.from({ length: 2 + (random() % 5) }, (_, index) => ({
+      key: `incoming/${scenario}-${index}.mp4`,
+      id: undefined,
+      expectedSize: undefined,
+      destinationKey: undefined,
+      destinationSize: undefined,
+      committed: false,
+      sourcePresent: true,
+      terminal: index === 0 && scenario % 7 === 0,
+      attempts: 0,
+    }));
+    const committedIds = new Set();
+    const committedDestinations = new Set();
+    let nextId = scenario * 10 + 800000000000;
+
+    for (let step = 0; step < 80; step += 1) {
+      const healthy = sources.filter(source =>
+        !source.committed && !source.terminal,
+      );
+      const retryableTerminal = healthy.length === 0
+        ? sources.filter(source => !source.committed && source.terminal)
+        : [];
+      const source = healthy[0] || retryableTerminal[0];
+      if (!source) break;
+
+      // Explicit/manual recovery may make a terminal row eligible, but it
+      // retains identity and destination checkpoints.
+      if (source.terminal) source.terminal = false;
+      source.attempts += 1;
+      source.id ||= String(nextId++);
+      source.destinationKey ||= `registered/${source.id}.mp4`;
+      const crashPoint = random() % 9;
+      if (crashPoint === 0) continue; // killed immediately after atomic claim+ID
+
+      source.expectedSize ||= 1000 + (random() % 1_000_000);
+      if (crashPoint === 1) continue; // killed after durable source metadata
+
+      if (source.destinationSize !== source.expectedSize) {
+        // A partial or missing target is always repaired at the same key.
+        source.destinationSize = crashPoint === 2
+          ? Math.max(0, source.expectedSize - 1)
+          : source.expectedSize;
+      }
+      if (crashPoint === 2 || crashPoint === 3) continue;
+
+      assert.equal(source.destinationSize, source.expectedSize);
+      if (!source.committed) {
+        assert.equal(committedIds.has(source.id), false);
+        assert.equal(committedDestinations.has(source.destinationKey), false);
+        committedIds.add(source.id);
+        committedDestinations.add(source.destinationKey);
+        source.committed = true;
+      }
+      if (crashPoint === 4) continue; // committed, cleanup interrupted
+      source.sourcePresent = false;
+    }
+
+    // Force all recoverable rows through a fault-free pass. This models later
+    // cron/manual invocations after any finite sequence of interruptions.
+    for (const source of sources) {
+      source.terminal = false;
+      source.id ||= String(nextId++);
+      source.destinationKey ||= `registered/${source.id}.mp4`;
+      source.expectedSize ||= 1000 + (random() % 1_000_000);
+      source.destinationSize = source.expectedSize;
+      if (!source.committed) {
+        assert.equal(committedIds.has(source.id), false);
+        assert.equal(committedDestinations.has(source.destinationKey), false);
+        committedIds.add(source.id);
+        committedDestinations.add(source.destinationKey);
+        source.committed = true;
+      }
+      source.sourcePresent = false;
+    }
+
+    assert.equal(committedIds.size, sources.length);
+    assert.equal(committedDestinations.size, sources.length);
+    assert.equal(sources.every(source => source.committed), true);
+    assert.equal(sources.every(source => !source.sourcePresent), true);
+    assert.equal(
+      new Set(sources.map(source => source.id)).size,
+      sources.length,
+    );
+  }
+});

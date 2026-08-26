@@ -3,7 +3,7 @@ import { isSessionAuthorized } from '@/auth/api';
 import { runProcessingOrchestratorRecovery } from '@/processing/orchestrator';
 
 export const dynamic = 'force-dynamic';
-export const maxDuration = 30;
+export const maxDuration = 120;
 
 export async function POST() {
   if (!await isSessionAuthorized('edit')) {

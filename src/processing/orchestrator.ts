@@ -82,9 +82,38 @@ export const runProcessingOrchestratorRecovery = async () => {
       text || `Backend Orchestrator recovery failed (${response.status})`,
     );
   }
+  const recovery = await response.json().catch(() => ({})) as
+    ProcessingOrchestratorRecoveryResult;
+  // Requeue is committed before work starts. Keep the HTTP request connected
+  // while the Worker performs one resumable pass; if this request is cut off,
+  // the durable rows remain eligible for the next cron dispatch.
+  const scanResponse = await fetch(
+    `${baseUrl}/internal/scheduled-registration`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${connection.orchestratorSharedSecret}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ cron: '* * * * *' }),
+      signal: AbortSignal.timeout(110_000),
+    },
+  );
+  if (!scanResponse.ok) {
+    const text = await scanResponse.text().catch(() => '');
+    throw new Error(
+      text ||
+      `Backend Orchestrator recovery pass failed (${scanResponse.status})`,
+    );
+  }
   return {
+    ...recovery,
     triggered: true,
-    ...await response.json().catch(() => ({})),
+    scanStarted: true,
+    statusMessage: recovery.requeued
+      ? `${recovery.requeued} incomplete registration${
+        recovery.requeued === 1 ? '' : 's'
+      } requeued; recovery pass completed`
+      : 'Recovery pass completed',
   } satisfies ProcessingOrchestratorRecoveryResult;
 };
 
@@ -112,9 +141,28 @@ export const retryWorkerRegistration = async ({
     const text = await response.text().catch(() => '');
     throw new Error(text || `Registration retry failed (${response.status})`);
   }
+  const recovery = await response.json().catch(() => ({}));
+  const scanResponse = await fetch(
+    `${baseUrl}/internal/scheduled-registration`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${connection.orchestratorSharedSecret}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ cron: '* * * * *' }),
+      signal: AbortSignal.timeout(110_000),
+    },
+  );
+  if (!scanResponse.ok) {
+    const text = await scanResponse.text().catch(() => '');
+    throw new Error(
+      text || `Registration retry pass failed (${scanResponse.status})`,
+    );
+  }
   return {
+    ...recovery,
     triggered: true,
-    ...await response.json().catch(() => ({})),
+    scanStarted: true,
   };
 };
 

@@ -275,7 +275,7 @@ const GENERATED_MEDIA_SUFFIX_REGEX =
 const STALE_REGISTRATION_ERROR_MESSAGE =
   'Previous registration attempt stalled; queued for retry';
 const MISSING_UPLOAD_ERROR_PREFIX = 'Upload not found in storage';
-const WORKER_BUILD_ID = 'v122';
+const WORKER_BUILD_ID = 'v123';
 // A scheduled Worker must finish promptly. Drive copies can become visible
 // asynchronously, so persist the in-flight state and check again on the next
 // minute instead of polling long enough to lose the registration lease.
@@ -3080,6 +3080,14 @@ const getRegistrationStatusRows = async (env: Env, limit?: number) => {
         OR (
           status='error'
           AND COALESCE(attempt_count, 0) < ${maxAttempts}
+          -- Failed work must never hold the only registration slot ahead of
+          -- healthy FIFO work. Retry it automatically only after the detected
+          -- backlog has drained; an operator can still retry it immediately.
+          AND NOT EXISTS (
+            SELECT 1
+            FROM worker_registration_status healthy_queue
+            WHERE healthy_queue.status='detected'
+          )
           AND (
             error_message IS NULL
             OR error_message ILIKE '%timeout%'
@@ -3271,6 +3279,11 @@ const claimRegistrationQueueRow = async (
         OR (
           status='error'
           AND COALESCE(attempt_count, 0) >= ${maxAttempts}
+          AND NOT EXISTS (
+            SELECT 1
+            FROM worker_registration_status healthy_queue
+            WHERE healthy_queue.status='detected'
+          )
           AND error_message NOT LIKE 'Registration source not found in storage:%'
           AND error_message NOT LIKE 'Upload not found in storage%'
           AND COALESCE(updated_at, created_at, TIMESTAMP 'epoch') < now() -
@@ -3293,12 +3306,14 @@ const claimRegistrationQueueRow = async (
         )
         )
       -- Finish interrupted work before advancing to a newly detected file.
-      -- Otherwise one pre-ID crash every five minutes walks forward through
-      -- the backlog and leaves a trail of abandoned registering rows.
+      -- A genuinely active row is already counted by the concurrency fence and
+      -- prevents any claim. Once it is stale, however, it must yield to healthy
+      -- detected FIFO work; otherwise one pathological file monopolizes the
+      -- only slot forever. Recovery can still retry it after that backlog.
       ORDER BY
         CASE candidate_row.status
-          WHEN 'registering' THEN 0
-          WHEN 'error' THEN 1
+          WHEN 'detected' THEN 0
+          WHEN 'registering' THEN 1
           ELSE 2
         END,
         candidate_row.uploaded_at ASC NULLS LAST,
@@ -6996,93 +7011,117 @@ const scheduleScan = (env: Env, ctx: ExecutionContext) => {
   return scan.started;
 };
 
+const runScheduledRegistrationWork = async (
+  cron: string,
+  env: Env,
+  ctx: ExecutionContext,
+) => {
+  const discoveryOnly = (REGISTRATION_DISCOVERY_CRONS as readonly string[])
+    .includes(cron);
+  const scheduledEnv: Env = {
+    ...env,
+    REGISTRATION_SCHEDULED: '1',
+    REGISTRATION_DISCOVERY_ONLY: discoveryOnly ? '1' : '0',
+  };
+  const settings = runtimeSettingsCache?.settings ??
+    await getRuntimeProcessingSettings(scheduledEnv);
+  if (!settings.orchestratorEnabled || !settings.registrationEnabled) {
+    return { skipped: true, discoveryOnly };
+  }
+  const runtimeEnv = envWithRuntimeSettings(scheduledEnv, settings);
+  if (discoveryOnly) {
+    const discovery = await runRegistrationDiscoveryPage(
+      runtimeEnv,
+      REGISTRATION_DISCOVERY_PAGE_SIZE,
+    );
+    return { skipped: false, discoveryOnly: true, ...discovery };
+  }
+
+  const scan = startScan(runtimeEnv, {
+    shareInFlight: false,
+    waitUntil: promise => ctx.waitUntil(promise),
+  });
+  return {
+    skipped: false,
+    discoveryOnly: false,
+    ...await scan.promise,
+  };
+};
+
+const dispatchScheduledRegistrationWork = async (
+  controller: ScheduledController,
+  env: Env,
+) => {
+  const panelBaseUrl = env.MEDIA_PANEL_BASE_URL?.trim().replace(/\/+$/, '');
+  const secret = trimToUndefined(env.BACKEND_ORCHESTRATOR_SHARED_SECRET);
+  if (!panelBaseUrl || !secret) {
+    throw new Error(
+      'Scheduled registration dispatch requires MEDIA_PANEL_BASE_URL and BACKEND_ORCHESTRATOR_SHARED_SECRET',
+    );
+  }
+  const response = await fetch(`${panelBaseUrl}/api/processing/cron-dispatch`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${secret}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      cron: controller.cron,
+      scheduledTime: controller.scheduledTime,
+    }),
+  });
+  if (!response.ok) {
+    const message = await response.text().catch(() => '');
+    throw new Error(
+      message || `Scheduled registration dispatch failed (${response.status})`,
+    );
+  }
+};
+
 export default {
   async scheduled(
     controller: ScheduledController,
     env: Env,
     ctx: ExecutionContext,
   ) {
-    const discoveryOnly = (REGISTRATION_DISCOVERY_CRONS as readonly string[])
-      .includes(controller.cron);
-    const scheduledEnv: Env = {
-      ...env,
-      REGISTRATION_SCHEDULED: '1',
-      REGISTRATION_DISCOVERY_ONLY: discoveryOnly ? '1' : '0',
-    };
-    // Discovery has its own bounded cron. It may list storage and refresh the
-    // cursor/configuration, but it never claims or registers a row, so a slow
-    // inventory pass cannot consume the registration invocation's CPU budget.
-    if (discoveryOnly) {
-      ctx.waitUntil((async () => {
-        try {
-          // A scheduled isolate has no guarantee of sharing the cache with a
-          // previous request. Always hydrate the runtime settings from the
-          // panel-backed configuration table on a cold isolate so discovery
-          // obeys the same database state as the panel and hot path.
-          const settings = runtimeSettingsCache?.settings ??
-            await getRuntimeProcessingSettings(scheduledEnv);
-          if (!settings.orchestratorEnabled || !settings.registrationEnabled) {
-            await logBackendActivity(scheduledEnv, {
-              category: 'orchestrator',
-              event: 'scheduled_scan_skipped',
-              status: 'warning',
-              message: 'Discovery skipped because registration is disabled',
-            });
-            return;
-          }
-          const discovery = await runRegistrationDiscoveryPage(
-            scheduledEnv,
-            REGISTRATION_DISCOVERY_PAGE_SIZE,
-          );
-          if (discovery.discovered > 0) {
-            console.log(JSON.stringify({
-              category: 'registration',
-              event: 'storage_objects_detected',
-              status: 'success',
-              count: discovery.discovered,
-              pageSize: discovery.pageSize,
-            }));
-          }
-        } catch (error) {
-          console.warn('Scheduled registration discovery failed', error);
-        }
-      })());
-      return;
-    }
-
-    // The hot path remains claim -> ID -> Drive -> atomic commit. Reuse the
-    // short-lived settings cache when warm; cold isolates hydrate it once
-    // before claiming so panel changes are honored without a stale fallback.
-    // Cron invocations can start in a fresh isolate. Do not silently use
-    // deployment-time defaults (including batch size) when the panel has a
-    // newer database-backed value; hydrate the cache before claiming work.
-    const settings = runtimeSettingsCache?.settings ??
-      await getRuntimeProcessingSettings(scheduledEnv);
-    if (!settings.orchestratorEnabled || !settings.registrationEnabled) {
-      ctx.waitUntil(logBackendActivity(scheduledEnv, {
-        category: 'orchestrator',
-        event: 'scheduled_scan_skipped',
-        status: 'warning',
-        message: 'Scheduled registration skipped because it is disabled',
-      }).catch(error => {
-        console.warn('Unable to log scheduled scan skip', error);
-      }));
-      return;
-    }
-    const scan = startScan(
-      envWithRuntimeSettings(scheduledEnv, settings),
-      {
-        shareInFlight: false,
-        waitUntil: promise => ctx.waitUntil(promise),
-      },
-    );
-    if (scan.started) {
-      keepScheduledScanBounded(scan.promise, scheduledEnv, ctx);
-    }
+    // Cron invocations on this deployment are capped at roughly 10 ms of CPU.
+    // They must never claim a durable row and then die before the next
+    // checkpoint. Dispatch through the panel so detection/registration starts
+    // as an independent HTTP invocation, while the database claim remains the
+    // cross-invocation duplicate fence.
+    ctx.waitUntil(dispatchScheduledRegistrationWork(controller, env).catch(error => {
+      console.error('Scheduled registration dispatch failed', error);
+    }));
   },
 
   async fetch(request: Request, env: Env, ctx: ExecutionContext) {
     const url = new URL(request.url);
+
+    if (url.pathname === '/internal/scheduled-registration' && request.method === 'POST') {
+      if (!isAuthorized(request, env.BACKEND_ORCHESTRATOR_SHARED_SECRET)) {
+        return json(401, { error: 'Unauthorized' });
+      }
+      const body = await request.json().catch(() => ({})) as {
+        cron?: unknown
+      };
+      const cron = typeof body.cron === 'string' ? body.cron : '';
+      const allowedCrons = ['* * * * *', ...REGISTRATION_DISCOVERY_CRONS];
+      if (!allowedCrons.includes(cron)) {
+        return json(400, { error: 'Unsupported registration schedule' });
+      }
+      try {
+        return json(200, {
+          ok: true,
+          ...await runScheduledRegistrationWork(cron, env, ctx),
+        });
+      } catch (error) {
+        return json(500, {
+          error: error instanceof Error
+            ? error.message
+            : 'Scheduled registration work failed',
+        });
+      }
+    }
 
     if (url.pathname === '/' && (request.method === 'GET' || request.method === 'HEAD')) {
       return landingResponse(request, await getWorkerLandingMetadata(env));
@@ -7198,15 +7237,13 @@ export default {
       }
       try {
         const requeued = await requeueRegistrationStatuses(runtimeEnv, urls);
-        const scanQueued = settings.orchestratorEnabled && settings.registrationEnabled
-          ? scheduleScan(runtimeEnv, ctx)
-          : false;
-        return json(scanQueued ? 202 : 200, {
+        return json(202, {
           requeued,
-          triggered: scanQueued,
+          triggered: false,
+          scanStarted: false,
           statusMessage: requeued > 0
-            ? 'Registration requeued for worker retry'
-            : 'Worker scan requested',
+            ? 'Registration durably requeued; ready for a foreground registration pass'
+            : 'No matching registration row was found',
         });
       } catch (error: any) {
         return json(500, { error: error?.message || 'Unable to retry registration' });
@@ -7232,33 +7269,22 @@ export default {
         const requeued = await requeueIncompleteRegistrationsForRecovery(
           runtimeEnv,
         );
-        // Use the same atomic claim+ID hot path as cron. The old manual scan
-        // incremented attempt_count before allocating an ID, recreating the
-        // exact null-ID failure that Recovery was meant to repair.
-        const scanQueued = scheduleScan({
-          ...runtimeEnv,
-          REGISTRATION_SCHEDULED: '1',
-        }, ctx);
         ctx.waitUntil(logBackendActivity(runtimeEnv, {
           category: 'orchestrator',
           event: 'registration_recovery_requested',
           status: 'info',
-          message: scanQueued
-            ? 'Registration recovery scan requested'
-            : 'Registration recovery scan joined an existing run',
-          details: { requeued, scanQueued },
+          message: 'Registration recovery rows durably requeued',
+          details: { requeued, scanQueued: false },
         }).catch(error => {
           console.warn('Unable to log registration recovery request', error);
         }));
-        return json(scanQueued ? 202 : 200, {
-          triggered: true,
-          scanStarted: scanQueued,
+        return json(202, {
+          triggered: false,
+          scanStarted: false,
           requeued,
           statusMessage: requeued > 0
-            ? `Requeued ${requeued} stale registration${requeued === 1 ? '' : 's'}; worker scan requested`
-            : scanQueued
-              ? 'No stale claims found; worker scan requested'
-              : 'A worker scan is already running',
+            ? `Durably requeued ${requeued} incomplete registration${requeued === 1 ? '' : 's'}`
+            : 'No incomplete registrations required requeueing',
         });
       } catch (error: any) {
         return json(500, { error: error?.message || 'Registration recovery failed' });

@@ -143,13 +143,15 @@ test('scheduled registration skips schema DDL on the hot path', () => {
   assert.match(statusSource, /await ensureRegistrationStatusTable\(env\)/);
 });
 
-test('terminal registration errors re-enter a bounded retry cycle automatically', () => {
+test('failed registrations retry only after the healthy FIFO backlog drains', () => {
   const start = workerSource.indexOf('const claimRegistrationQueueRow');
   const end = workerSource.indexOf('const getRegistrationStatusRowsByUrls', start);
   const source = workerSource.slice(start, end);
   assert.match(source, /status='error'[\s\S]*?COALESCE\(attempt_count, 0\) >= \$\{maxAttempts\}[\s\S]*?COALESCE\(updated_at, created_at, TIMESTAMP 'epoch'\)/);
   assert.match(source, /allocated\.was_terminal_retry/);
   assert.match(source, /attempt_count=CASE[\s\S]*?THEN 1/);
+  assert.match(source, /healthy_queue\.status='detected'/);
+  assert.match(source, /WHEN 'detected' THEN 0[\s\S]*?WHEN 'registering' THEN 1[\s\S]*?ELSE 2/);
   assert.match(source, /error_message LIKE 'Drive copy failed \(5%'/);
   assert.doesNotMatch(source, /error_message LIKE 'Drive copy failed \(403%'/);
   const terminalStart = source.indexOf("error_message LIKE 'Registration stopped after % attempts; retry it manually'");
@@ -312,7 +314,7 @@ test('scheduled claims allocate a collision-checked media ID atomically', () => 
   assert.match(source, /NOT EXISTS \([\s\S]*?FROM media existing_media/);
   assert.match(source, /FROM worker_registration_status existing_status/);
   assert.match(source, /had_media_id/);
-  assert.match(source, /CASE candidate_row\.status[\s\S]*?WHEN 'registering' THEN 0/);
+  assert.match(source, /CASE candidate_row\.status[\s\S]*?WHEN 'detected' THEN 0[\s\S]*?WHEN 'registering' THEN 1/);
 });
 
 test('registration status and logs expose file-level queue progress', () => {
@@ -337,7 +339,7 @@ test('direct-upload discovery is isolated from the registration hot path', () =>
   assert.match(workerSource, /REGISTRATION_DISCOVERY_CRON = REGISTRATION_DISCOVERY_CRONS\[0\]/);
   assert.match(workerSource, /REGISTRATION_DISCOVERY_CRONS = \[/);
   assert.doesNotMatch(workerSource, /'1-59\/2 \* \* \* \*'/);
-  assert.match(workerSource, /REGISTRATION_DISCOVERY_CRONS[\s\S]*includes\(controller\.cron\)/);
+  assert.match(workerSource, /REGISTRATION_DISCOVERY_CRONS[\s\S]*includes\(cron\)/);
   assert.match(workerSource, /REGISTRATION_DISCOVERY_PAGE_SIZE = 100/);
   assert.match(workerSource, /REGISTRATION_DISCOVERY_SQL_BATCH_SIZE = 100/);
   assert.match(workerSource, /offset \+= REGISTRATION_DISCOVERY_SQL_BATCH_SIZE/);
@@ -394,15 +396,21 @@ test('Drive registration I/O is deadline-bound so a scan lease cannot stick fore
   );
 });
 
-test('long scans keep their lease alive while hung scheduled invocations self-release', () => {
+test('long scans run in a resumable HTTP invocation outside cron CPU limits', () => {
   assert.doesNotMatch(workerSource, /Promise\.race\(\[scanAndRegister\(env\), watchdog\]\)/);
   assert.doesNotMatch(workerSource, /Registration scan watchdog exceeded/);
   assert.match(workerSource, /startScanLeaseHeartbeat/);
   assert.match(workerSource, /setInterval\(heartbeat, intervalMs\)/);
   assert.match(workerSource, /await leaseHeartbeat\.stop\(\)/);
-  assert.match(workerSource, /SCHEDULED_SCAN_DEADLINE_MS/);
-  assert.match(workerSource, /scheduled_scan_circuit_breaker/);
-  assert.match(workerSource, /keepScheduledScanBounded\(scan\.promise/);
+  assert.match(workerSource, /const dispatchScheduledRegistrationWork = async/);
+  assert.match(workerSource, /\/api\/processing\/cron-dispatch/);
+  assert.match(workerSource, /\/internal\/scheduled-registration/);
+  assert.match(workerSource, /\.\.\.await scan\.promise/);
+  const scheduledStart = workerSource.indexOf('async scheduled(');
+  const scheduledEnd = workerSource.indexOf('async fetch(', scheduledStart);
+  const scheduledSource = workerSource.slice(scheduledStart, scheduledEnd);
+  assert.match(scheduledSource, /dispatchScheduledRegistrationWork/);
+  assert.doesNotMatch(scheduledSource, /claimRegistrationQueueRow|startScan\(/);
 });
 
 test('observability database failures cannot disable scheduled registration', () => {
@@ -417,7 +425,7 @@ test('observability database failures cannot disable scheduled registration', ()
   const scheduledStart = workerSource.indexOf('async scheduled(');
   const scheduledEnd = workerSource.indexOf('async fetch(', scheduledStart);
   const scheduledSource = workerSource.slice(scheduledStart, scheduledEnd);
-  assert.match(scheduledSource, /scheduled_scan_skipped/);
+  assert.match(scheduledSource, /Scheduled registration dispatch failed/);
   assert.doesNotMatch(scheduledSource, /getRuntimeProcessingSettingsForTrigger/);
 });
 
@@ -474,7 +482,8 @@ test('manual retries explicitly requeue the matching registration record', () =>
   const source = workerSource.slice(retryStart, retryEnd);
 
   assert.match(source, /requeueRegistrationStatuses/);
-  assert.match(source, /scheduleScan/);
+  assert.doesNotMatch(source, /scheduleScan/);
+  assert.match(source, /durably requeued/);
   assert.match(workerSource, /status='detected'/);
 });
 
@@ -515,7 +524,8 @@ test('manual recovery starts a fresh bounded cycle for every incomplete registra
   assert.doesNotMatch(updateSet, /source_url\s*=/);
   assert.doesNotMatch(updateSet, /expected_size\s*=/);
   assert.match(routeSource, /requeueIncompleteRegistrationsForRecovery/);
-  assert.match(routeSource, /REGISTRATION_SCHEDULED: '1'/);
+  assert.doesNotMatch(routeSource, /scheduleScan/);
+  assert.match(routeSource, /Durably requeued/);
   assert.doesNotMatch(routeSource, /clearStaleRegistrationStatuses/);
 });
 
@@ -536,8 +546,11 @@ test('scheduled registration does not compete with the deletion queue', () => {
   const scheduledEnd = workerSource.indexOf('async fetch(', scheduledStart);
   const source = workerSource.slice(scheduledStart, scheduledEnd);
 
-  assert.doesNotMatch(source, /const deletionDrain = startDeletionDrain\(scheduledEnv\)/);
-  assert.match(source, /startScan\([\s\S]*?envWithRuntimeSettings\(scheduledEnv, settings\)[\s\S]*?shareInFlight: false/);
+  assert.doesNotMatch(source, /startDeletionDrain|startScan|claimRegistrationQueueRow/);
+  const workStart = workerSource.indexOf('const runScheduledRegistrationWork');
+  const workEnd = workerSource.indexOf('const dispatchScheduledRegistrationWork', workStart);
+  const workSource = workerSource.slice(workStart, workEnd);
+  assert.match(workSource, /startScan\(runtimeEnv[\s\S]*?shareInFlight: false/);
   assert.match(workerSource, /ctx\.waitUntil\(drain\.promise\.catch/);
   assert.match(workerSource, /continuing registration with cached prefixes/);
 });
