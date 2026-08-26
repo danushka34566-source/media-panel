@@ -66,6 +66,7 @@ type RegistrationStatusRow = {
   was_stale_retry?: boolean
   was_pending_check?: boolean
   was_pending_cycle_exhausted?: boolean
+  had_media_id?: boolean
 };
 
 type UploadRegistrationHintRow = {
@@ -274,7 +275,7 @@ const GENERATED_MEDIA_SUFFIX_REGEX =
 const STALE_REGISTRATION_ERROR_MESSAGE =
   'Previous registration attempt stalled; queued for retry';
 const MISSING_UPLOAD_ERROR_PREFIX = 'Upload not found in storage';
-const WORKER_BUILD_ID = 'v121';
+const WORKER_BUILD_ID = 'v122';
 // A scheduled Worker must finish promptly. Drive copies can become visible
 // asynchronously, so persist the in-flight state and check again on the next
 // minute instead of polling long enough to lose the registration lease.
@@ -3185,9 +3186,10 @@ const claimRegistrationQueueRow = async (
           (${String(staleMinutes)} || ' minutes')::interval
     ), candidate AS MATERIALIZED (
       SELECT
-        url,
+        candidate_row.url,
+        candidate_row.media_id IS NOT NULL AS had_media_id,
         (
-          status='registering'
+          candidate_row.status='registering'
           AND NOT (
             COALESCE(copy_check_count, 0) > 0
             AND COALESCE(copy_check_count, 0) < ${pendingCheckLimit}
@@ -3213,7 +3215,7 @@ const claimRegistrationQueueRow = async (
           AND COALESCE(attempt_count, 0) < ${maxAttempts}
           AND COALESCE(next_copy_check_at, TIMESTAMP 'epoch') <= now()
         ) AS was_pending_cycle_exhausted
-      FROM worker_registration_status
+      FROM worker_registration_status candidate_row
       CROSS JOIN active
       WHERE active.active_count < ${concurrencyLimit}
         AND (
@@ -3290,13 +3292,58 @@ const claimRegistrationQueueRow = async (
           )
         )
         )
-      ORDER BY uploaded_at ASC NULLS LAST, updated_at ASC, url ASC
+      -- Finish interrupted work before advancing to a newly detected file.
+      -- Otherwise one pre-ID crash every five minutes walks forward through
+      -- the backlog and leaves a trail of abandoned registering rows.
+      ORDER BY
+        CASE candidate_row.status
+          WHEN 'registering' THEN 0
+          WHEN 'error' THEN 1
+          ELSE 2
+        END,
+        candidate_row.uploaded_at ASC NULLS LAST,
+        candidate_row.updated_at ASC,
+        candidate_row.url ASC
       LIMIT 1
       FOR UPDATE SKIP LOCKED
+    ), allocated AS MATERIALIZED (
+      SELECT
+        candidate.*,
+        COALESCE(status_row.media_id, generated.media_id) AS allocated_media_id
+      FROM candidate
+      JOIN worker_registration_status status_row
+        ON status_row.url=candidate.url
+      LEFT JOIN LATERAL (
+        SELECT generated_id.media_id
+        FROM (
+          SELECT LPAD(
+            FLOOR(random() * 1000000000000)::bigint::text,
+            12,
+            '0'
+          ) AS media_id
+          FROM generate_series(1, 100)
+        ) generated_id
+        WHERE status_row.media_id IS NULL
+          AND NOT EXISTS (
+            SELECT 1 FROM media existing_media
+            WHERE existing_media.id=generated_id.media_id
+          )
+          AND NOT EXISTS (
+            SELECT 1 FROM worker_registration_status existing_status
+            WHERE existing_status.media_id=generated_id.media_id
+              AND existing_status.url<>status_row.url
+          )
+        LIMIT 1
+      ) generated ON true
+      WHERE status_row.media_id IS NOT NULL OR generated.media_id IS NOT NULL
     ), claimed AS (
       UPDATE worker_registration_status AS status_row
       SET
         status='registering',
+        -- Claim and identity allocation are one transaction. A Worker may be
+        -- terminated immediately after this statement and the next invocation
+        -- still has the exact destination identity needed to resume safely.
+        media_id=allocated.allocated_media_id,
         updated_at=now(),
         error_message=NULL,
         -- A legacy/retryable terminal marker gets one fresh bounded recovery
@@ -3305,27 +3352,27 @@ const claimRegistrationQueueRow = async (
         -- Missing-source errors remain actionable when discovery sees a later
         -- re-upload of the key.
         attempt_count=CASE
-          WHEN candidate.was_terminal_retry THEN 1
-          WHEN candidate.was_pending_cycle_exhausted THEN
+          WHEN allocated.was_terminal_retry THEN 1
+          WHEN allocated.was_pending_cycle_exhausted THEN
             COALESCE(status_row.attempt_count, 0) + 1
-          WHEN candidate.was_pending_check THEN
+          WHEN allocated.was_pending_check THEN
             COALESCE(status_row.attempt_count, 0)
           ELSE COALESCE(status_row.attempt_count, 0) + 1
         END,
         copy_check_count=CASE
-          WHEN candidate.was_pending_cycle_exhausted THEN 0
+          WHEN allocated.was_pending_cycle_exhausted THEN 0
           ELSE COALESCE(status_row.copy_check_count, 0)
         END,
         copy_started_at=CASE
-          WHEN candidate.was_pending_cycle_exhausted THEN NULL
+          WHEN allocated.was_pending_cycle_exhausted THEN NULL
           ELSE status_row.copy_started_at
         END,
         next_copy_check_at=CASE
-          WHEN candidate.was_pending_cycle_exhausted THEN NULL
+          WHEN allocated.was_pending_cycle_exhausted THEN NULL
           ELSE status_row.next_copy_check_at
         END
-      FROM candidate
-      WHERE status_row.url=candidate.url
+      FROM allocated
+      WHERE status_row.url=allocated.url
       RETURNING
         status_row.url,
         status_row.file_name,
@@ -3346,9 +3393,10 @@ const claimRegistrationQueueRow = async (
     )
     SELECT
       claimed.url,
-      candidate.was_stale_retry,
-      candidate.was_pending_check,
-      candidate.was_pending_cycle_exhausted,
+      allocated.was_stale_retry,
+      allocated.was_pending_check,
+      allocated.was_pending_cycle_exhausted,
+      allocated.had_media_id,
       claimed.file_name,
       claimed.uploaded_at,
       claimed.status,
@@ -3365,7 +3413,7 @@ const claimRegistrationQueueRow = async (
       claimed.next_copy_check_at,
       claimed.updated_at
     FROM claimed
-    JOIN candidate ON candidate.url=claimed.url
+    JOIN allocated ON allocated.url=claimed.url
   ` as unknown as RegistrationStatusRow[];
   const claimed = rows[0];
   // Process the row immediately in this invocation. It is persisted as
@@ -4975,15 +5023,17 @@ const scanAndRegisterWithLease = async (
     : undefined;
   const hasScheduledQueue = Boolean(claimedRegistrationRow);
   if (claimedRegistrationRow) {
-    observe(logBackendActivity(env, {
+    // Do not open an observability database connection between the atomic
+    // claim and the first durable registration checkpoint. Cloudflare can
+    // reclaim a Free-plan isolate while waitUntil logging competes for CPU.
+    console.log(JSON.stringify({
       category: 'registration',
       event: 'registration_claimed',
       status: 'info',
-      message: `Claimed ${claimedRegistrationRow.file_name || claimedRegistrationRow.url}`,
-      details: { url: claimedRegistrationRow.url },
-    }).catch(() => undefined));
+      mediaId: claimedRegistrationRow.media_id,
+    }));
   }
-  if (claimedRegistrationRow?.media_id) {
+  if (claimedRegistrationRow?.media_id && claimedRegistrationRow.had_media_id) {
     const recovered = await recoverTrackedRegistrationDestination(
       env,
       claimedRegistrationRow,
@@ -5131,10 +5181,12 @@ const scanAndRegisterWithLease = async (
     // media table. A targeted ID lookup preserves the existing idempotency
     // behavior while keeping the query bounded by the queue slice.
     const rows = hasScheduledQueue
-      ? await getMediaRowsByIds(
-        env,
-        queueCandidateIds.filter((id): id is string => Boolean(id)),
-      )
+      ? claimedRegistrationRow?.had_media_id
+        ? await getMediaRowsByIds(
+          env,
+          queueCandidateIds.filter((id): id is string => Boolean(id)),
+        )
+        : []
       : isScheduledRegistration
         ? await getMediaRowsByUrls(env, listedObjectUrls)
         : await getMediaRows(env);
@@ -5417,7 +5469,12 @@ const scanAndRegisterWithLease = async (
 
     const pendingUploads = Array.from(pendingObjectByKey.values());
 
-    await syncDetectedStatuses(env, pendingUploads, registrationRowsByUrl);
+    // Discovery already made the scheduled row durable. Rewriting that same
+    // status before processing wastes a database connection in the smallest
+    // CPU budget and previously widened the claim-to-ID failure window.
+    if (!hasScheduledQueue) {
+      await syncDetectedStatuses(env, pendingUploads, registrationRowsByUrl);
+    }
     if (pass === 0 && !inventoryCursorPersisted && !hasScheduledQueue) {
       // Advance the cursor only after this page's detected rows are durable.
       // If the Worker is reclaimed earlier, the same page is safely retried.
@@ -5519,25 +5576,25 @@ const scanAndRegisterWithLease = async (
         // Free-plan invocation is reclaimed during a HEAD/copy, the next
         // claim can resume the exact destination instead of rotating an
         // opaque `registering` row with a null ID.
-        await setRegistrationStatus(env, {
-          url: sourceUrl,
-          fileName: originalFileName,
-          uploadedAt: sourceUploadedAt,
-          status: 'registering',
-          sourceUrl: persistedSourceUrl,
-          originalFileName,
-          title: registrationTitle,
-          extension,
-          mediaId,
-        });
-        observe(logBackendActivity(env, {
+        if (!hasScheduledQueue) {
+          await setRegistrationStatus(env, {
+            url: sourceUrl,
+            fileName: originalFileName,
+            uploadedAt: sourceUploadedAt,
+            status: 'registering',
+            sourceUrl: persistedSourceUrl,
+            originalFileName,
+            title: registrationTitle,
+            extension,
+            mediaId,
+          });
+        }
+        console.log(JSON.stringify({
           category: 'registration',
           event: 'registration_id_allocated',
           status: 'info',
-          message: `Allocated registration ID for ${originalFileName}`,
           mediaId,
-          details: { phase: 'preparing', sourceUrl },
-        }).catch(() => undefined));
+        }));
         // Rows rehydrated from the durable queue may be outside the current
         // inventory page and therefore have no listed size. Fetch the source
         // size once before validating an existing generated destination;
@@ -7175,7 +7232,13 @@ export default {
         const requeued = await requeueIncompleteRegistrationsForRecovery(
           runtimeEnv,
         );
-        const scanQueued = scheduleScan(runtimeEnv, ctx);
+        // Use the same atomic claim+ID hot path as cron. The old manual scan
+        // incremented attempt_count before allocating an ID, recreating the
+        // exact null-ID failure that Recovery was meant to repair.
+        const scanQueued = scheduleScan({
+          ...runtimeEnv,
+          REGISTRATION_SCHEDULED: '1',
+        }, ctx);
         ctx.waitUntil(logBackendActivity(runtimeEnv, {
           category: 'orchestrator',
           event: 'registration_recovery_requested',

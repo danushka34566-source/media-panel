@@ -21,8 +21,6 @@ export default function AdminMediaTableInfinite({
       cacheKey={`page-${PATH_ADMIN_MEDIA}`}
       initialOffset={initialOffset}
       itemsPerPage={itemsPerPage}
-      useCachedMedia={false}
-      sortBy="createdAt"
       includeHiddenMedia
     >
       {({ key, photos, onLastMediaVisible, revalidateMedia }) =>

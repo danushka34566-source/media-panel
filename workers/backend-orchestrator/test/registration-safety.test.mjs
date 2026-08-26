@@ -148,7 +148,7 @@ test('terminal registration errors re-enter a bounded retry cycle automatically'
   const end = workerSource.indexOf('const getRegistrationStatusRowsByUrls', start);
   const source = workerSource.slice(start, end);
   assert.match(source, /status='error'[\s\S]*?COALESCE\(attempt_count, 0\) >= \$\{maxAttempts\}[\s\S]*?COALESCE\(updated_at, created_at, TIMESTAMP 'epoch'\)/);
-  assert.match(source, /candidate\.was_terminal_retry/);
+  assert.match(source, /allocated\.was_terminal_retry/);
   assert.match(source, /attempt_count=CASE[\s\S]*?THEN 1/);
   assert.match(source, /error_message LIKE 'Drive copy failed \(5%'/);
   assert.doesNotMatch(source, /error_message LIKE 'Drive copy failed \(403%'/);
@@ -300,6 +300,19 @@ test('scheduled registration claims enforce the configured global concurrency ca
   assert.match(claimSource, /was_stale_retry/);
   assert.match(workerSource, /claimedRegistrationRow\?\.was_stale_retry/);
   assert.match(workerSource, /claimRegistrationQueueRow\(env, registerBatchSize\)/);
+});
+
+test('scheduled claims allocate a collision-checked media ID atomically', () => {
+  const claimStart = workerSource.indexOf('const claimRegistrationQueueRow');
+  const claimEnd = workerSource.indexOf('const getTrackedRegistrationStatuses', claimStart);
+  const source = workerSource.slice(claimStart, claimEnd);
+
+  assert.match(source, /allocated AS MATERIALIZED/);
+  assert.match(source, /media_id=allocated\.allocated_media_id/);
+  assert.match(source, /NOT EXISTS \([\s\S]*?FROM media existing_media/);
+  assert.match(source, /FROM worker_registration_status existing_status/);
+  assert.match(source, /had_media_id/);
+  assert.match(source, /CASE candidate_row\.status[\s\S]*?WHEN 'registering' THEN 0/);
 });
 
 test('registration status and logs expose file-level queue progress', () => {
@@ -502,6 +515,7 @@ test('manual recovery starts a fresh bounded cycle for every incomplete registra
   assert.doesNotMatch(updateSet, /source_url\s*=/);
   assert.doesNotMatch(updateSet, /expected_size\s*=/);
   assert.match(routeSource, /requeueIncompleteRegistrationsForRecovery/);
+  assert.match(routeSource, /REGISTRATION_SCHEDULED: '1'/);
   assert.doesNotMatch(routeSource, /clearStaleRegistrationStatuses/);
 });
 
