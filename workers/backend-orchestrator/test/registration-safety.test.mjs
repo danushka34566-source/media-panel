@@ -465,6 +465,46 @@ test('manual retries explicitly requeue the matching registration record', () =>
   assert.match(workerSource, /status='detected'/);
 });
 
+test('manual recovery starts a fresh bounded cycle for every incomplete registration', () => {
+  const helperStart = workerSource.indexOf(
+    'const requeueIncompleteRegistrationsForRecovery',
+  );
+  const helperEnd = workerSource.indexOf(
+    'const clearOldCompletedRegistrationStatuses',
+    helperStart,
+  );
+  const helperSource = workerSource.slice(helperStart, helperEnd);
+  const routeStart = workerSource.indexOf(
+    "url.pathname === '/recovery'",
+  );
+  const routeEnd = workerSource.indexOf(
+    "if (url.pathname === '/run'",
+    routeStart,
+  );
+  const routeSource = workerSource.slice(routeStart, routeEnd);
+
+  assert.ok(helperStart >= 0);
+  assert.match(helperSource, /WHERE status='error'/);
+  assert.match(helperSource, /status='registering'/);
+  assert.match(helperSource, /status='detected'/);
+  assert.match(helperSource, /attempt_count=0/);
+  assert.match(helperSource, /copy_check_count=0/);
+  assert.match(helperSource, /copy_started_at=NULL/);
+  assert.match(helperSource, /next_copy_check_at=NULL/);
+  // Recovery deliberately leaves media_id, source_url, and expected_size
+  // untouched so the next claim targets the same generated object instead of
+  // allocating a duplicate identity or treating it as a second upload.
+  const updateSet = helperSource.slice(
+    helperSource.indexOf('SET'),
+    helperSource.indexOf('WHERE'),
+  );
+  assert.doesNotMatch(updateSet, /media_id\s*=/);
+  assert.doesNotMatch(updateSet, /source_url\s*=/);
+  assert.doesNotMatch(updateSet, /expected_size\s*=/);
+  assert.match(routeSource, /requeueIncompleteRegistrationsForRecovery/);
+  assert.doesNotMatch(routeSource, /clearStaleRegistrationStatuses/);
+});
+
 test('Supabase scans use a fresh bounded client and retry a dropped connection', () => {
   assert.match(workerSource, /new Client\(/);
   assert.match(workerSource, /connectionTimeoutMillis: connectionTimeoutMs/);

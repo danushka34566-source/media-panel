@@ -274,7 +274,7 @@ const GENERATED_MEDIA_SUFFIX_REGEX =
 const STALE_REGISTRATION_ERROR_MESSAGE =
   'Previous registration attempt stalled; queued for retry';
 const MISSING_UPLOAD_ERROR_PREFIX = 'Upload not found in storage';
-const WORKER_BUILD_ID = 'v120';
+const WORKER_BUILD_ID = 'v121';
 // A scheduled Worker must finish promptly. Drive copies can become visible
 // asynchronously, so persist the in-flight state and check again on the next
 // minute instead of polling long enough to lose the registration lease.
@@ -2957,6 +2957,39 @@ const clearStaleRegistrationStatuses = async (env: Env) => {
     RETURNING url
   ` as unknown as Array<{ url: string }>;
   return recoveredRows.length + exhaustedRows.length + transientErrorRows.length;
+};
+
+// The recovery endpoint is an explicit operator request to reconcile every
+// unfinished registration, including rows that exhausted their automatic
+// retry budget. Start one fresh bounded cycle while preserving the durable
+// media ID/source metadata needed to resume an interrupted generated-name
+// copy. Automatic cron recovery remains bounded by MAX_REGISTRATION_ATTEMPTS;
+// only this authenticated manual action resets that counter.
+const requeueIncompleteRegistrationsForRecovery = async (env: Env) => {
+  const sql = sqlForEnv(env);
+  const minutes = getNumber(env.STALE_REGISTRATION_MINUTES, 15, {
+    min: 1,
+    max: 24 * 60,
+  });
+  const rows = await sql`
+    UPDATE worker_registration_status
+    SET
+      status='detected',
+      error_message=NULL,
+      attempt_count=0,
+      copy_check_count=0,
+      copy_started_at=NULL,
+      next_copy_check_at=NULL,
+      updated_at=now()
+    WHERE status='error'
+      OR (
+        status='registering'
+        AND COALESCE(updated_at, created_at, TIMESTAMP 'epoch') <
+          now() - (${String(minutes)} || ' minutes')::interval
+      )
+    RETURNING url
+  ` as unknown as Array<{ url: string }>;
+  return rows.length;
 };
 
 const clearOldCompletedRegistrationStatuses = async (env: Env) => {
@@ -7139,7 +7172,9 @@ export default {
         // requeues only genuinely stale/incomplete claims; active Drive copies
         // remain protected from duplicate work. The scheduled path runs this
         // same stale-row maintenance automatically on every cron tick.
-        const requeued = await clearStaleRegistrationStatuses(runtimeEnv);
+        const requeued = await requeueIncompleteRegistrationsForRecovery(
+          runtimeEnv,
+        );
         const scanQueued = scheduleScan(runtimeEnv, ctx);
         ctx.waitUntil(logBackendActivity(runtimeEnv, {
           category: 'orchestrator',
