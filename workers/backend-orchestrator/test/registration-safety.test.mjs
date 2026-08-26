@@ -151,7 +151,7 @@ test('failed registrations retry only after the healthy FIFO backlog drains', ()
   assert.match(source, /allocated\.was_terminal_retry/);
   assert.match(source, /attempt_count=CASE[\s\S]*?THEN 1/);
   assert.match(source, /healthy_queue\.status='detected'/);
-  assert.match(source, /WHEN 'detected' THEN 0[\s\S]*?WHEN 'registering' THEN 1[\s\S]*?ELSE 2/);
+  assert.match(source, /candidate_row\.status='registering'[\s\S]*?THEN 0[\s\S]*?candidate_row\.status='detected' THEN 1[\s\S]*?candidate_row\.status='registering' THEN 2[\s\S]*?ELSE 3/);
   assert.match(source, /error_message LIKE 'Drive copy failed \(5%'/);
   assert.doesNotMatch(source, /error_message LIKE 'Drive copy failed \(403%'/);
   const terminalStart = source.indexOf("error_message LIKE 'Registration stopped after % attempts; retry it manually'");
@@ -190,6 +190,9 @@ test('slow Drive copies use durable minute checks without duplicate copy request
   const claimEnd = workerSource.indexOf('const getRegistrationStatusRowsByUrls', claimStart);
   const claimSource = workerSource.slice(claimStart, claimEnd);
   assert.match(claimSource, /was_pending_check/);
+  assert.match(workerSource, /recordedSourceSize && recordedSourceSize > 0/);
+  assert.match(claimSource, /candidate_row\.copy_check_count/);
+  assert.match(claimSource, /candidate_row\.next_copy_check_at/);
   assert.match(claimSource, /was_pending_cycle_exhausted/);
   assert.match(claimSource, /COALESCE\(next_copy_check_at, TIMESTAMP 'epoch'\) <= now\(\)/);
 
@@ -314,7 +317,7 @@ test('scheduled claims allocate a collision-checked media ID atomically', () => 
   assert.match(source, /NOT EXISTS \([\s\S]*?FROM media existing_media/);
   assert.match(source, /FROM worker_registration_status existing_status/);
   assert.match(source, /had_media_id/);
-  assert.match(source, /CASE candidate_row\.status[\s\S]*?WHEN 'detected' THEN 0[\s\S]*?WHEN 'registering' THEN 1/);
+  assert.match(source, /candidate_row\.status='registering'[\s\S]*?THEN 0[\s\S]*?candidate_row\.status='detected' THEN 1/);
 });
 
 test('registration status and logs expose file-level queue progress', () => {
@@ -394,6 +397,11 @@ test('Drive registration I/O is deadline-bound so a scan lease cannot stick fore
     workerSource.slice(objectSizeStart, objectSizeEnd),
     /listDriveObjectSize\(env, key, timeoutMs\)/,
   );
+  assert.match(
+    workerSource.slice(objectSizeStart, objectSizeEnd),
+    /size === 0 \? listDriveObjectSize\(env, key, timeoutMs\) : size/,
+  );
+  assert.match(workerSource, /sourceSize <= 0/);
 });
 
 test('long scans run in a resumable HTTP invocation outside cron CPU limits', () => {

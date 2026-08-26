@@ -275,7 +275,7 @@ const GENERATED_MEDIA_SUFFIX_REGEX =
 const STALE_REGISTRATION_ERROR_MESSAGE =
   'Previous registration attempt stalled; queued for retry';
 const MISSING_UPLOAD_ERROR_PREFIX = 'Upload not found in storage';
-const WORKER_BUILD_ID = 'v123';
+const WORKER_BUILD_ID = 'v124';
 // A scheduled Worker must finish promptly. Drive copies can become visible
 // asynchronously, so persist the in-flight state and check again on the next
 // minute instead of polling long enough to lose the registration lease.
@@ -1005,12 +1005,21 @@ const storageObjectSize = async (
     if (!response.ok) {
       throw new Error(`Drive source metadata unavailable (${response.status})`);
     }
-    const contentLength = response.headers.get('content-length');
+    // Prefer Drive's explicit metadata header. Hosting runtimes may normalize
+    // Content-Length to zero for a bodyless HEAD response even when R2 reports
+    // the real object size.
+    const contentLength = response.headers.get('x-drive-object-size')
+      ?? response.headers.get('content-length');
     if (contentLength === null) {
       return listDriveObjectSize(env, key, timeoutMs);
     }
     const size = Number(contentLength);
-    return Number.isFinite(size) && size >= 0 ? size : undefined;
+    // Some Drive gateways answer HEAD with Content-Length: 0 even when the
+    // object is a large file. The exact-key list is authoritative in that
+    // case; persisting zero makes every later destination check compare
+    // against the wrong size and can strand the row forever.
+    if (!Number.isFinite(size) || size < 0) { return undefined; }
+    return size === 0 ? listDriveObjectSize(env, key, timeoutMs) : size;
   }
 
   try {
@@ -3305,16 +3314,21 @@ const claimRegistrationQueueRow = async (
           )
         )
         )
-      -- Finish interrupted work before advancing to a newly detected file.
-      -- A genuinely active row is already counted by the concurrency fence and
-      -- prevents any claim. Once it is stale, however, it must yield to healthy
-      -- detected FIFO work; otherwise one pathological file monopolizes the
-      -- only slot forever. Recovery can still retry it after that backlog.
+      -- A due copy check temporarily leaves the active fence so this invocation
+      -- can reclaim it. It must outrank new detected work or every minute can
+      -- fan out another registering row while previous Drive copies wait.
+      -- Other stale rows still yield to healthy detected FIFO work so one
+      -- pathological file cannot monopolize the queue forever.
       ORDER BY
-        CASE candidate_row.status
-          WHEN 'detected' THEN 0
-          WHEN 'registering' THEN 1
-          ELSE 2
+        CASE
+          WHEN candidate_row.status='registering'
+            AND COALESCE(candidate_row.copy_check_count, 0) > 0
+            AND COALESCE(candidate_row.copy_check_count, 0) < ${pendingCheckLimit}
+            AND COALESCE(candidate_row.next_copy_check_at, TIMESTAMP 'epoch') <= now()
+            THEN 0
+          WHEN candidate_row.status='detected' THEN 1
+          WHEN candidate_row.status='registering' THEN 2
+          ELSE 3
         END,
         candidate_row.uploaded_at ASC NULLS LAST,
         candidate_row.updated_at ASC,
@@ -5078,13 +5092,22 @@ const scanAndRegisterWithLease = async (
   if (claimedRegistrationRow?.was_pending_check) {
     const sourceUrl = trimToUndefined(claimedRegistrationRow.source_url) ||
       claimedRegistrationRow.url;
+    const sourceKey = keyFromStorageUrl(env, sourceUrl);
+    const recordedSourceSize = numericSize(claimedRegistrationRow.expected_size);
+    const sourceSize = recordedSourceSize && recordedSourceSize > 0
+      ? recordedSourceSize
+      : await storageObjectSize(
+        env,
+        sourceKey,
+        REGISTRATION_READY_CHECK_TIMEOUT_MS,
+      ).catch(() => recordedSourceSize);
     await deferRegistrationCopyCheck(env, {
       sourceUrl,
       fileName: claimedRegistrationRow.file_name ||
         claimedRegistrationRow.original_file_name ||
         getFileParts(keyFromStorageUrl(env, sourceUrl)).fileName,
       uploadedAt: claimedRegistrationRow.uploaded_at || undefined,
-      sourceSize: numericSize(claimedRegistrationRow.expected_size),
+      sourceSize,
       sourceUrlForTracking: sourceUrl,
       originalFileName: claimedRegistrationRow.original_file_name ||
         claimedRegistrationRow.file_name || undefined,
@@ -5615,7 +5638,7 @@ const scanAndRegisterWithLease = async (
         // size once before validating an existing generated destination;
         // comparing against undefined falsely kept retries waiting forever.
         const sourceSize = object.size ?? await storageObjectSize(env, object.key);
-        if (typeof sourceSize !== 'number' || !Number.isFinite(sourceSize) || sourceSize < 0) {
+        if (typeof sourceSize !== 'number' || !Number.isFinite(sourceSize) || sourceSize <= 0) {
           throw new Error(`Registration source not found in storage: ${object.key}`);
         }
         expectedRegistrationSize = sourceSize;
