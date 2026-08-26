@@ -1,7 +1,8 @@
 import { spawn } from 'node:child_process';
 import { chmod, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
 
 const panelBaseUrl = (process.env.MEDIA_PANEL_BASE_URL || '')
@@ -37,20 +38,23 @@ if (!config || typeof config !== 'object' || Array.isArray(config)) {
 const configPath = join(tmpdir(), `backend-orchestrator-${randomUUID()}.json`);
 await writeFile(configPath, JSON.stringify(config), 'utf8');
 await chmod(configPath, 0o600).catch(() => undefined);
-const executable = process.platform === 'win32' ? 'npx.cmd' : 'npx';
+const scriptDirectory = dirname(fileURLToPath(import.meta.url));
+const wranglerEntry = join(
+  scriptDirectory,
+  '..',
+  'node_modules',
+  'wrangler',
+  'bin',
+  'wrangler.js',
+);
 try {
   await new Promise((resolve, reject) => {
-    const windows = process.platform === 'win32';
     const child = spawn(
-      windows ? process.env.ComSpec || 'cmd.exe' : executable,
-      windows
-        ? ['/d', '/s', '/c', `npx.cmd wrangler deploy --secrets-file "${configPath}"`]
-        : ['wrangler', 'deploy', '--secrets-file', configPath],
+      process.execPath,
+      [wranglerEntry, 'deploy', '--secrets-file', configPath],
       {
         stdio: 'inherit',
         env: process.env,
-        // npx.cmd cannot be spawned directly by Node on Windows (EINVAL).
-        // Run it through cmd.exe while preserving the normal POSIX path.
       },
     );
     child.once('error', reject);
