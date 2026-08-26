@@ -51,7 +51,14 @@ try {
   await new Promise((resolve, reject) => {
     const child = spawn(
       process.execPath,
-      [wranglerEntry, 'deploy', '--secrets-file', configPath],
+      [
+        wranglerEntry,
+        'deploy',
+        '--name',
+        'media-panel',
+        '--secrets-file',
+        configPath,
+      ],
       {
         stdio: 'inherit',
         env: process.env,
