@@ -25,6 +25,7 @@ import {
   mergeSubtitleManifestTracks,
   runSafeRegistrationCommit,
   selectOldestRegistrationBatch,
+  shouldDisablePostgresSsl,
   shouldMarkProcessingSourceMissing,
   shouldRetryInterruptedJob,
   shouldVerifyExistingRegistrationDestination,
@@ -537,16 +538,37 @@ test('manual recovery starts a fresh bounded cycle for every incomplete registra
   assert.doesNotMatch(routeSource, /clearStaleRegistrationStatuses/);
 });
 
-test('Supabase scans use a fresh bounded client and retry a dropped connection', () => {
+test('all Postgres providers use a fresh bounded pg client and retry a dropped connection', () => {
   assert.match(workerSource, /new Client\(/);
   assert.match(workerSource, /connectionTimeoutMillis: connectionTimeoutMs/);
   assert.match(workerSource, /query_timeout: queryTimeoutMs/);
-  assert.match(workerSource, /isRetryableSupabaseConnectionError/);
-  assert.match(workerSource, /SUPABASE_CONNECTION_RETRY_ATTEMPTS = 3/);
+  assert.match(workerSource, /isRetryablePostgresConnectionError/);
+  assert.match(workerSource, /POSTGRES_CONNECTION_RETRY_ATTEMPTS = 3/);
+  assert.match(workerSource, /const sqlForEnv = \(env: Env\) => pgSqlForEnv\(env\)/);
   assert.match(workerSource, /await client\.end\(\)\.catch/);
   assert.match(workerSource, /Postgres query failed after/);
   assert.match(workerSource, /describePostgresQuery/);
+  assert.doesNotMatch(workerSource, /@neondatabase\/serverless/);
+  assert.doesNotMatch(workerSource, /\bneon\(/);
   assert.doesNotMatch(workerSource, /new Pool\(/);
+});
+
+test('Neon keeps TLS enabled while the existing Supabase SSL exception is preserved', () => {
+  assert.equal(shouldDisablePostgresSsl({
+    POSTGRES_URL: 'postgresql://user:secret@ep-example.us-east-2.aws.neon.tech/db',
+  }), false);
+  assert.equal(shouldDisablePostgresSsl({
+    POSTGRES_URL: 'postgresql://user:secret@aws-0-region.pooler.supabase.com:6543/db',
+  }), true);
+  assert.equal(shouldDisablePostgresSsl({
+    POSTGRES_URL: 'postgresql://user:secret@ep-example.us-east-2.aws.neon.tech/db',
+    DISABLE_POSTGRES_SSL: '1',
+  }), true);
+  assert.equal(shouldDisablePostgresSsl({
+    POSTGRES_URL: 'postgresql://user:secret@aws-0-region.pooler.supabase.com:6543/db',
+    DISABLE_POSTGRES_SSL: '0',
+  }), false);
+  assert.match(workerSource, /ssl: shouldDisablePostgresSsl\(env\) \? false : true/);
 });
 
 test('scheduled registration does not compete with the deletion queue', () => {

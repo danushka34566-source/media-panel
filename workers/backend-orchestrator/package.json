@@ -10,7 +10,6 @@
     "test": "node --experimental-strip-types --test test/*.test.mjs"
   },
   "dependencies": {
-    "@neondatabase/serverless": "^0.10.4",
     "aws4fetch": "^1.0.20",
     "pg": "^8.16.3"
   },

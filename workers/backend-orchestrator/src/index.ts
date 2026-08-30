@@ -1,4 +1,3 @@
-import { neon } from '@neondatabase/serverless';
 import { AwsClient } from 'aws4fetch';
 import { Client } from 'pg';
 
@@ -1244,9 +1243,9 @@ const resolveRegistrationTitle = ({
 };
 
 type SqlQuery = (...parts: any[]) => Promise<unknown[]>;
-const SUPABASE_CONNECT_TIMEOUT_MS = 10_000;
-const SUPABASE_QUERY_TIMEOUT_MS = 20_000;
-const SUPABASE_CONNECTION_RETRY_ATTEMPTS = 3;
+const POSTGRES_CONNECT_TIMEOUT_MS = 10_000;
+const POSTGRES_QUERY_TIMEOUT_MS = 20_000;
+const POSTGRES_CONNECTION_RETRY_ATTEMPTS = 3;
 const getRegistrationScanBudgetMs = (env: Env) => {
   const deadline = Number(env.REGISTRATION_SCAN_DEADLINE_AT);
   if (!Number.isFinite(deadline)) { return Number.POSITIVE_INFINITY; }
@@ -1261,7 +1260,7 @@ const connectionStringWithoutSslMode = (value: string) => {
     return value;
   }
 };
-const isRetryableSupabaseConnectionError = (error: unknown) =>
+const isRetryablePostgresConnectionError = (error: unknown) =>
   /connection terminated unexpectedly|connection reset|econnreset|socket closed/i
     .test(error instanceof Error ? error.message : String(error));
 const isSupabasePostgresUrl = (value: string) => {
@@ -1273,7 +1272,7 @@ const isSupabasePostgresUrl = (value: string) => {
     return false;
   }
 };
-const shouldDisablePostgresSsl = (env: Env) => {
+export const shouldDisablePostgresSsl = (env: Env) => {
   const explicit = env.DISABLE_POSTGRES_SSL?.trim();
   if (explicit === '1') { return true; }
   if (explicit === '0') { return false; }
@@ -1284,32 +1283,32 @@ const describePostgresQuery = (text: string) => text
   .trim()
   .slice(0, 240);
 
-const supabaseSqlForEnv = (env: Env): SqlQuery => {
+const pgSqlForEnv = (env: Env): SqlQuery => {
   const sql = async (strings: TemplateStringsArray, ...values: unknown[]) => {
     let text = strings[0] || '';
     for (let index = 1; index < strings.length; index += 1) {
       text += `$${index}${strings[index] || ''}`;
     }
-    for (let attempt = 0; attempt < SUPABASE_CONNECTION_RETRY_ATTEMPTS; attempt += 1) {
+    for (let attempt = 0; attempt < POSTGRES_CONNECTION_RETRY_ATTEMPTS; attempt += 1) {
       const scanBudgetMs = getRegistrationScanBudgetMs(env);
       if (scanBudgetMs <= 0) {
         throw new Error('Registration scan safety window elapsed before Postgres query');
       }
       const connectionTimeoutMs = Math.max(
         250,
-        Math.min(SUPABASE_CONNECT_TIMEOUT_MS, scanBudgetMs),
+        Math.min(POSTGRES_CONNECT_TIMEOUT_MS, scanBudgetMs),
       );
       const queryTimeoutMs = Math.max(
         250,
-        Math.min(SUPABASE_QUERY_TIMEOUT_MS, scanBudgetMs),
+        Math.min(POSTGRES_QUERY_TIMEOUT_MS, scanBudgetMs),
       );
       // Workers are stateless. Do not retain a pg Client or Pool between
       // events: the runtime may reclaim the socket after a prior invocation.
       const client = new Client({
         connectionString: connectionStringWithoutSslMode(env.POSTGRES_URL),
-        ssl: shouldDisablePostgresSsl(env)
-          ? false
-          : { rejectUnauthorized: false },
+        // Supabase's current direct/pooler path keeps its existing explicit
+        // no-TLS behavior. Neon and every other Postgres provider use TLS.
+        ssl: shouldDisablePostgresSsl(env) ? false : true,
         connectionTimeoutMillis: connectionTimeoutMs,
         query_timeout: queryTimeoutMs,
         statement_timeout: queryTimeoutMs,
@@ -1325,9 +1324,9 @@ const supabaseSqlForEnv = (env: Env): SqlQuery => {
         return result.rows;
       } catch (error) {
         if (
-          attempt < SUPABASE_CONNECTION_RETRY_ATTEMPTS - 1 &&
+          attempt < POSTGRES_CONNECTION_RETRY_ATTEMPTS - 1 &&
           getRegistrationScanBudgetMs(env) > 500 &&
-          isRetryableSupabaseConnectionError(error)
+          isRetryablePostgresConnectionError(error)
         ) {
           await sleep(250 * (attempt + 1));
           continue;
@@ -1339,7 +1338,7 @@ const supabaseSqlForEnv = (env: Env): SqlQuery => {
           { cause: error },
         );
       } finally {
-        // A terminated Supabase socket can leave pg Client.end() waiting on
+        // A terminated Postgres socket can leave pg Client.end() waiting on
         // the transport forever even after the query timeout has fired. Do
         // not let cleanup hold the scan lease or the scheduled invocation;
         // the Worker isolate can reclaim any late socket close safely.
@@ -1354,10 +1353,7 @@ const supabaseSqlForEnv = (env: Env): SqlQuery => {
   return sql as SqlQuery;
 };
 
-const sqlForEnv = (env: Env) =>
-  isSupabasePostgresUrl(env.POSTGRES_URL)
-    ? supabaseSqlForEnv(env)
-    : neon(env.POSTGRES_URL);
+const sqlForEnv = (env: Env) => pgSqlForEnv(env);
 
 type BackendActivity = {
   category: 'orchestrator' | 'registration' | 'processing' | 'processor'
