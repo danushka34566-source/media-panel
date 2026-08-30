@@ -12,9 +12,16 @@ class MockIntersectionObserver {
   static instance: MockIntersectionObserver | undefined;
   private callback: IntersectionObserverCallback;
 
-  constructor(callback: IntersectionObserverCallback) {
+  constructor(
+    callback: IntersectionObserverCallback,
+    options?: IntersectionObserverInit,
+  ) {
     this.callback = callback;
-    MockIntersectionObserver.instance = this;
+    // The lifecycle uses one exact viewport observer and one warm-up
+    // observer. Keep the test handle pointed at the activation observer.
+    if (!options?.rootMargin || options.rootMargin === '0px') {
+      MockIntersectionObserver.instance = this;
+    }
   }
 
   observe = jest.fn();
@@ -199,7 +206,7 @@ describe('video preview lifecycle policy', () => {
     unmount();
   });
 
-  it('remounts visible previews after a mobile lock and resume', () => {
+  it('remounts visible previews after a mobile lock and resume', async () => {
     const originalHidden = Object.getOwnPropertyDescriptor(document, 'hidden');
     let hidden = false;
     Object.defineProperty(document, 'hidden', {
@@ -233,9 +240,12 @@ describe('video preview lifecycle policy', () => {
     });
     expect(screen.queryByTestId('card-preview')).toBeNull();
 
-    act(() => {
+    await act(async () => {
       hidden = false;
       document.dispatchEvent(new Event('visibilitychange'));
+      await new Promise<void>(resolve => {
+        window.requestAnimationFrame(() => resolve());
+      });
     });
     expect(screen.getByTestId('card-preview')).toBeTruthy();
     expect(card.getAttribute('data-activation-id')).toBe('2');

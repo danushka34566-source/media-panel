@@ -25,7 +25,6 @@ import { isImageLoaded } from './image-loading';
 const MAX_REMEMBERED_DIRECT_FALLBACK_SOURCES = 512;
 const directFallbackSources = new Set<string>();
 let isImageOptimizerUnavailable = false;
-const optimizerUnavailableListeners = new Set<() => void>();
 const IMAGE_OPTIMIZER_UNAVAILABLE_SESSION_KEY =
   'media-panel:image-optimizer-unavailable';
 
@@ -38,7 +37,6 @@ const rememberImageOptimizerUnavailable = () => {
       '1',
     );
   } catch { /* storage can be unavailable in privacy mode */ }
-  optimizerUnavailableListeners.forEach(listener => listener());
 };
 
 const wasImageOptimizerUnavailableInSession = () => {
@@ -149,16 +147,10 @@ export default function ImageWithFallback({
         setIsDirectFallback(true);
       });
     };
-    optimizerUnavailableListeners.add(
-      scheduleDirectUnlessOptimizedImageIsReady,
-    );
     if (wasImageOptimizerUnavailableInSession()) {
       scheduleDirectUnlessOptimizedImageIsReady();
     }
     return () => {
-      optimizerUnavailableListeners.delete(
-        scheduleDirectUnlessOptimizedImageIsReady,
-      );
       cancelFallback();
     };
   }, [directFallbackSrc, fallbackToUnoptimized, isDirectFallback, refProp]);

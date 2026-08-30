@@ -37,6 +37,7 @@ type NavigatorWithCapabilities = Navigator & {
 const entries = new Map<string, PreviewEntry>();
 const idsByElement = new WeakMap<Element, string>();
 let observer: IntersectionObserver | undefined;
+let preloadObserver: IntersectionObserver | undefined;
 let areGlobalListenersAttached = false;
 let reducedMotionQuery: MediaQueryList | undefined;
 let coarsePointerQuery: MediaQueryList | undefined;
@@ -272,31 +273,35 @@ const getObserver = () => {
       const id = idsByElement.get(observerEntry.target);
       const entry = id ? entries.get(id) : undefined;
       if (entry) {
-        entry.isInPreloadRange = observerEntry.isIntersecting;
-        const rect = observerEntry.boundingClientRect;
-        const hasGeometry = rect.width > 0 || rect.height > 0 ||
-          rect.bottom !== 0 || rect.top !== 0;
-        const isInViewport = observerEntry.isIntersecting && (
-          !hasGeometry || (
-            rect.bottom > 0 &&
-            rect.right > 0 &&
-            rect.top < window.innerHeight &&
-            rect.left < window.innerWidth
-          )
-        );
-        entry.intersectionRatio = isInViewport ? 1 : 0;
+        entry.intersectionRatio = observerEntry.isIntersecting
+          ? observerEntry.intersectionRatio
+          : 0;
       }
     });
     updateActivePreviews();
   }, {
     root: null,
-    // One observer supplies both near-viewport warm-up and actual viewport
-    // activation. The callback separates the two states using the reported
-    // card geometry, avoiding a full getBoundingClientRect scan on scroll.
-    rootMargin: `${PREVIEW_PRELOAD_AHEAD_PX}px 0px`,
+    rootMargin: '0px',
     threshold: 0,
   });
   return observer;
+};
+
+const getPreloadObserver = () => {
+  if (typeof IntersectionObserver === 'undefined') { return undefined; }
+  preloadObserver ??= new IntersectionObserver(observerEntries => {
+    observerEntries.forEach(observerEntry => {
+      const id = idsByElement.get(observerEntry.target);
+      const entry = id ? entries.get(id) : undefined;
+      if (entry) { entry.isInPreloadRange = observerEntry.isIntersecting; }
+    });
+    scheduleActivePreviewUpdate();
+  }, {
+    root: null,
+    rootMargin: `${PREVIEW_PRELOAD_AHEAD_PX}px 0px`,
+    threshold: 0,
+  });
+  return preloadObserver;
 };
 
 const isInViewport = (
@@ -381,10 +386,9 @@ const onPageHide = () => {
 const onPageShow = () => {
   if (document.hidden) { return; }
   cancelScheduledViewportRefresh();
-  // Mobile browsers can suspend IntersectionObserver and animation-frame
-  // callbacks while the phone is locked. Recompute synchronously on resume so
-  // visible previews remount even when the old callback never runs.
-  refreshViewportIntersections();
+  // Mobile browsers can suspend IntersectionObserver callbacks while the
+  // phone is locked. Reconcile once on the next frame so visible previews
+  // remount without doing a duplicate full-entry geometry scan during unlock.
   scheduleViewportRefresh();
 };
 
@@ -570,6 +574,7 @@ export default function useVideoPreviewLifecycle({
       scheduleActivePreviewUpdate();
     }
     getObserver()?.observe(element);
+    getPreloadObserver()?.observe(element);
     scheduleViewportRefresh();
 
     return () => {
@@ -579,6 +584,7 @@ export default function useVideoPreviewLifecycle({
       setPreviewMounted(entry, false);
       entry.isActive = false;
       observer?.unobserve(element);
+      preloadObserver?.unobserve(element);
       idsByElement.delete(element);
       entries.delete(id);
       if (entryRef.current === entry) { entryRef.current = undefined; }

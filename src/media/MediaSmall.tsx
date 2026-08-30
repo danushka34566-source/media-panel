@@ -161,6 +161,7 @@ export default function MediaSmall({
               width={IMAGE_WIDTH_SMALL}
               height={Math.round(IMAGE_WIDTH_SMALL / aspectRatio)}
               blurDataURL={photo.blurData}
+              fallbackToUnoptimized
               blurCompatibilityLevel={
                 doesMediaNeedBlurCompatibility(photo) ? 'high' : 'none'
               }
