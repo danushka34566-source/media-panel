@@ -6519,27 +6519,35 @@ const commitCanonicalVideo = async (
   const originalFileName = maps[0]?.original_file_name ||
     getFileParts(media.url).fileName;
   const canonicalUrl = urlForKey(env, key);
-  await sql.transaction(tx => [
-    tx`
+  // Keep the media swap and registration-map update in one Postgres
+  // statement. Neon exposes sql.transaction(), but the Supabase pg adapter
+  // intentionally exposes only a tagged query function. A data-modifying CTE
+  // is atomic on both providers and is also safe through transaction pooling.
+  const committed = await sql`
+    WITH updated_media AS (
       UPDATE media
       SET url=${canonicalUrl}, extension='mp4', updated_at=now()
       WHERE id=${photoId} AND url=${media.url}
-    `,
-    tx`
-      INSERT INTO registered_upload_file_map (
-        media_id, original_file_name, stored_file_name, stored_url, source_url
-      ) VALUES (
-        ${photoId}, ${originalFileName}, ${getFileParts(key).fileName},
-        ${canonicalUrl}, ${media.url}
-      )
-      ON CONFLICT (media_id) DO UPDATE SET
-        original_file_name=EXCLUDED.original_file_name,
-        stored_file_name=EXCLUDED.stored_file_name,
-        stored_url=EXCLUDED.stored_url,
-        source_url=EXCLUDED.source_url,
-        updated_at=now()
-    `,
-  ]);
+      RETURNING id
+    )
+    INSERT INTO registered_upload_file_map (
+      media_id, original_file_name, stored_file_name, stored_url, source_url
+    )
+    SELECT
+      ${photoId}, ${originalFileName}, ${getFileParts(key).fileName},
+      ${canonicalUrl}, ${media.url}
+    FROM updated_media
+    ON CONFLICT (media_id) DO UPDATE SET
+      original_file_name=EXCLUDED.original_file_name,
+      stored_file_name=EXCLUDED.stored_file_name,
+      stored_url=EXCLUDED.stored_url,
+      source_url=EXCLUDED.source_url,
+      updated_at=now()
+    RETURNING media_id
+  ` as unknown as Array<{ media_id: string }>;
+  if (!committed[0]) {
+    return json(409, { error: 'Canonical media source changed before commit' });
+  }
   if (sourceKey !== key) {
     await deleteObject(env, sourceKey).catch(error => {
       console.warn('Canonical MP4 committed; source cleanup deferred', {
@@ -6738,7 +6746,7 @@ const failVideoJob = async (
 };
 
 export const shouldRetryInterruptedJob = (errorMessage: string) =>
-    /source download stalled|fetch failed|processor interrupted|canonical mp4 commit failed:.*(?:drive|storage|worker|database|connection|timeout|5\d{2})|(?:drive|storage) (?:put|upload|finalize) failed \(5\d{2}\)|connection terminated|connection reset|econnreset|timed? out|timeout/i
+    /source download stalled|fetch failed|processor interrupted|canonical mp4 commit failed:|(?:drive|storage) (?:put|upload|finalize) failed \(5\d{2}\)|connection terminated|connection reset|econnreset|timed? out|timeout/i
       .test(errorMessage);
 
 const heartbeatProcessor = async (

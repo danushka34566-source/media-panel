@@ -182,6 +182,9 @@ export default function BackendQueueModal({
           }
           const processing = job as BackendJobStatus;
           const status = processing.transcode_status || 'unknown';
+          const showError = ['failed', 'error', 'missing'].includes(status.toLowerCase()) &&
+            Boolean(processing.transcode_error) &&
+            !getProcessingProgress(processing.transcode_error);
           return <div
             key={processing.id || `${processing.title}-${index}`}
             className="flex gap-3 border-b border-medium p-4 last:border-b-0 sm:px-5"
@@ -191,6 +194,7 @@ export default function BackendQueueModal({
               status === 'processing' && 'text-amber-500',
               status === 'failed' && 'text-red-500',
             )} />
+            <div className="flex min-w-0 grow items-start gap-3">
             <div className="min-w-0 grow space-y-1">
               <div className="flex min-w-0 items-center gap-2">
                 <span className="min-w-0 flex-1 break-words text-sm text-main">
@@ -223,16 +227,16 @@ export default function BackendQueueModal({
               })()}
               {processing.id &&
                 <div className="text-xs text-dim">Media: {processing.id}</div>}
-              {processing.transcode_error && !getProcessingProgress(processing.transcode_error) &&
-                <AdminRegistrationErrorButton
-                  title={processing.title || processing.id || 'Processing error'}
-                  errorMessage={processing.transcode_error}
-                  dialogTitle="Processing error"
-                />}
               {processing.updated_at &&
                 <div className="text-xs text-dim">
                   Updated: {formatDate(processing.updated_at)}
                 </div>}
+            </div>
+            {showError && <AdminRegistrationErrorButton
+              title={processing.title || processing.id || 'Processing error'}
+              errorMessage={processing.transcode_error as string}
+              dialogTitle="Processing error"
+            />}
             </div>
           </div>;
         })}

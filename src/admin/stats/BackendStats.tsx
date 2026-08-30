@@ -337,27 +337,37 @@ export default function BackendStats({
       <ScoreCardRow
         icon={<FiActivity size={17} />}
         content={<div className="w-full space-y-2 py-1">
-          <div className="text-xs font-medium uppercase tracking-wide text-dim">
-            Media processing
+          <div className="flex items-center justify-between gap-3">
+            <div className="text-xs font-medium uppercase tracking-wide text-dim">
+              Media processing
+            </div>
+            {snapshot?.failed ? <LoaderButton
+              className="button shrink-0 px-2 py-1 text-xs"
+              hideText="never"
+              isLoading={retryingFailedType === 'processing'}
+              onClick={() => void retryAllFailed('processing')}
+            >Retry all</LoaderButton> : null}
           </div>
           <div className="flex flex-wrap items-end gap-6">
             {metric('Pending', snapshot?.pending || 0)}
             {metric('Processing', snapshot?.processing || 0)}
             {metric('Failed', snapshot?.failed || 0, 'text-red-600')}
-            {snapshot?.failed ? <LoaderButton
-              className="button px-2 py-1 text-xs"
-              hideText="never"
-              isLoading={retryingFailedType === 'processing'}
-              onClick={() => void retryAllFailed('processing')}
-            >Retry all</LoaderButton> : null}
           </div>
         </div>}
       />
       <ScoreCardRow
         icon={<FiHardDrive size={17} />}
         content={<div className="w-full space-y-2 py-1">
-          <div className="text-xs font-medium uppercase tracking-wide text-dim">
-            Registration intake
+          <div className="flex items-center justify-between gap-3">
+            <div className="text-xs font-medium uppercase tracking-wide text-dim">
+              Registration intake
+            </div>
+            {registrationQueue.error ? <button
+              type="button"
+              className="button shrink-0 px-2 py-1 text-xs"
+              disabled={Boolean(retryingFailedType)}
+              onClick={() => void retryAllFailed('registration')}
+            >{retryingFailedType === 'registration' ? 'Retrying…' : 'Retry all'}</button> : null}
           </div>
           <div className="flex flex-wrap items-end gap-6">
             {metric('Detected', registrationQueue.detected || 0)}
@@ -371,12 +381,6 @@ export default function BackendStats({
               registrationQueue.error || 0,
               'text-red-600',
             )}
-            {registrationQueue.error ? <button
-              type="button"
-              className="button px-2 py-1 text-xs"
-              disabled={Boolean(retryingFailedType)}
-              onClick={() => void retryAllFailed('registration')}
-            >{retryingFailedType === 'registration' ? 'Retrying…' : 'Retry all'}</button> : null}
           </div>
         </div>}
       />
@@ -507,10 +511,16 @@ export default function BackendStats({
           icon={<FiCheckCircle size={17} />}
           content="No media is currently waiting for processing"
         />
-        : processingPreviewJobs.map((job, index) => <ScoreCardRow
+        : processingPreviewJobs.map((job, index) => {
+          const status = (job.transcode_status || 'unknown').toLowerCase();
+          const showError = ['failed', 'error', 'missing'].includes(status) &&
+            Boolean(job.transcode_error) &&
+            !getProcessingProgress(job.transcode_error);
+          return <ScoreCardRow
           key={job.id || index}
           icon={<FiActivity size={17} />}
-          content={<div className="space-y-1">
+          content={<div className="flex min-w-0 items-start gap-3">
+            <div className="min-w-0 flex-1 space-y-1">
             <div className="flex min-w-0 items-center gap-2">
               <span className="min-w-0 flex-1 truncate">
                 {job.title || job.id || 'Untitled job'}
@@ -542,18 +552,18 @@ export default function BackendStats({
                 </div>
               </div>;
             })()}
-              {job.transcode_error &&
-                !getProcessingProgress(job.transcode_error) &&
-                <AdminRegistrationErrorButton
-                  title={job.title || job.id || 'Processing error'}
-                  errorMessage={job.transcode_error}
-                  dialogTitle="Processing error"
-                />}
             <div className="text-xs text-dim">
               Updated: {formatDate(job.updated_at)}
             </div>
+            </div>
+            {showError && <AdminRegistrationErrorButton
+              title={job.title || job.id || 'Processing error'}
+              errorMessage={job.transcode_error as string}
+              dialogTitle="Processing error"
+            />}
           </div>}
-        />)}
+        />;
+        })}
     </ScoreCard>}
 
     {isLogsOpen && <BackendLogsModal onClose={() => setIsLogsOpen(false)} />}

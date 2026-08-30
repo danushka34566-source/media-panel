@@ -652,6 +652,10 @@ test('processor termination returns the claimed job to the retry queue', () => {
     shouldRetryInterruptedJob('Canonical MP4 commit failed: Drive source metadata unavailable (500)'),
     true,
   );
+  assert.equal(
+    shouldRetryInterruptedJob('Canonical MP4 commit failed: sql.transaction is not a function'),
+    true,
+  );
   assert.equal(shouldRetryInterruptedJob('Unsupported video codec'), false);
 });
 
@@ -660,7 +664,10 @@ test('canonical conversion waits for the generated MP4 and keeps source cleanup 
   const end = workerSource.indexOf('const completeVideoJob', start);
   const source = workerSource.slice(start, end);
   assert.match(source, /waitForVerifiedStorageCopy/);
-  assert.match(source, /await sql\.transaction/);
+  assert.doesNotMatch(source, /await sql\.transaction/);
+  assert.match(source, /WITH updated_media AS/);
+  assert.match(source, /FROM updated_media/);
+  assert.match(source, /RETURNING media_id/);
   assert.match(source, /await deleteObject\(env, sourceKey\)/);
   const routeStart = workerSource.indexOf("url.pathname === '/jobs/canonical/commit'");
   const routeEnd = workerSource.indexOf("url.pathname === '/jobs/fail'", routeStart);
