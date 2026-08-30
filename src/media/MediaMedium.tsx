@@ -156,6 +156,9 @@ export default function MediaMedium({
               {posterSrc && !hasPosterFailed
                 ? <ImageMedium
                   src={posterSrc}
+                  // Use the optimized poster when available, then fall back
+                  // to the stable Drive/R2 URL if the optimizer rejects it.
+                  fallbackToUnoptimized
                   aspectRatio={getMediaAspectRatio(photo)}
                   alt={altTextForMedia(photo)}
                   className="absolute inset-0 w-full h-full"

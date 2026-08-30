@@ -18,21 +18,16 @@ export default function MediaDetailRelated({
   const [isReady, setIsReady] = useState(false);
 
   useEffect(() => {
-    const requestIdle = (window as Window & {
-      requestIdleCallback?: (callback: IdleRequestCallback) => number
-      cancelIdleCallback?: (handle: number) => void
-    }).requestIdleCallback;
-    const cancelIdle = (window as Window & {
-      cancelIdleCallback?: (handle: number) => void
-    }).cancelIdleCallback;
-    const schedule = requestIdle ?? ((callback: IdleRequestCallback) =>
-      window.setTimeout(() => callback({
-        didTimeout: false,
-        timeRemaining: () => 0,
-      } as IdleDeadline), 0));
-    const cancel = cancelIdle ?? window.clearTimeout;
-    const handle = schedule(() => setIsReady(true));
-    return () => cancel(handle);
+    // Let the detail hero's initial high-priority poster/preview request reach
+    // the browser first. Start related cards on the next frame rather than
+    // waiting for idle time, so their images and previews load in parallel.
+    const startRelated = () => setIsReady(true);
+    if (typeof window.requestAnimationFrame === 'function') {
+      const frame = window.requestAnimationFrame(startRelated);
+      return () => window.cancelAnimationFrame(frame);
+    }
+    const timeout = window.setTimeout(startRelated, 0);
+    return () => window.clearTimeout(timeout);
   }, []);
 
   if (!isReady) {
@@ -43,9 +38,12 @@ export default function MediaDetailRelated({
     photos={photos}
     selectedMedia={selectedMedia}
     {...categories}
+    // Related cards start immediately after the hero commit. Their requests
+    // stay normal priority while the hero poster remains the high-priority asset.
+    prioritizeInitialMedia
     autoplaySmartPreviews
     suspendSmartPreviewsOnMainPlayback
-    mountPreviewsOnlyWhenVisible
+    mountPreviewsOnlyWhenVisible={false}
     animateOnFirstLoadOnly
   />} />;
 }

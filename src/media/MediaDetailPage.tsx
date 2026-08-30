@@ -2,6 +2,7 @@ import AnimateItems from '@/components/AnimateItems';
 import {
   Media,
   MediaDateRangePostgres,
+  getMediaPosterUrl,
   getNextMedia,
   getPreviousMedia,
 } from '.';
@@ -25,6 +26,7 @@ import RecentsHeader from '@/recents/RecentsHeader';
 import AlbumHeader from '@/album/AlbumHeader';
 import { pathForMedia } from '@/app/path';
 import MediaDetailScrollReset from './MediaDetailScrollReset';
+import { preload } from 'react-dom';
 
 export default function MediaDetailPage({
   photo,
@@ -60,6 +62,11 @@ export default function MediaDetailPage({
   includeFavoriteInAdminMenu?: boolean
   headerOverride?: ReactNode
 } & MediaSetCategory) {
+  const heroPosterSrc = getMediaPosterUrl(photo);
+  if (heroPosterSrc) {
+    preload(heroPosterSrc, { as: 'image', fetchPriority: 'high' });
+  }
+
   let customHeader: ReactNode | undefined = headerOverride;
 
   if (customHeader) {
@@ -213,7 +220,7 @@ export default function MediaDetailPage({
             priority
             preloadSubtitleManifest={false}
             broadcastDetailVideoPlayback
-            mountPreviewOnlyWhenVisible
+            mountPreviewOnlyWhenVisible={false}
             prefetchRelatedLinks
             recent={recent}
             year={year}

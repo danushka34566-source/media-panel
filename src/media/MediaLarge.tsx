@@ -1212,6 +1212,10 @@ export default function MediaLarge({
                           'rounded-md bg-black',
                         )}
                         src={posterSrc}
+                        // Use the optimized poster when available, then fall
+                        // back to the stable Drive/R2 URL if the optimizer
+                        // rejects it.
+                        fallbackToUnoptimized
                         aspectRatio={mediaAspectRatio}
                         alt={altTextForMedia(photo)}
                         priority={priority}
