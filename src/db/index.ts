@@ -53,6 +53,7 @@ export type MediaQueryOptions = {
   offset?: number
   query?: string
   ids?: string[]
+  excludeIds?: string[]
   maximumAspectRatio?: number
   takenBefore?: Date
   takenAfterInclusive?: Date
@@ -88,6 +89,7 @@ export const getWheresFromOptions = (
     updatedBefore,
     query,
     ids,
+    excludeIds,
     maximumAspectRatio,
     recent,
     year,
@@ -133,12 +135,28 @@ export const getWheresFromOptions = (
     wheresValues.push(updatedBefore.toISOString());
   }
   if (query) {
-    wheres.push(`${buildSearchDocument()} ILIKE $${valuesIndex++}`);
-    wheresValues.push(`%${query}%`);
+    const searchPatterns = query
+      .trim()
+      .split(/\s+/)
+      .filter(Boolean)
+      .map(term => `%${term}%`);
+    if (searchPatterns.length > 0) {
+      // Match every word without requiring one exact contiguous phrase. A
+      // single text-array parameter keeps placeholder generation stable for
+      // command-panel and full search-page pagination.
+      wheres.push(
+        `${buildSearchDocument()} ILIKE ALL($${valuesIndex++}::text[])`,
+      );
+      wheresValues.push(searchPatterns);
+    }
   }
   if (ids) {
     wheres.push(`id = ANY($${valuesIndex++}::text[])`);
     wheresValues.push(ids);
+  }
+  if (excludeIds && excludeIds.length > 0) {
+    wheres.push(`NOT (id = ANY($${valuesIndex++}::text[]))`);
+    wheresValues.push(excludeIds);
   }
   if (maximumAspectRatio) {
     wheres.push(`aspect_ratio <= $${valuesIndex++}`);

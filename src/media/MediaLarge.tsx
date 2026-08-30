@@ -78,6 +78,7 @@ import useVideoPreviewLifecycle, {
   shouldSuspendVideoPreviews,
 } from './video-preview-lifecycle';
 import useVideoPreviewRecovery from './useVideoPreviewRecovery';
+import { announceDetailNavigationStart } from './detail-navigation-status';
 import { releaseVideoElement } from './release-video-element';
 import {
   beginDetailPreviewStartup,
@@ -1256,9 +1257,11 @@ export default function MediaLarge({
 
     if (deltaX < 0 && swipeNextPath) {
       setNextMediaAnimation?.(SWIPE_ANIMATION_LEFT);
+      announceDetailNavigationStart('next');
       router.push(swipeNextPath, { scroll: false });
     } else if (deltaX > 0 && swipePreviousPath) {
       setNextMediaAnimation?.(SWIPE_ANIMATION_RIGHT);
+      announceDetailNavigationStart('previous');
       router.push(swipePreviousPath, { scroll: false });
     }
   }, [
@@ -1736,7 +1739,8 @@ export default function MediaLarge({
                     showLensContent ||
                     showRecipeContent ||
                     showTagsContent ||
-                    showVideoLibraryMeta
+                    showVideoLibraryMeta ||
+                    isUserSignedIn
                   ) &&
                   'md:hidden',
                 )}>
@@ -1807,7 +1811,8 @@ export default function MediaLarge({
                     showLensContent ||
                     showRecipeContent ||
                     showTagsContent ||
-                    showVideoLibraryMeta
+                    showVideoLibraryMeta ||
+                    isUserSignedIn
                     ) &&
                     <div>
                       {(showCameraContent || showLensContent) &&
@@ -1848,10 +1853,10 @@ export default function MediaLarge({
                 <div className={clsx(
                   'space-y-baseline',
                   !hasTitleContent && 'md:pr-7',
-                )}>
+                  )}>
                   <div className="float-end flex flex-col items-center gap-1 md:hidden">
-                    {renderAdminMenu}
                     {renderMetadataFavorite}
+                    {renderAdminMenu}
                   </div>
                   {showVideoMeta &&
                   <ul className="text-medium space-y-1">

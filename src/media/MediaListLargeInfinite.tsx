@@ -29,6 +29,7 @@ export default function MediaListLargeInfinite({
       excludeFromFeeds={excludeFromFeeds}
       wrapMoreButtonInGrid
       loadAheadViewports={FULL_LIST_LOAD_AHEAD_VIEWPORTS}
+      restoreCachedPagesOnRemount
     >
       {({ key, photos, onLastMediaVisible, revalidateMedia }) =>
         <MediaListLarge

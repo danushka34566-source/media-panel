@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useRef } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Media,
   downloadFileNameForMedia,
@@ -33,6 +33,12 @@ import { syncMediaConfirmText } from '@/admin/confirm';
 import { useAppText } from '@/i18n/state/client';
 import usePersonalFavorite from '@/auth/usePersonalFavorite';
 import { usePathname } from 'next/navigation';
+import Spinner from '@/components/Spinner';
+import {
+  announceDetailNavigationStart,
+  DETAIL_NAVIGATION_START_EVENT,
+  type DetailNavigationDirection,
+} from './detail-navigation-status';
 
 const ANIMATION_LEFT: AnimationConfig = { type: 'left', duration: 0.3 };
 const ANIMATION_RIGHT: AnimationConfig = { type: 'right', duration: 0.3 };
@@ -59,6 +65,28 @@ export default function MediaPrevNextActions({
 
   const appText = useAppText();
   const pathname = usePathname();
+  const [loadingNavigation, setLoadingNavigation] = useState<{
+    photoId?: string
+    direction: DetailNavigationDirection
+  }>();
+  const loadingDirection = loadingNavigation &&
+    loadingNavigation.photoId === photo?.id
+    ? loadingNavigation.direction
+    : undefined;
+
+  useEffect(() => {
+    const onNavigationStart = (event: Event) => {
+      setLoadingNavigation({
+        photoId: photo?.id,
+        direction: (event as CustomEvent<DetailNavigationDirection>).detail,
+      });
+    };
+    window.addEventListener(DETAIL_NAVIGATION_START_EVENT, onNavigationStart);
+    return () => window.removeEventListener(
+      DETAIL_NAVIGATION_START_EVENT,
+      onNavigationStart,
+    );
+  }, [photo?.id]);
 
   const photoTitle = photo
     ? photo.title
@@ -248,11 +276,16 @@ export default function MediaPrevNextActions({
             replace
             loaderType="badge"
             prefetch
+            onNavigateStart={() => announceDetailNavigationStart('previous')}
           >
-            <FiChevronLeft className="sm:hidden text-[1.1rem]" />
-            <span className="hidden sm:inline-block uppercase">
-              {appText.nav.prevShort}
-            </span>
+            {loadingDirection === 'previous'
+              ? <Spinner size={16} color="dim" />
+              : <>
+                <FiChevronLeft className="sm:hidden text-[1.1rem]" />
+                <span className="hidden sm:inline-block uppercase">
+                  {appText.nav.prevShort}
+                </span>
+              </>}
           </MediaLink>
         </Tooltip>
         <span className="text-extra-extra-dim">
@@ -271,11 +304,16 @@ export default function MediaPrevNextActions({
             replace
             loaderType="badge"
             prefetch
+            onNavigateStart={() => announceDetailNavigationStart('next')}
           >
-            <FiChevronRight className="sm:hidden text-[1.1rem]" />
-            <span className="hidden sm:inline-block uppercase">
-              {appText.nav.nextShort}
-            </span>
+            {loadingDirection === 'next'
+              ? <Spinner size={16} color="dim" />
+              : <>
+                <FiChevronRight className="sm:hidden text-[1.1rem]" />
+                <span className="hidden sm:inline-block uppercase">
+                  {appText.nav.nextShort}
+                </span>
+              </>}
           </MediaLink>
         </Tooltip>
       </div>

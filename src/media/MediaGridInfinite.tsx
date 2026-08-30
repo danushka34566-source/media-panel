@@ -38,7 +38,16 @@ export default function MediaGridInfinite({
   return (
     <InfiniteMediaScroll
       cacheKey={cacheKey}
-      initialOffset={initialOffset}
+      // The server-rendered first page can be slightly older than the live
+      // database while uploads are registering. Exclude those exact cards and
+      // paginate the remaining result set from zero; offsetting the live set
+      // by the stale first-page length otherwise overlaps one or two IDs, and
+      // client dedupe leaves the appended bottom row short.
+      initialOffset={initialPhotos?.length ? 0 : initialOffset}
+      excludeIds={initialPhotos?.map(photo => photo.id)}
+      // Appended pages must reflect the same live set used by exclusion.
+      // Browser SWR still caches each fetched page for instant Back restore.
+      useCachedMedia={false}
       itemsPerPage={INFINITE_SCROLL_GRID_MULTIPLE}
       coalescePages
       sortBy={sortBy}
@@ -50,6 +59,7 @@ export default function MediaGridInfinite({
       // batch ends. This only prefetches the metadata page; card images and
       // video decoders remain governed by their existing viewport queues.
       loadAheadViewports={8}
+      restoreCachedPagesOnRemount
       {...categories}
     >
       {({ key, photos, onLastMediaVisible }) =>

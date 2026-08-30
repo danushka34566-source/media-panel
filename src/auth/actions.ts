@@ -291,7 +291,7 @@ export const getMediaSortPreferenceAction = async () => {
   const userId = session?.user?.id;
   if (!userId) { return null; }
   const user = await findUserById(userId);
-  return user?.mediaSortBy ?? null;
+  return isSortBy(user?.mediaSortBy) ? user.mediaSortBy : null;
 };
 
 export const setMediaSortPreferenceAction = async (sortBy: SortBy) => {

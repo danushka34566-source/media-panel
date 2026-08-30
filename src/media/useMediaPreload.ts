@@ -82,17 +82,6 @@ const scheduleRangeUpdate = () => {
   });
 };
 
-const refreshRanges = () => {
-  const canLoad = !document.hidden;
-  entries.forEach(entry => {
-    setEntryRange(entry, canLoad && isInPreloadRange(
-      entry.element,
-      entry.preloadAheadPx,
-      entry.releaseBehindPx,
-    ));
-  });
-};
-
 const getObserver = (preloadAheadPx: number, releaseBehindPx: number) => {
   if (typeof IntersectionObserver === 'undefined') { return undefined; }
   // In the usual downward scroll direction, the bottom margin is ahead and
@@ -121,20 +110,31 @@ const onPageHide = () => {
   // Discard observer decisions queued before the document was suspended.
   // Applying them after this point would immediately re-promote hidden cards.
   pendingRangeEntries.clear();
-  // Keep the bounded nearby history across a mobile lock. Clearing it here
-  // demotes already-loaded posters to native lazy loading while the browser
-  // is suspended, which can leave visible cards blank after unlock. The
-  // history is still capped by MAX_RETAINED_IMAGES, so this does not retain
-  // an unbounded feed or restore thousands of decoded bitmaps.
-  entries.forEach(entry => {
-    setEntryRange(entry, false);
-  });
+  // Keep both the bounded history and the current range decisions across a
+  // mobile lock. Demoting every visible/ahead card creates a React update
+  // burst while the document freezes, followed by a full-grid layout scan on
+  // unlock. IntersectionObserver will report any actual viewport changes.
 };
 
-const onPageShow = () => requestAnimationFrame(refreshRanges);
+const onPageShow = () => {
+  if (document.hidden) { return; }
+  // Flush decisions the browser already computed without synchronously
+  // measuring every card. Normal observer delivery handles the next frame.
+  observers.forEach(observer => {
+    observer.takeRecords().forEach(observerEntry => {
+      const id = idsByElement.get(observerEntry.target);
+      const entry = id ? entries.get(id) : undefined;
+      if (entry) {
+        pendingRangeEntries.set(entry, observerEntry.isIntersecting);
+      }
+    });
+  });
+  if (pendingRangeEntries.size > 0) { scheduleRangeUpdate(); }
+};
 
 const onVisibilityChange = () => {
-  if (!document.hidden) { onPageShow(); }
+  if (document.hidden) { onPageHide(); }
+  else { onPageShow(); }
 };
 
 const attachPageListeners = () => {

@@ -109,7 +109,14 @@ const getPathSortComponents = (pathname: string) => {
     sortType: sortType || DEFAULT_SORT_TYPE,
     sortOrder: sortOrder || DEFAULT_SORT_ORDER,
     sortBy,
+    hasExplicitSort: hasExplicitMediaSort(pathname),
   };
+};
+
+export const hasExplicitMediaSort = (pathname: string) => {
+  const [, gridOrFull, sortType, sortOrder] = pathname.split('/');
+  return (gridOrFull === 'grid' || gridOrFull === 'full') &&
+    Boolean(sortType && sortOrder);
 };
 
 export const getPathForSortBy = (pathname: string, sortBy: SortBy) => {
@@ -132,6 +139,7 @@ export const getSortStateFromPath = (
     sortType,
     sortOrder,
     sortBy,
+    hasExplicitSort,
   } = getPathSortComponents(pathname);
 
   const isSortedByDefault = sortBy === USER_DEFAULT_SORT_BY;
@@ -189,12 +197,17 @@ export const getSortStateFromPath = (
     getPath({ sortType: PARAM_SORT_TYPE_COLOR, sortOrder });
 
   // Sort clear
-  const pathClearSort = _gridOrFull === 'grid'
-    ? PATH_GRID_INFERRED
-    : PATH_FULL_INFERRED;
+  // Keep clearing explicit so the client persists the configured default to
+  // the account. A bare preference-resolving route would immediately read the
+  // previous saved custom sort and redirect back to it.
+  const pathClearSort = getPath({
+    sortType: DEFAULT_SORT_TYPE,
+    sortOrder: DEFAULT_SORT_ORDER,
+  });
 
   return {
     sortBy,
+    hasExplicitSort,
     doesPathOfferSort,
     isSortedByDefault,
     isAscending,

@@ -1,10 +1,10 @@
 import AppGrid from '@/components/AppGrid';
 import Container from '@/components/Container';
-import { USER_DEFAULT_SORT_OPTIONS } from '@/app/config';
 import { PATH_ROOT } from '@/app/path';
 import MediaGridContainer from '@/media/MediaGridContainer';
 import { getMedia, getMediaMeta } from '@/media/query';
 import Link from 'next/link';
+import { getEffectiveMediaSortOptions } from '@/media/sort/preference';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
@@ -41,8 +41,9 @@ export default async function SearchPage({
     );
   }
 
+  const sortOptions = await getEffectiveMediaSortOptions();
   const options = {
-    ...USER_DEFAULT_SORT_OPTIONS,
+    ...sortOptions,
     excludeFromFeeds: true,
     query,
   } as const;
@@ -58,8 +59,8 @@ export default async function SearchPage({
       photos={photos}
       count={count}
       query={query}
-      sortBy={USER_DEFAULT_SORT_OPTIONS.sortBy}
-      sortWithPriority={USER_DEFAULT_SORT_OPTIONS.sortWithPriority}
+      sortBy={sortOptions.sortBy}
+      sortWithPriority={sortOptions.sortWithPriority}
       excludeFromFeeds
       header={
         <div className="space-y-2">

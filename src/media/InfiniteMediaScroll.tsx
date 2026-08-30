@@ -17,6 +17,25 @@ const SIZE_KEY_SEPARATOR = '__';
 const getSizeFromKey = (key: string) =>
   parseInt(key.split(SIZE_KEY_SEPARATOR)[1]);
 
+// SWR retains fetched page payloads while the root provider remains mounted,
+// but useSWRInfinite forgets its size when a public feed unmounts for a media
+// detail route. Remember only the number of in-memory pages so Back can read
+// those cached payloads immediately. This is deliberately not persisted to
+// browser storage: a reload starts from the normal bounded first page.
+const MAX_REMEMBERED_FEEDS = 32;
+const rememberedFeedPageCounts = new Map<string, number>();
+
+const rememberFeedPageCount = (key: string, count: number) => {
+  if (count <= 0) { return; }
+  rememberedFeedPageCounts.delete(key);
+  rememberedFeedPageCounts.set(key, count);
+  while (rememberedFeedPageCounts.size > MAX_REMEMBERED_FEEDS) {
+    const oldestKey = rememberedFeedPageCounts.keys().next().value;
+    if (typeof oldestKey !== 'string') { break; }
+    rememberedFeedPageCounts.delete(oldestKey);
+  }
+};
+
 export type RevalidateMedia = (
   photoId: string,
   revalidateRemainingMedia?: boolean,
@@ -30,6 +49,7 @@ export default function InfiniteMediaScroll({
   sortWithPriority,
   excludeFromFeeds,
   query,
+  excludeIds,
   camera,
   lens,
   tag,
@@ -40,6 +60,7 @@ export default function InfiniteMediaScroll({
   coalescePages = false,
   loadAheadViewports = 2,
   useCachedMedia = true,
+  restoreCachedPagesOnRemount = false,
   includeHiddenMedia,
   includeMissingStorageStatus,
   children,
@@ -50,11 +71,13 @@ export default function InfiniteMediaScroll({
   sortWithPriority?: boolean
   excludeFromFeeds?: boolean
   query?: string
+  excludeIds?: string[]
   cacheKey: string
   wrapMoreButtonInGrid?: boolean
   coalescePages?: boolean
   loadAheadViewports?: number
   useCachedMedia?: boolean
+  restoreCachedPagesOnRemount?: boolean
   includeHiddenMedia?: boolean
   includeMissingStorageStatus?: boolean
   children: (props: {
@@ -64,15 +87,24 @@ export default function InfiniteMediaScroll({
     revalidateMedia?: RevalidateMedia
   }) => ReactNode
 } & MediaSetCategory) {
-  const [hasStartedLoading, setHasStartedLoading] = useState(false);
+  const excludedIdsKey = excludeIds?.join(',') ?? 'none';
+  const feedKey = `${cacheKey}-${sortBy ?? 'default'}-${sortWithPriority ? 'priority' : 'plain'}-exclude-${excludedIdsKey}`;
+  const rememberedPageCountRef = useRef(
+    restoreCachedPagesOnRemount
+      ? rememberedFeedPageCounts.get(feedKey) ?? 0
+      : 0,
+  );
+  const [hasStartedLoading, setHasStartedLoading] = useState(
+    rememberedPageCountRef.current > 0,
+  );
   
   const { utility } = useAppText();
 
   const keyGenerator = useCallback(
     (size: number, prev: Media[]) => {
       if (!hasStartedLoading || (prev && prev.length === 0)) { return null; }
-      return `${SWR_KEYS.INFINITE_MEDIA_SCROLL}-${cacheKey}-${sortBy ?? 'default'}-${sortWithPriority ? 'priority' : 'plain'}${SIZE_KEY_SEPARATOR}${size}`;
-    }, [cacheKey, hasStartedLoading, sortBy, sortWithPriority]);
+      return `${SWR_KEYS.INFINITE_MEDIA_SCROLL}-${feedKey}${SIZE_KEY_SEPARATOR}${size}`;
+    }, [feedKey, hasStartedLoading]);
 
   const fetcher = useCallback((
     keyWithSize: string,
@@ -84,6 +116,7 @@ export default function InfiniteMediaScroll({
       sortWithPriority,
       excludeFromFeeds,
       query,
+      excludeIds,
       limit: itemsPerPage,
       hidden: includeHiddenMedia ? 'include' : 'exclude',
       includeMissingStorageStatus,
@@ -100,6 +133,7 @@ export default function InfiniteMediaScroll({
     sortWithPriority,
     excludeFromFeeds,
     query,
+    excludeIds,
     initialOffset,
     itemsPerPage,
     includeHiddenMedia,
@@ -117,7 +151,8 @@ export default function InfiniteMediaScroll({
       keyGenerator,
       fetcher,
       {
-        initialSize: 1,
+        initialSize: Math.max(1, rememberedPageCountRef.current),
+        persistSize: true,
         revalidateFirstPage: false,
         // A long full-page feed may contain hundreds of already-rendered
         // pages. Revalidating every page on focus/reconnect creates a burst
@@ -146,6 +181,12 @@ export default function InfiniteMediaScroll({
     () => (data ?? []).filter((page): page is Media[] => Array.isArray(page)),
     [data],
   );
+
+  useEffect(() => {
+    if (restoreCachedPagesOnRemount && pages.length > 0) {
+      rememberFeedPageCount(feedKey, pages.length);
+    }
+  }, [feedKey, pages.length, restoreCachedPagesOnRemount]);
 
   const renderedPages = useMemo(() => {
     const seenIds = new Set<string>();

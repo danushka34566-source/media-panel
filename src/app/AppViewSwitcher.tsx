@@ -25,12 +25,12 @@ import {
 } from 'react';
 import { flushSync } from 'react-dom';
 import useKeydownHandler from '@/utility/useKeydownHandler';
-import { usePathname, useRouter } from 'next/navigation';
+import { usePathname } from 'next/navigation';
 import { KEY_COMMANDS } from '@/media/key-commands';
 import { useAppText } from '@/i18n/state/client';
 import IconSort from '@/components/icons/IconSort';
 import { getSortStateFromPath } from '@/media/sort/path';
-import { motion } from 'framer-motion';
+import { AnimatePresence, motion } from 'framer-motion';
 import SortMenu from '@/media/sort/SortMenu';
 import { SWR_KEYS } from '@/swr';
 import {
@@ -40,41 +40,37 @@ import {
   captureMediaViewportAnchor,
   restoreMediaViewportAnchor,
 } from '@/media/useMediaScrollRestoration';
+import {
+  getGridModeCardTransition,
+  type GridModeCardRect,
+} from '@/media/grid-mode-transition';
 
 export type SwitcherSelection = 'full' | 'grid' | 'admin';
 
 const GAP_CLASS_RIGHT = 'mr-1.5 sm:mr-2';
 const GAP_CLASS_LEFT  = 'ml-0.5 sm:ml-1';
-const GRID_MODE_SWITCH_FEEDBACK_MS = 320;
-// Animate the viewport plus a small landing buffer. Cards newly exposed by a
-// denser grid receive their own entrance motion when no old position exists.
-const GRID_MODE_ANIMATION_OVERSCAN_VIEWPORTS = 0.5;
-
-type GridCardLayout = {
-  left: number
-  top: number
-};
-
-const getGridAnimationOverscan = () => Math.max(
-  240,
-  window.innerHeight * GRID_MODE_ANIMATION_OVERSCAN_VIEWPORTS,
-);
+const GRID_MODE_SWITCH_DURATION_MS = 360;
+const GRID_MODE_SWITCH_FEEDBACK_MS = GRID_MODE_SWITCH_DURATION_MS + 20;
+const GRID_MODE_CAPTURE_BUFFER_PX = 96;
+const activeGridModeAnimations = new WeakMap<HTMLElement, Animation>();
 
 // Animate the plain card element, not its Framer Motion wrapper. Framer owns
 // the wrapper transform and can overwrite a simultaneous WAAPI FLIP.
 const getGridAnimationSurface = (card: HTMLElement) => card;
 
-const captureGridCards = () => {
-  const cards = new Map<string, GridCardLayout>();
-  const overscan = getGridAnimationOverscan();
+const captureVisibleGridCards = () => {
+  const cards = new Map<string, GridModeCardRect>();
+  const allSurfaces: HTMLElement[] = [];
   document.querySelectorAll<HTMLElement>(
     '[data-media-smart-preview-card][data-preview-id]',
   ).forEach(element => {
     const surface = getGridAnimationSurface(element);
-    // Keep the custom transform isolated from the outer Framer Motion item.
-    surface.getAnimations().forEach(animation => animation.cancel());
+    allSurfaces.push(surface);
     const rect = surface.getBoundingClientRect();
-    if (rect.bottom <= -overscan || rect.top >= window.innerHeight + overscan) {
+    if (
+      rect.bottom <= -GRID_MODE_CAPTURE_BUFFER_PX ||
+      rect.top >= window.innerHeight + GRID_MODE_CAPTURE_BUFFER_PX
+    ) {
       return;
     }
     const id = element.dataset.previewId;
@@ -82,63 +78,70 @@ const captureGridCards = () => {
       cards.set(id, {
         left: rect.left,
         top: rect.top,
+        width: rect.width,
+        height: rect.height,
       });
     }
+  });
+  // Read every visual rectangle before cancelling an interrupted transition.
+  // Cancelling in the same task cannot paint a jump, and the captured visual
+  // positions become the starting point for the replacement transition.
+  allSurfaces.forEach(surface => {
+    activeGridModeAnimations.get(surface)?.cancel();
+    activeGridModeAnimations.delete(surface);
   });
   return cards;
 };
 
-const animateGridCards = (previous: Map<string, GridCardLayout>) => {
+const animateVisibleGridCards = (
+  previous: Map<string, GridModeCardRect>,
+) => {
   if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) { return; }
-  // Wait for the browser to commit the new grid columns, then perform one
-  // read/animate pass. Measuring immediately after flushSync can still read
-  // the old grid track sizes on mobile browsers.
-  window.requestAnimationFrame(() => {
-    window.requestAnimationFrame(() => {
-      const overscan = getGridAnimationOverscan();
-      document.querySelectorAll<HTMLElement>(
-        '[data-media-smart-preview-card][data-preview-id]',
-      ).forEach(element => {
-        const id = element.dataset.previewId;
-        const surface = getGridAnimationSurface(element);
-        surface.getAnimations().forEach(animation => animation.cancel());
-        const rect = surface.getBoundingClientRect();
-        if (rect.bottom <= -overscan || rect.top >= window.innerHeight + overscan) {
-          return;
-        }
-        const from = id ? previous.get(id) : undefined;
-        if (!from) {
-          const animation = surface.animate([
-            { opacity: 0, transform: 'translate3d(0, 24px, 0) scale(0.96)' },
-            { opacity: 1, transform: 'translate3d(0, 0, 0) scale(1)' },
-          ], {
-            duration: 320,
-            easing: 'cubic-bezier(0.16, 1, 0.3, 1)',
-            fill: 'both',
-          });
-          void animation.finished.then(
-            () => animation.cancel(),
-            () => undefined,
-          );
-          return;
-        }
-        const x = from.left - rect.left;
-        const y = from.top - rect.top;
-        if (Math.abs(x) < 0.5 && Math.abs(y) < 0.5) { return; }
-        const animation = surface.animate([
-          { transform: `translate3d(${x}px, ${y}px, 0)` },
-          { transform: 'translate3d(0, 0, 0)' },
-        ], {
-          duration: 320,
-          easing: 'cubic-bezier(0.16, 1, 0.3, 1)',
-          fill: 'both',
-        });
-        void animation.finished.then(
-          () => animation.cancel(),
-          () => undefined,
-        );
-      });
+  const pending: Array<{
+    surface: HTMLElement
+    transition: NonNullable<ReturnType<typeof getGridModeCardTransition>>
+  }> = [];
+  document.querySelectorAll<HTMLElement>(
+    '[data-media-smart-preview-card][data-preview-id]',
+  ).forEach(element => {
+    const id = element.dataset.previewId;
+    const from = id ? previous.get(id) : undefined;
+    if (!from) { return; }
+    const surface = getGridAnimationSurface(element);
+    const rect = surface.getBoundingClientRect();
+    const transition = getGridModeCardTransition(from, {
+      left: rect.left,
+      top: rect.top,
+      width: rect.width,
+      height: rect.height,
     });
+    if (transition) { pending.push({ surface, transition }); }
+  });
+  // All final rectangles were read above. Starting each animation now keeps
+  // the browser from painting the committed grid before its inverse transform
+  // is active, eliminating the old "new layout, then animation" flash.
+  pending.forEach(({ surface, transition }) => {
+    const animation = surface.animate([
+      {
+        transform: transition.transform,
+        transformOrigin: '0 0',
+      },
+      {
+        transform: 'translate3d(0, 0, 0) scale(1, 1)',
+        transformOrigin: '0 0',
+      },
+    ], {
+      duration: GRID_MODE_SWITCH_DURATION_MS,
+      easing: 'cubic-bezier(0.16, 1, 0.3, 1)',
+      fill: 'both',
+    });
+    activeGridModeAnimations.set(surface, animation);
+    void animation.finished.then(() => {
+      if (activeGridModeAnimations.get(surface) === animation) {
+        activeGridModeAnimations.delete(surface);
+        animation.cancel();
+      }
+    }, () => undefined);
   });
 };
 
@@ -158,7 +161,6 @@ export default function AppViewSwitcher({
   setIsAdminMenuOpen: (isOpen: boolean) => void
 }) {
   const pathname = usePathname();
-  const router = useRouter();
   
   const appText = useAppText();
 
@@ -180,6 +182,7 @@ export default function AppViewSwitcher({
 
   const {
     sortBy,
+    hasExplicitSort,
     doesPathOfferSort,
     isSortedByDefault,
     isAscending,
@@ -193,6 +196,8 @@ export default function AppViewSwitcher({
     doesPathOfferSort;
 
   const hasLoadedRef = useRef(false);
+  const sortPreferenceSaveRef = useRef<Promise<void>>(Promise.resolve());
+  const lastQueuedSortPreferenceRef = useRef<string | undefined>(undefined);
   useEffect(() => {
     if (hasLoadedRef.current) {
       // After initial load, invalidate cache every time sort changes
@@ -206,19 +211,25 @@ export default function AppViewSwitcher({
     // first render. Reading it here and replacing the URL after hydration
     // caused a visible order correction and a second feed request. Explicit
     // sort routes are already authoritative, so only persist those choices.
+    const preferenceKey = `${userEmail ?? 'anonymous'}:${sortBy}`;
     if (
       !isUserSignedIn ||
       !userEmail ||
       !doesPathOfferSort ||
-      isSortedByDefault
+      !hasExplicitSort ||
+      lastQueuedSortPreferenceRef.current === preferenceKey
     ) { return; }
 
-    void setMediaSortPreferenceAction(sortBy).catch(() => {
-      // Sorting stays fully usable when the preference store is unavailable.
-    });
+    lastQueuedSortPreferenceRef.current = preferenceKey;
+    // Serialize saves so a slower earlier request cannot overwrite the user's
+    // final newest/oldest or taken/uploaded selection in the account row.
+    sortPreferenceSaveRef.current = sortPreferenceSaveRef.current
+      .catch(() => undefined)
+      .then(() => setMediaSortPreferenceAction(sortBy))
+      .catch(() => undefined);
   }, [
     doesPathOfferSort,
-    isSortedByDefault,
+    hasExplicitSort,
     isUserSignedIn,
     sortBy,
     userEmail,
@@ -235,7 +246,7 @@ export default function AppViewSwitcher({
     useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const toggleGridMode = useCallback(() => {
     const viewportAnchor = captureMediaViewportAnchor();
-    const gridCards = captureGridCards();
+    const visibleCards = captureVisibleGridCards();
     document.documentElement.dataset.gridModeSwitching = 'true';
     // Commit the new column layout before restoring the visible card. This
     // prevents the same scrollTop from pointing at unrelated media when the
@@ -245,7 +256,7 @@ export default function AppViewSwitcher({
       setIsWideGrid?.(prev => !prev);
     });
     restoreMediaViewportAnchor(viewportAnchor);
-    animateGridCards(gridCards);
+    animateVisibleGridCards(visibleCards);
     if (gridModeSwitchTimeoutRef.current) {
       clearTimeout(gridModeSwitchTimeoutRef.current);
     }
@@ -368,24 +379,35 @@ export default function AppViewSwitcher({
             keyCommand: KEY_COMMANDS.search[1],
           }}}
         />
-        {canEdit &&
-          <SwitcherItem
-            icon={<AdminAppMenu
-              isOpen={isAdminMenuOpen}
-              setIsOpen={isOpen => {
-                setIsAdminMenuOpen(isOpen);
-                if (isOpen) { setShouldLoadAdminData?.(true); }
-                if (isOpen) { setIsSortMenuOpen(false); }
-              }}
-            />}
-            tooltip={{
-              ...!isAdminMenuOpen && SHOW_KEYBOARD_SHORTCUT_TOOLTIPS && {
-                content: appText.nav.admin,
-                keyCommand: KEY_COMMANDS.admin,
-              },
-            }}
-            noPadding
-          />}
+        <AnimatePresence initial={false}>
+          {canEdit &&
+            <motion.div
+              key="admin-menu"
+              initial={{ opacity: 0, width: 0, scale: 0.92 }}
+              animate={{ opacity: 1, width: 42, scale: 1 }}
+              exit={{ opacity: 0, width: 0, scale: 0.92 }}
+              transition={{ duration: 0.24, ease: [0.16, 1, 0.3, 1] }}
+              className="shrink-0 overflow-hidden"
+            >
+              <SwitcherItem
+                icon={<AdminAppMenu
+                  isOpen={isAdminMenuOpen}
+                  setIsOpen={isOpen => {
+                    setIsAdminMenuOpen(isOpen);
+                    if (isOpen) { setShouldLoadAdminData?.(true); }
+                    if (isOpen) { setIsSortMenuOpen(false); }
+                  }}
+                />}
+                tooltip={{
+                  ...!isAdminMenuOpen && SHOW_KEYBOARD_SHORTCUT_TOOLTIPS && {
+                    content: appText.nav.admin,
+                    keyCommand: KEY_COMMANDS.admin,
+                  },
+                }}
+                noPadding
+              />
+            </motion.div>}
+        </AnimatePresence>
       </Switcher>
       <motion.div
         initial={animate ? { opacity: 0, width: '0' } : false}

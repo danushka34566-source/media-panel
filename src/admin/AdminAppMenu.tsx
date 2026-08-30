@@ -16,14 +16,12 @@ import { useAppState } from '@/app/AppState';
 import { IoArrowDown, IoArrowUp } from 'react-icons/io5';
 import { clsx } from 'clsx/lite';
 import AdminAppInfoIcon from './AdminAppInfoIcon';
-import { signOutAction } from '@/auth/actions';
 import { ComponentProps, useMemo } from 'react';
 import useIsKeyBeingPressed from '@/utility/useIsKeyBeingPressed';
 import IconMedia from '@/components/icons/IconMedia';
 import IconFolder from '@/components/icons/IconFolder';
 import IconRecipe from '@/components/icons/IconRecipe';
 import IconTag from '@/components/icons/IconTag';
-import IconSignOut from '@/components/icons/IconSignOut';
 import { IoMdCheckboxOutline } from 'react-icons/io';
 import IconBroom from '@/components/icons/IconBroom';
 import InsightsIndicatorDot from './insights/InsightsIndicatorDot';
@@ -43,16 +41,14 @@ export default function AdminAppMenu({
   setIsOpen?: (isOpen: boolean) => void
 }) {
   const {
-    photosCountTotal = 0,
     photosCountNeedSync = 0,
     uploadState: {
       clientUploads,
     },
-    albumsCount = 0,
-    categoriesCount = 0,
-    tagsCount = 0,
-    recipesCount = 0,
-    clearAuthStateAndRedirectIfNecessary,
+    albumsCount,
+    categoriesCount,
+    tagsCount,
+    recipesCount,
     canManageConfiguration,
   } = useAppState();
 
@@ -66,7 +62,11 @@ export default function AdminAppMenu({
 
   const isAltPressed = useIsKeyBeingPressed('alt');
 
-  const showAppInsightsLink = photosCountTotal > 0 && !isAltPressed;
+  // Keep authorized menu rows stable while the lazily loaded annotations are
+  // fetched. Hiding routes behind count requests made options pop into an
+  // already-open menu seconds later. Counts may arrive later; capabilities
+  // determine which actions exist.
+  const showAppInsightsLink = !isAltPressed;
   const activeUploadCount = useMemo(() => clientUploads.filter(upload =>
     upload.status === 'queued' ||
     upload.status === 'uploading').length,
@@ -122,69 +122,61 @@ export default function AdminAppMenu({
       />,
       href: PATH_ADMIN_MEDIA,
     });
-    if (albumsCount) {
-      items.push({
-        label: appText.admin.manageAlbums,
-        annotation: `${albumsCount}`,
-        icon: <IconAlbum
+    items.push({
+      label: appText.admin.manageAlbums,
+      annotation: albumsCount === undefined ? undefined : `${albumsCount}`,
+      icon: <IconAlbum
+        size={15}
+        className="translate-x-[-0.5px] translate-y-[0.5px]"
+      />,
+      href: PATH_ADMIN_ALBUMS,
+    });
+    items.push({
+      label: 'Manage Categories',
+      annotation: categoriesCount === undefined
+        ? undefined
+        : `${categoriesCount}`,
+      icon: <IconTag
+        size={15}
+        className="translate-y-[1.5px]"
+      />,
+      href: PATH_ADMIN_CATEGORIES,
+    });
+    items.push({
+      label: appText.admin.manageTags,
+      annotation: tagsCount === undefined ? undefined : `${tagsCount}`,
+      icon: <IconTag
+        size={15}
+        className="translate-y-[1.5px]"
+      />,
+      href: PATH_ADMIN_TAGS,
+    });
+    items.push({
+      label: appText.admin.manageRecipes,
+      annotation: recipesCount === undefined ? undefined : `${recipesCount}`,
+      icon: <IconRecipe
+        size={17}
+        className="translate-x-[-0.5px]"
+      />,
+      href: PATH_ADMIN_RECIPES,
+    });
+    items.push({
+      label: isSelectingMedia
+        ? appText.admin.selectMediaExit
+        : appText.admin.selectMedia,
+      icon: isSelectingMedia
+        ? <FiXSquare
           size={15}
+          className="translate-x-[-0.75px] translate-y-[0.5px]"
+        />
+        : <IoMdCheckboxOutline
+          size={16}
           className="translate-x-[-0.5px] translate-y-[0.5px]"
         />,
-        href: PATH_ADMIN_ALBUMS,
-      });
-    }
-    if (categoriesCount) {
-      items.push({
-        label: 'Manage Categories',
-        annotation: `${categoriesCount}`,
-        icon: <IconTag
-          size={15}
-          className="translate-y-[1.5px]"
-        />,
-        href: PATH_ADMIN_CATEGORIES,
-      });
-    }
-    if (tagsCount) {
-      items.push({
-        label: appText.admin.manageTags,
-        annotation: `${tagsCount}`,
-        icon: <IconTag
-          size={15}
-          className="translate-y-[1.5px]"
-        />,
-        href: PATH_ADMIN_TAGS,
-      });
-    }
-    if (recipesCount) {
-      items.push({
-        label: appText.admin.manageRecipes,
-        annotation: `${recipesCount}`,
-        icon: <IconRecipe
-          size={17}
-          className="translate-x-[-0.5px]"
-        />,
-        href: PATH_ADMIN_RECIPES,
-      });
-    }
-    if (photosCountTotal) {
-      items.push({
-        label: isSelectingMedia
-          ? appText.admin.selectMediaExit
-          : appText.admin.selectMedia,
-        icon: isSelectingMedia
-          ? <FiXSquare
-            size={15}
-            className="translate-x-[-0.75px] translate-y-[0.5px]"
-          />
-          : <IoMdCheckboxOutline
-            size={16}
-            className="translate-x-[-0.5px] translate-y-[0.5px]"
-          />,
-        action: isSelectingMedia
-          ? stopSelectingMedia
-          : startSelectingMedia,
-      });
-    }
+      action: isSelectingMedia
+        ? stopSelectingMedia
+        : startSelectingMedia,
+    });
     if (showAppInsightsLink || canManageConfiguration) {
       items.push({
         label: showAppInsightsLink
@@ -208,7 +200,6 @@ export default function AdminAppMenu({
     startSelectingMedia,
     stopSelectingMedia,
     photosCountNeedSync,
-    photosCountTotal,
     recipesCount,
     showAppInsightsLink,
     canManageConfiguration,
@@ -217,17 +208,7 @@ export default function AdminAppMenu({
     tagsCount,
   ]);
 
-  const sectionSignOut: MoreMenuSection = useMemo(() => ({
-    items: [{
-      label: appText.auth.signOut,
-      icon: <IconSignOut size={15} />,
-      action: () => signOutAction().then(clearAuthStateAndRedirectIfNecessary),
-    }],
-  }), [appText.auth.signOut, clearAuthStateAndRedirectIfNecessary]);
-
-  const sections = useMemo(() =>
-    [sectionMain, sectionSignOut]
-  , [sectionMain, sectionSignOut]);
+  const sections = useMemo(() => [sectionMain], [sectionMain]);
 
   return (
     <>

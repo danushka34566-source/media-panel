@@ -1,7 +1,7 @@
 'use client';
 
 import { clsx } from 'clsx/lite';
-import { useEffect, useRef, useState } from 'react';
+import { startTransition, useEffect, useRef, useState } from 'react';
 import useVideoPreviewRecovery from './useVideoPreviewRecovery';
 import { releaseVideoElement } from './release-video-element';
 
@@ -31,7 +31,9 @@ export default function InlineVideoPreview({
     return () => releaseVideoElement(video);
   }, []);
   const reportPreparedFrame = () => {
-    setIsReady(true);
+    // Several decoder slots commonly report readiness in the same task.
+    // Painting those frames is non-urgent and must not starve user input.
+    startTransition(() => setIsReady(true));
     if (hasReportedPreparedRef.current) {
       recovery.onCanPlay();
       return;
@@ -66,7 +68,7 @@ export default function InlineVideoPreview({
     // the queue cannot leave a ready preview paused and unaccounted for.
     onCanPlay={reportPreparedFrame}
     onPlaying={() => {
-      setIsReady(true);
+      startTransition(() => setIsReady(true));
       if (!hasReportedPreparedRef.current) {
         hasReportedPreparedRef.current = true;
         onPrepared?.();

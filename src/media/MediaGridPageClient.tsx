@@ -64,6 +64,10 @@ export default function MediaGridPageClient({
         sortWithPriority={sortWithPriority}
         excludeFromFeeds
         prioritizeInitialMedia
+        // The initial visit keeps the existing entrance motion. Returning
+        // from a detail route must paint the restored deep row immediately,
+        // rather than replaying motion across a long cached grid.
+        animateOnFirstLoadOnly
         sidebar={
           <MaskedScroll
             ref={ref}

@@ -10,6 +10,7 @@ export default function MediaListLarge({
   onLastMediaVisible,
   revalidateMedia,
   optimizeLongList = false,
+  animateOnFirstLoadOnly = false,
 }: {
   photos: Media[]
   animate?: boolean
@@ -17,6 +18,7 @@ export default function MediaListLarge({
   onLastMediaVisible?: () => void
   revalidateMedia?: RevalidateMedia
   optimizeLongList?: boolean
+  animateOnFirstLoadOnly?: boolean
 }) {
   return (
     <AnimateItems
@@ -27,6 +29,7 @@ export default function MediaListLarge({
       staggerDelay={0.15}
       distanceOffset={0}
       staggerOnFirstLoadOnly
+      animateOnFirstLoadOnly={animateOnFirstLoadOnly}
       removeTransformAfterAnimation
       classNameItem={optimizeLongList
         ? '[content-visibility:auto] [contain-intrinsic-size:900px]'

@@ -134,13 +134,14 @@ export default function MediaMedium({
       onPointerLeave={() => setIsHovered(false)}
     >
       {({ isLoading }) =>
-        <div className="w-full h-full">
+        <div className="relative w-full h-full">
           {isLoading &&
             <div className={clsx(
               'absolute inset-0 flex items-center justify-center',
               'text-white',
               'animate-fade-in',
               'z-10',
+              'pointer-events-none',
             )}>
               <Spinner size={20} color="text" />
             </div>}

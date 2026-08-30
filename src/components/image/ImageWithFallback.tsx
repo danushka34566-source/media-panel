@@ -7,6 +7,7 @@ import { clsx}  from 'clsx/lite';
 import Image, { ImageProps } from 'next/image';
 import {
   RefObject,
+  startTransition,
   SyntheticEvent,
   useCallback,
   useEffect,
@@ -27,6 +28,60 @@ const directFallbackSources = new Set<string>();
 let isImageOptimizerUnavailable = false;
 const IMAGE_OPTIMIZER_UNAVAILABLE_SESSION_KEY =
   'media-panel:image-optimizer-unavailable';
+
+// A public grid can contain hundreds of images. One ResizeObserver and one
+// pageshow listener per card created a resume storm on mobile browsers. Share
+// one observer and batch changed images into a single animation frame.
+const imageStateSyncCallbacks = new Map<HTMLImageElement, () => void>();
+const pendingImageStateSyncs = new Set<HTMLImageElement>();
+let sharedImageResizeObserver: ResizeObserver | undefined;
+let imageStateSyncFrame: number | undefined;
+
+const flushPendingImageStateSyncs = () => {
+  imageStateSyncFrame = undefined;
+  const images = [...pendingImageStateSyncs];
+  pendingImageStateSyncs.clear();
+  images.forEach(image => imageStateSyncCallbacks.get(image)?.());
+};
+
+const getSharedImageResizeObserver = () => {
+  if (typeof ResizeObserver === 'undefined') { return undefined; }
+  sharedImageResizeObserver ??= new ResizeObserver(entries => {
+    entries.forEach(entry => {
+      if (entry.target instanceof HTMLImageElement) {
+        pendingImageStateSyncs.add(entry.target);
+      }
+    });
+    if (imageStateSyncFrame === undefined) {
+      imageStateSyncFrame = window.requestAnimationFrame(
+        flushPendingImageStateSyncs,
+      );
+    }
+  });
+  return sharedImageResizeObserver;
+};
+
+const observeImageState = (
+  image: HTMLImageElement,
+  sync: () => void,
+) => {
+  imageStateSyncCallbacks.set(image, sync);
+  getSharedImageResizeObserver()?.observe(image);
+  return () => {
+    sharedImageResizeObserver?.unobserve(image);
+    imageStateSyncCallbacks.delete(image);
+    pendingImageStateSyncs.delete(image);
+    if (imageStateSyncCallbacks.size === 0) {
+      sharedImageResizeObserver?.disconnect();
+      sharedImageResizeObserver = undefined;
+      if (imageStateSyncFrame !== undefined) {
+        window.cancelAnimationFrame(imageStateSyncFrame);
+        imageStateSyncFrame = undefined;
+      }
+      pendingImageStateSyncs.clear();
+    }
+  };
+};
 
 const rememberImageOptimizerUnavailable = () => {
   if (isImageOptimizerUnavailable) { return; }
@@ -106,8 +161,14 @@ export default function ImageWithFallback({
   const onLoad = useCallback(
     (event: SyntheticEvent<HTMLImageElement, Event>) => {
       hasLoadedRef.current = true;
-      setIsLoading(false);
-      setDidError(false);
+      // Image completion is a visual refinement, not an input-blocking
+      // update. Large grids can finish many cached/direct images in the same
+      // task; keep those commits interruptible so navigation and filter taps
+      // remain responsive while the grid settles.
+      startTransition(() => {
+        setIsLoading(false);
+        setDidError(false);
+      });
       if (isDirectFallback && directFallbackSrc) {
         // A successful direct retry proves storage is healthy and the failed
         // transformed request was the delivery layer. New cards in this
@@ -181,16 +242,16 @@ export default function ImageWithFallback({
   );
 
   useEffect(() => {
-    const image = ref.current;
+    const image = refProp?.current ?? ref.current;
     const syncLoadedState = () => {
       if (isImageLoaded(image)) {
-        setIsLoading(false);
+        startTransition(() => setIsLoading(false));
       }
     };
     if (isImageLoaded(image)) {
       // Eager offscreen images can finish before React attaches onLoad. Sync
       // from the DOM so their fallback cannot remain over a decoded image.
-      setIsLoading(false);
+      startTransition(() => setIsLoading(false));
     } else {
       setFadeFallbackTransition(true);
     }
@@ -200,16 +261,8 @@ export default function ImageWithFallback({
     // delivering another React load event, leaving the opaque fallback over
     // a valid bitmap until refresh. Reconcile from the actual image element
     // whenever its rendered box changes.
-    const resizeObserver = typeof ResizeObserver !== 'undefined'
-      ? new ResizeObserver(syncLoadedState)
-      : undefined;
-    if (image) { resizeObserver?.observe(image); }
-    window.addEventListener('pageshow', syncLoadedState);
-    return () => {
-      resizeObserver?.disconnect();
-      window.removeEventListener('pageshow', syncLoadedState);
-    };
-  }, []);
+    return image ? observeImageState(image, syncLoadedState) : undefined;
+  }, [refProp]);
 
   const getBlurClass = () => {
     switch (blurCompatibilityLevel) {

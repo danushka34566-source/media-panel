@@ -23,6 +23,7 @@ export default function MediaLink({
   className,
   children: _children,
   loaderType = 'spinner',
+  onNavigateStart,
   ...categories
 }: {
   ref?: RefObject<HTMLAnchorElement | null>
@@ -34,6 +35,7 @@ export default function MediaLink({
   className?: string
   children?: ReactNode
   loaderType?: 'spinner' | 'badge'
+  onNavigateStart?: () => void
 } & MediaSetCategory) {
   const { setNextMediaAnimation } = useAppState();
   const router = useRouter();
@@ -49,6 +51,7 @@ export default function MediaLink({
           href,
           'data-media-id': photo.id,
           onClick: event => {
+            onNavigateStart?.();
             // Next/previous detail navigation replaces the current detail
             // route. It must not overwrite the originating grid's saved
             // anchor with the chevron's DOM position; otherwise Back restores

@@ -29,6 +29,7 @@ import UserAvatar from '@/components/UserAvatar';
 import IconSignOut from '@/components/icons/IconSignOut';
 import {
   IoChevronDown,
+  IoChevronUp,
   IoHeartOutline,
   IoPersonCircleOutline,
   IoPersonOutline,
@@ -36,6 +37,7 @@ import {
 import LinkWithStatus from '@/components/LinkWithStatus';
 import Spinner from '@/components/Spinner';
 import type { ReactNode } from 'react';
+import { motion } from 'framer-motion';
 
 const NAV_HEIGHT_CLASS = NAV_CAPTION
   ? 'min-h-[4rem] sm:min-h-[5rem]'
@@ -135,10 +137,17 @@ export default function NavClient({
     }}
   >
     <DropdownMenu.Trigger asChild>
-      <button
+      <motion.button
+        key={isSignedIn ? 'profile-menu' : 'sign-in-menu'}
         type="button"
+        initial={{ opacity: 0, width: 28 }}
+        animate={{ opacity: 1, width: 50 }}
+        transition={{
+          opacity: { duration: 0.16, ease: 'easeOut' },
+          width: { delay: 0.07, duration: 0.3, ease: [0.16, 1, 0.3, 1] },
+        }}
         className={clsx(
-          'flex h-7 items-center justify-center gap-1 rounded-full pl-0 pr-1.5',
+          'flex h-7 shrink-0 items-center justify-start gap-1 overflow-hidden rounded-full pl-0 pr-1.5',
           'text-main hover:text-main',
           'focus:outline-none',
           'transition-colors duration-150',
@@ -147,30 +156,44 @@ export default function NavClient({
         title={avatarLabel}
         aria-label={isSignedIn ? 'Profile menu' : 'Sign in menu'}
       >
-        {isSignedIn
-          ? <UserAvatar
-            name={effectiveUser?.name}
-            email={effectiveUser?.email}
-            profileImageUrl={effectiveUser?.profileImageUrl}
-            sizeClass="size-7"
-            textClassName="text-[10px]"
-            showInitialsFallback={false}
-            borderless
-          />
-          : <IoPersonCircleOutline
-            aria-hidden="true"
-            size={27}
-            className="text-dim"
-          />}
-        <IoChevronDown
-          aria-hidden="true"
-          size={13}
-          className={clsx(
-            'text-dim transition-transform duration-200',
-            isAvatarMenuOpen && 'rotate-180',
-          )}
-        />
-      </button>
+        <motion.span
+          initial={{ opacity: 0, scale: 0.82 }}
+          animate={{ opacity: 1, scale: 1 }}
+          transition={{ duration: 0.18, ease: 'easeOut' }}
+          className="flex size-7 shrink-0 items-center justify-center"
+        >
+          {isSignedIn
+            ? <UserAvatar
+              name={effectiveUser?.name}
+              email={effectiveUser?.email}
+              profileImageUrl={effectiveUser?.profileImageUrl}
+              sizeClass="size-7"
+              textClassName="text-[10px]"
+              showInitialsFallback={false}
+              borderless
+            />
+            : <IoPersonCircleOutline
+              aria-hidden="true"
+              size={27}
+              className="text-dim"
+            />}
+        </motion.span>
+        <motion.span
+          initial={{ opacity: 0, width: 0, x: -5 }}
+          animate={{ opacity: 1, width: 13, x: 0 }}
+          transition={{ delay: 0.18, duration: 0.2, ease: 'easeOut' }}
+          className="block h-[13px] shrink-0 overflow-hidden text-dim"
+        >
+          <motion.span
+            animate={{ y: isAvatarMenuOpen ? -13 : 0 }}
+            transition={{ duration: 0.24, ease: [0.16, 1, 0.3, 1] }}
+            className="flex flex-col"
+          >
+            <IoChevronDown aria-hidden="true" size={13} className="shrink-0" />
+            <IoChevronUp aria-hidden="true" size={13} className="shrink-0" />
+          </motion.span>
+        </motion.span>
+      </motion.button>
     </DropdownMenu.Trigger>
     <DropdownMenu.Portal>
       <DropdownMenu.Content
@@ -179,6 +202,10 @@ export default function NavClient({
         className={clsx(
           'z-50 min-w-56 overflow-hidden rounded-xl border border-medium bg-main p-1.5',
           'shadow-xl shadow-black/10 dark:shadow-black/30',
+          'origin-[var(--radix-dropdown-menu-content-transform-origin)]',
+          'data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95',
+          'data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95',
+          'duration-150',
         )}
       >
         {isSignedIn

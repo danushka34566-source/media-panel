@@ -1,6 +1,13 @@
 'use client';
 
-import { RefObject, useEffect, useId, useRef, useState } from 'react';
+import {
+  RefObject,
+  startTransition,
+  useEffect,
+  useId,
+  useRef,
+  useState,
+} from 'react';
 
 type DeviceCapabilities = {
   reducedMotion: boolean
@@ -386,10 +393,11 @@ const onPageHide = () => {
 const onPageShow = () => {
   if (document.hidden) { return; }
   cancelScheduledViewportRefresh();
-  // Mobile browsers can suspend IntersectionObserver callbacks while the
-  // phone is locked. Reconcile once on the next frame so visible previews
-  // remount without doing a duplicate full-entry geometry scan during unlock.
-  scheduleViewportRefresh();
+  // Preserve the last observer decisions across a short mobile suspension.
+  // Refill the bounded decoder queue from that state without forcing layout
+  // for every card on the first interactive frame. IntersectionObserver will
+  // deliver any genuine viewport changes after the browser resumes.
+  scheduleActivePreviewUpdate();
 };
 
 const onVisibilityOrCapabilityChange = () => {
@@ -526,7 +534,17 @@ export default function useVideoPreviewLifecycle({
       isInPreloadRange: false,
       intersectionRatio: 0,
       isActive: false,
-      setMounted: setIsMounted,
+      setMounted: mounted => {
+        // Decoder-slot refills can mount five videos together. Treat ordinary
+        // preview mounts as background rendering so React can interrupt that
+        // work for a tap on navigation, tags, or controls. The card the user
+        // explicitly targeted remains urgent for immediate feedback.
+        if (startupPriorityRef.current) {
+          setIsMounted(mounted);
+        } else {
+          startTransition(() => setIsMounted(mounted));
+        }
+      },
       setActive: (active, immediate = false) => {
         if (active) {
           if (exitFrame.current !== undefined) {
@@ -582,8 +600,6 @@ export default function useVideoPreviewLifecycle({
     }
     getObserver()?.observe(element);
     getPreloadObserver()?.observe(element);
-    scheduleViewportRefresh();
-
     return () => {
       if (exitFrame.current !== undefined) {
         cancelAnimationFrame(exitFrame.current);

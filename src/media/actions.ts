@@ -2582,9 +2582,18 @@ export const getMediaCachedAction = async (
 
 // Public actions
 
-export const searchMediaAction = async (query: string) =>
-  getMedia({ query, limit: 25 })
+export const searchMediaAction = async (
+  query: string,
+  offset = 0,
+  limit = 48,
+) => {
+  const photos = await getMedia({ query, offset, limit: limit + 1 })
     .catch(e => {
-      console.error('Could not query photos', e);
+      console.error('Could not query media', e);
       return [] as Media[];
     });
+  return {
+    photos: photos.slice(0, limit),
+    hasMore: photos.length > limit,
+  };
+};

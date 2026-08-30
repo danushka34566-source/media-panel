@@ -5,6 +5,7 @@ import {
   ReactNode,
   SetStateAction,
   Dispatch,
+  useCallback,
   useEffect,
   useMemo,
   useRef,
@@ -54,7 +55,7 @@ import { useAppState } from '@/app/AppState';
 import { searchMediaAction } from '@/media/actions';
 import { RiToolsFill } from 'react-icons/ri';
 import { searchUsersCommandAction } from '@/auth/actions';
-import { getKeywordsForMedia, titleForMedia } from '@/media';
+import { getKeywordsForMedia, titleForMedia, type Media } from '@/media';
 import MediaDate from '@/media/MediaDate';
 import MediaSmall from '@/media/MediaSmall';
 import {
@@ -84,6 +85,7 @@ import { formatLensText } from '@/lens';
 import IconTag from '../components/icons/IconTag';
 import IconCamera from '../components/icons/IconCamera';
 import IconMedia from '../components/icons/IconMedia';
+import IconSearch from '../components/icons/IconSearch';
 import IconRecipe from '../components/icons/IconRecipe';
 import IconFocalLength from '../components/icons/IconFocalLength';
 import IconFilm from '../components/icons/IconFilm';
@@ -100,18 +102,21 @@ import { CgClose, CgFileDocument } from 'react-icons/cg';
 import { FaRegUserCircle } from 'react-icons/fa';
 import { formatDistanceToNow } from 'date-fns';
 import IconCheck from '@/components/icons/IconCheck';
-import { getSortStateFromPath } from '@/media/sort/path';
+import { getPathForSortBy, getSortStateFromPath } from '@/media/sort/path';
 import IconSort from '@/components/icons/IconSort';
 import { useSelectMediaState } from '@/admin/select/SelectMediaState';
 import IconAlbum from '@/components/icons/IconAlbum';
 import { formatMediaStringEntity } from '@/media/MediaStringEntity';
 import UserAvatar from '@/components/UserAvatar';
+import IconGrid from '@/components/icons/IconGrid';
 
 const DIALOG_TITLE = 'Global Command-K Menu';
 const DIALOG_DESCRIPTION = 'For searching photos, views, and settings';
 
 const LISTENER_KEYDOWN = 'keydown';
 const MINIMUM_QUERY_LENGTH = 2;
+const SEARCH_DEBOUNCE_MS = 250;
+const SEARCH_MEDIA_PAGE_SIZE = 48;
 
 const MAX_HEIGHT = '20rem';
 
@@ -123,7 +128,7 @@ type CommandKItem = {
   annotation?: ReactNode
   annotationAria?: string
   path?: string
-  action?: () => void | Promise<void | boolean>
+  action?: () => void | boolean | Promise<void | boolean>
 }
 
 type CommandKSection = {
@@ -190,6 +195,7 @@ export default function CommandKClient({
     recipesCount,
     insightsIndicatorStatus,
     isGridHighDensity,
+    isWideGrid,
     areZoomControlsShown,
     areMediaMatted,
     areAdminDebugToolsEnabled,
@@ -200,6 +206,7 @@ export default function CommandKClient({
     setIsCommandKOpen: setIsOpen,
     setShouldShowBaselineGrid,
     setIsGridHighDensity,
+    setIsWideGrid,
     setAreZoomControlsShown,
     setAreMediaMatted,
     setShouldDebugImageFallbacks,
@@ -214,6 +221,7 @@ export default function CommandKClient({
   } = useSelectMediaState();
 
   const {
+    sortBy,
     doesPathOfferSort,
     isSortedByDefault,
     isAscending,
@@ -257,6 +265,8 @@ export default function CommandKClient({
   const [isWaitingForAction, setIsWaitingForAction] = useState(false);
   const isWaiting = isPending || isWaitingForAction;
   const shouldCloseAfterWaiting = useRef(false);
+  // This effect settles state owned by asynchronous route/action transitions.
+  /* eslint-disable react-hooks/set-state-in-effect */
   useEffect(() => {
     if (!isWaiting) {
       setKeyWaiting(undefined);
@@ -266,11 +276,12 @@ export default function CommandKClient({
       }
     }
   }, [isWaiting, setIsOpen]);
+  /* eslint-enable react-hooks/set-state-in-effect */
 
   // Raw query values
   const [queryLiveRaw, setQueryLiveRaw] = useState('');
   const [queryDebouncedRaw] =
-    useDebounce(queryLiveRaw, 500, { trailing: true });
+    useDebounce(queryLiveRaw, SEARCH_DEBOUNCE_MS, { trailing: true });
 
   // Parameterized query values
   const queryLive = useMemo(() =>
@@ -286,6 +297,11 @@ export default function CommandKClient({
 
   const [isLoading, setIsLoading] = useState(false);
   const [queriedSections, setQueriedSections] = useState<CommandKSection[]>([]);
+  const [mediaSearchResults, setMediaSearchResults] = useState<Media[]>([]);
+  const [hasMoreMediaSearchResults, setHasMoreMediaSearchResults] =
+    useState(false);
+  const searchRequestIdRef = useRef(0);
+  const isLoadingMoreMediaRef = useRef(false);
 
   const { setTheme } = useTheme();
 
@@ -310,13 +326,22 @@ export default function CommandKClient({
     return () => document.removeEventListener(LISTENER_KEYDOWN, down);
   }, [setIsOpen]);
 
+  // Search is an external server action; loading state intentionally begins
+  // when the debounced request is launched.
+  /* eslint-disable react-hooks/set-state-in-effect */
   useEffect(() => {
     if (queryDebounced.length >= MINIMUM_QUERY_LENGTH && !isPending) {
+      const requestId = ++searchRequestIdRef.current;
       setIsLoading(true);
       if (isUserSearch) {
+        setMediaSearchResults([]);
+        setHasMoreMediaSearchResults(false);
         searchUsersCommandAction(queryDebounced.slice('users:'.length))
           .then(users => {
-            if (!isOpenRef.current) {
+            if (
+              requestId !== searchRequestIdRef.current ||
+              !isOpenRef.current
+            ) {
               setQueriedSections([]);
               return;
             }
@@ -356,58 +381,142 @@ export default function CommandKClient({
             })).filter(section => section.items.length > 0));
           })
           .catch(error => {
+            if (requestId !== searchRequestIdRef.current) { return; }
             console.error(error);
             setQueriedSections([]);
           })
-          .finally(() => setIsLoading(false));
+          .finally(() => {
+            if (requestId === searchRequestIdRef.current) {
+              setIsLoading(false);
+            }
+          });
         return;
       }
-      searchMediaAction(queryDebounced)
-        .then(photos => {
-          if (isOpenRef.current) {
-            setQueriedSections(photos.length > 0
-              ? [{
-                heading: 'Media',
-                accessory: <IconMedia size={14} />,
-                items: photos.map(photo => ({
-                  label: titleForMedia(photo),
-                  keywords: getKeywordsForMedia(photo),
-                  annotation: <MediaDate {...{ photo, timezone: undefined }} />,
-                  accessory: <MediaSmall photo={photo} />,
-                  path: pathForMedia({ photo }),
-                })),
-              }]
-              : []);
-          } else {
-            // Ignore stale requests that come in after dialog is closed
-            setQueriedSections([]);
-          }
-          setIsLoading(false);
+      setQueriedSections([]);
+      searchMediaAction(queryDebounced, 0, SEARCH_MEDIA_PAGE_SIZE)
+        .then(({ photos, hasMore }) => {
+          if (
+            requestId !== searchRequestIdRef.current ||
+            !isOpenRef.current
+          ) { return; }
+          setMediaSearchResults(photos);
+          setHasMoreMediaSearchResults(hasMore);
         })
         .catch(e => {
+          if (requestId !== searchRequestIdRef.current) { return; }
           console.error(e);
-          setQueriedSections([]);
-          setIsLoading(false);
+          setMediaSearchResults([]);
+          setHasMoreMediaSearchResults(false);
+        })
+        .finally(() => {
+          if (requestId === searchRequestIdRef.current) {
+            setIsLoading(false);
+          }
         });
     }
   }, [queryDebounced, isPending, isUserSearch, appText]);
+  /* eslint-enable react-hooks/set-state-in-effect */
 
+  // Reset stale asynchronous results as soon as the live query changes.
+  /* eslint-disable react-hooks/set-state-in-effect */
   useEffect(() => {
+    // Invalidate an older server response immediately when the user types;
+    // waiting for the debounce allowed slow results for a previous query to
+    // overwrite a newer one and made matching rows appear inconsistent.
+    searchRequestIdRef.current += 1;
+    isLoadingMoreMediaRef.current = false;
     if (queryLive === '') {
       setQueriedSections([]);
+      setMediaSearchResults([]);
+      setHasMoreMediaSearchResults(false);
       setIsLoading(false);
     } else if (queryLive.length >= MINIMUM_QUERY_LENGTH) {
+      setQueriedSections([]);
+      setMediaSearchResults([]);
+      setHasMoreMediaSearchResults(false);
       setIsLoading(true);
+    } else {
+      setQueriedSections([]);
+      setMediaSearchResults([]);
+      setHasMoreMediaSearchResults(false);
+      setIsLoading(false);
     }
   }, [queryLive]);
+  /* eslint-enable react-hooks/set-state-in-effect */
 
+  // Closing the command menu clears its transient search session.
+  /* eslint-disable react-hooks/set-state-in-effect */
   useEffect(() => {
     if (!isOpen) {
+      searchRequestIdRef.current += 1;
+      isLoadingMoreMediaRef.current = false;
       setQueryLiveRaw('');
       setQueriedSections([]);
+      setMediaSearchResults([]);
+      setHasMoreMediaSearchResults(false);
       setIsLoading(false);
     }
   }, [isOpen]);
+  /* eslint-enable react-hooks/set-state-in-effect */
+
+  const mediaQueriedSections = useMemo<CommandKSection[]>(() =>
+    mediaSearchResults.length > 0
+      ? [{
+        heading: 'Media',
+        accessory: <IconMedia size={14} />,
+        items: mediaSearchResults.map(photo => ({
+          label: titleForMedia(photo),
+          explicitKey: photo.id,
+          keywords: getKeywordsForMedia(photo),
+          annotation: <MediaDate {...{ photo, timezone: undefined }} />,
+          accessory: <MediaSmall photo={photo} />,
+          path: pathForMedia({ photo }),
+        })),
+      }]
+      : [],
+  [mediaSearchResults]);
+
+  const loadMoreMediaSearchResults = useCallback(() => {
+    if (
+      isUserSearch ||
+      queryLive !== queryDebounced ||
+      !hasMoreMediaSearchResults ||
+      isLoadingMoreMediaRef.current
+    ) { return; }
+    const requestId = searchRequestIdRef.current;
+    isLoadingMoreMediaRef.current = true;
+    setIsLoading(true);
+    searchMediaAction(
+      queryDebounced,
+      mediaSearchResults.length,
+      SEARCH_MEDIA_PAGE_SIZE,
+    ).then(({ photos, hasMore }) => {
+      if (
+        requestId !== searchRequestIdRef.current ||
+        !isOpenRef.current
+      ) { return; }
+      setMediaSearchResults(current => {
+        const seenIds = new Set(current.map(photo => photo.id));
+        return current.concat(photos.filter(photo => !seenIds.has(photo.id)));
+      });
+      setHasMoreMediaSearchResults(hasMore);
+    }).catch(error => {
+      if (requestId === searchRequestIdRef.current) {
+        console.error(error);
+      }
+    }).finally(() => {
+      if (requestId === searchRequestIdRef.current) {
+        isLoadingMoreMediaRef.current = false;
+        setIsLoading(false);
+      }
+    });
+  }, [
+    hasMoreMediaSearchResults,
+    isUserSearch,
+    mediaSearchResults.length,
+    queryDebounced,
+    queryLive,
+  ]);
 
   const recent = recents[0];
   const recentsStatus = useMemo(() => {
@@ -733,31 +842,95 @@ export default function CommandKClient({
       : [],
   };
 
+  const keepSearchOpen = (query: string) => {
+    setQueryLiveRaw(query);
+    window.requestAnimationFrame(() => refInput.current?.focus());
+    return false;
+  };
+
+  const searchScopeItems: CommandKItem[] = [{
+    label: isUserSearchLive ? 'Search media' : 'Search users',
+    explicitKey: 'toggle-user-search',
+    keywords: [queryLive, 'search users media'],
+    accessory: <FaRegUserCircle size={18} />,
+    annotation: renderCheck(isUserSearchLive),
+    action: () => keepSearchOpen(isUserSearchLive
+      ? queryLiveRaw.trim().slice('users:'.length).trimStart()
+      : `users: ${queryLiveRaw.trim()}`),
+  }];
+  if (isUserSearchLive && userRole === 'superadmin') {
+    searchScopeItems.push(...[
+      ['user', 'Users'],
+      ['admin', 'Admins'],
+      ['superadmin', 'Super admins'],
+    ].map(([role, label]) => ({
+      label,
+      explicitKey: `user-role-${role}`,
+      keywords: [queryLive, role, label.toLocaleLowerCase()],
+      action: () => keepSearchOpen(`users:${role} `),
+    })));
+  }
+  const searchScopeSection: CommandKSection = {
+    heading: 'Search',
+    accessory: <IconSearch width={14} includeTitle={false} />,
+    items: canManageUsers ? searchScopeItems : [],
+  };
+
+  const quickAccessSection: CommandKSection = {
+    heading: 'Quick Access',
+    accessory: <IconFavs size={14} highlight />,
+    items: isUserSignedIn
+      ? [{
+        label: 'Favorites',
+        explicitKey: 'favorites',
+        keywords: ['favorites liked saved'],
+        accessory: <IconFavs size={18} highlight />,
+        path: PATH_FAVORITES,
+      }]
+      : [],
+  };
+
+  const isGridPage = pathname === PATH_GRID_INFERRED ||
+    pathname.startsWith('/grid/');
+  const isFullPage = pathname === PATH_FULL_INFERRED ||
+    pathname.startsWith('/full/');
+  const selectedGridPath = getPathForSortBy(PATH_GRID_INFERRED, sortBy);
+  const selectedFullPath = getPathForSortBy(PATH_FULL_INFERRED, sortBy);
+
   const pageFull: CommandKItem = {
     label: GRID_HOMEPAGE_ENABLED
       ? appText.nav.full
       : `${appText.nav.full} (${appText.nav.home})`,
-    path: PATH_FULL_INFERRED,
+    explicitKey: 'list-view',
+    path: selectedFullPath,
+    annotation: renderCheck(isFullPage),
   };
 
   const pageGrid: CommandKItem = {
     label: GRID_HOMEPAGE_ENABLED
-      ? `${appText.nav.grid} (${appText.nav.home})`
-      : appText.nav.grid,
-    path: PATH_GRID_INFERRED,
+      ? `${appText.nav.grid} (${appText.nav.home}) - Regular`
+      : `${appText.nav.grid} - Regular`,
+    explicitKey: 'grid-regular',
+    accessory: <IconGrid width={22} variant="regular" />,
+    path: selectedGridPath,
+    action: () => setIsWideGrid?.(false),
+    annotation: renderCheck(isGridPage && !isWideGrid),
+  };
+
+  const pageGridWide: CommandKItem = {
+    label: GRID_HOMEPAGE_ENABLED
+      ? `${appText.nav.grid} (${appText.nav.home}) - Wide`
+      : `${appText.nav.grid} - Wide`,
+    explicitKey: 'grid-wide',
+    accessory: <IconGrid width={22} variant="wide" />,
+    path: selectedGridPath,
+    action: () => setIsWideGrid?.(true),
+    annotation: renderCheck(isGridPage && isWideGrid),
   };
 
   const pageItems: CommandKItem[] = GRID_HOMEPAGE_ENABLED
-    ? [pageGrid, pageFull]
-    : [pageFull, pageGrid];
-
-  if (isUserSignedIn) {
-    pageItems.push({
-      label: 'Favorites',
-      accessory: <IconFavs size={14} highlight />,
-      path: PATH_FAVORITES,
-    });
-  }
+    ? [pageGrid, pageGridWide, pageFull]
+    : [pageFull, pageGrid, pageGridWide];
 
   const sectionPages: CommandKSection = {
     heading: appText.cmdk.pages,
@@ -894,10 +1067,15 @@ export default function CommandKClient({
       onOpenChange={setIsOpen}
       filter={(value, search, keywords) => {
         const searchFormatted = search.trim().toLocaleLowerCase();
-        return (
-          value.toLocaleLowerCase().includes(searchFormatted) ||
-          keywords?.some(keyword => keyword.includes(searchFormatted))
-        ) ? 1 : 0 ;
+        const searchableText = [value, ...(keywords ?? [])]
+          .join(' ')
+          .toLocaleLowerCase();
+        return searchFormatted
+          .split(/\s+/)
+          .filter(Boolean)
+          .every(term => searchableText.includes(term))
+          ? 1
+          : 0;
       }}
       loop
     >
@@ -939,43 +1117,6 @@ export default function CommandKClient({
             placeholder={appText.cmdk.placeholder}
             disabled={isPending}
           />
-          {canManageUsers &&
-            <div className="flex items-center gap-1">
-              <button
-                type="button"
-                onClick={() => setQueryLiveRaw(current => {
-                  const trimmed = current.trim();
-                  return trimmed.toLocaleLowerCase().startsWith('users:')
-                    ? trimmed.slice('users:'.length).trimStart()
-                    : `users: ${trimmed}`;
-                })}
-                className={clsx(
-                  'rounded-full border px-2 py-0.5 text-[11px]',
-                  isUserSearchLive
-                    ? 'border-main text-main'
-                    : 'border-gray-400/40 text-dim',
-                )}
-              >
-                Users
-              </button>
-              {isUserSearchLive && userRole === 'superadmin' && [
-                ['user', 'Users'],
-                ['admin', 'Admins'],
-                ['superadmin', 'Super admins'],
-              ].map(([role, label]) =>
-                <button
-                  key={role}
-                  type="button"
-                  onClick={() => setQueryLiveRaw(`users:${role} `)}
-                  className={clsx(
-                    'rounded-full border px-2 py-0.5',
-                    'text-[11px] text-dim max-sm:hidden',
-                    'border-gray-400/40',
-                  )}
-                >
-                  {label}
-                </button>)}
-            </div>}
           {isLoading && !isPending
             ? <span className="translate-y-[2px]">
               <Spinner size={16} className="-mr-1" />
@@ -1012,7 +1153,15 @@ export default function CommandKClient({
         </div>
         <Command.List
           ref={refScroll}
-          onScroll={updateMask}
+          onScroll={event => {
+            updateMask();
+            const list = event.currentTarget;
+            if (
+              list.scrollHeight - list.scrollTop - list.clientHeight < 160
+            ) {
+              loadMoreMediaSearchResults();
+            }
+          }}
           className="overflow-y-auto"
           style={{ ...styleMask, maxHeight }}
         >
@@ -1022,7 +1171,11 @@ export default function CommandKClient({
                 ? appText.cmdk.searching
                 : appText.cmdk.noResults}
             </Command.Empty>
-            {queriedSections
+            {(quickAccessSection.items.length > 0
+              ? [quickAccessSection]
+              : [])
+              .concat(searchScopeSection)
+              .concat(isUserSearch ? queriedSections : mediaQueriedSections)
               .concat(categorySections)
               .concat(librarySections)
               .concat(sortSection)
@@ -1075,8 +1228,10 @@ export default function CommandKClient({
                                 shouldClose === true;
                               setIsWaitingForAction(false);
                             });
-                          } else {
-                            if (!path) { setIsOpen?.(false); }
+                           } else {
+                             if (result !== false && !path) {
+                               setIsOpen?.(false);
+                             }
                           }
                         }
                         if (path) {

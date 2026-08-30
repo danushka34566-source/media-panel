@@ -67,10 +67,25 @@ export default function PageResumeRecovery() {
               content && content.firstElementChild &&
               content.getBoundingClientRect().height > 0,
             );
-            // A healthy mounted tree does not need a document-wide display
-            // toggle. Avoid forcing every image, video, and layout subtree to
-            // recalculate after every mobile unlock.
+            // DOM geometry can be healthy while iOS still presents a stale
+            // black/white compositor layer. Nudge that layer with a tiny
+            // compositor-only animation; unlike the old display toggle this
+            // does not synchronously re-layout every image and video.
             if (hasRenderedContent) {
+              const surface = document.body;
+              if (typeof surface.animate === 'function') {
+                const repaint = surface.animate([
+                  { opacity: 0.999 },
+                  { opacity: 1 },
+                ], {
+                  duration: 1,
+                  iterations: 1,
+                });
+                void repaint.finished.then(
+                  () => repaint.cancel(),
+                  () => undefined,
+                );
+              }
               recoveringRef.current = false;
               return;
             }
