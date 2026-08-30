@@ -38,7 +38,7 @@ import IconTag from '@/components/icons/IconTag';
 import AdminMediaQuickEditModal from './AdminMediaQuickEditModal';
 import useKeydownHandler from '@/utility/useKeydownHandler';
 import { monitorMediaDeletion } from './deletion-progress';
-import { toastSuccess } from '@/toast';
+import { toastSuccess, toastWarning } from '@/toast';
 
 export default function AdminMediaMenu({
   photo,
@@ -208,7 +208,12 @@ export default function AdminMediaMenu({
           );
           if (shouldRedirectDelete) {
             router.replace(PATH_ROOT, { scroll: false });
+          } else {
+            router.refresh();
           }
+        }).catch(error => {
+          toastWarning(error instanceof Error ? error.message : 'Unable to queue deletion');
+          return false;
         });
       },
       ...showKeyCommands && {
@@ -231,7 +236,7 @@ export default function AdminMediaMenu({
   , [canDelete, sectionMain, sectionDelete]);
 
   return (
-    canEdit
+    (canEdit || canDelete)
       ? <>
         <MoreMenu {...{
           ...props,

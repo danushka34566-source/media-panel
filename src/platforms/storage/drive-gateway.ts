@@ -173,7 +173,10 @@ export const driveCreatePresignedDownload = async (
     projectId: DRIVE_PROJECT_ID,
     bucket: DRIVE_BUCKET,
     key,
-    expiresInSeconds: '900',
+    // Full-video playback can legitimately last longer than a short preview
+    // or download request. Keep this as a one-day bearer URL; the Drive API
+    // still authorizes the request before issuing it.
+    expiresInSeconds: '18000',
   });
   if (options?.downloadName) {
     search.set('download', '1');

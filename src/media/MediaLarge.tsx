@@ -110,6 +110,8 @@ const SWIPE_NAVIGATION_VERTICAL_TOLERANCE = 70;
 const SWIPE_NAVIGATION_LOCK_DISTANCE = 12;
 const SWIPE_DISABLED_VIDEO_BOTTOM_HEIGHT = 96;
 const SWIPE_DISABLED_VIDEO_BOTTOM_RATIO = 0.2;
+const FULL_VIDEO_URL_TTL_MS = 5 * 60 * 60 * 1000;
+const FULL_VIDEO_RENEWAL_LEAD_MS = 5 * 60 * 1000;
 const SWIPE_ANIMATION_LEFT = { type: 'left' as const, duration: 0.3 };
 const SWIPE_ANIMATION_RIGHT = { type: 'right' as const, duration: 0.3 };
 const VIDEO_EXTENSION_TO_MIME: Record<string, string> = {
@@ -293,6 +295,9 @@ export default function MediaLarge({
   const [isFullVideoPlaying, setIsFullVideoPlaying] = useState(false);
   const [isPreparingFullVideo, setIsPreparingFullVideo] = useState(false);
   const [fullVideoDeliveryUrl, setFullVideoDeliveryUrl] = useState<string>();
+  const [fullVideoDeliveryExpiresAt, setFullVideoDeliveryExpiresAt] =
+    useState<number>();
+  const fullVideoRenewalRef = useRef<Promise<boolean> | null>(null);
   const [preparedFullVideoDownloads, setPreparedFullVideoDownloads] = useState<Record<string, {
     url: string
     expiresAt: number
@@ -359,6 +364,7 @@ export default function MediaLarge({
     setIsFullVideoPlaying(false);
     setIsPreparingFullVideo(false);
     setFullVideoDeliveryUrl(undefined);
+    setFullVideoDeliveryExpiresAt(undefined);
     setPreparedFullVideoDownloads({});
     setIsMainVideoActuallyPlaying(false);
     setHasStartedMainVideoPlayback(false);
@@ -514,6 +520,66 @@ export default function MediaLarge({
   const fullVideoCompatibilityUrl = compatibilityPlaybackUrl
     ? getFullVideoBridgeUrl(compatibilityPlaybackUrl)
     : undefined;
+
+  const renewFullVideoPlayback = useCallback(async () => {
+    if (!isVideo || !isFullVideoPlaying || fullVideoRenewalRef.current) {
+      return fullVideoRenewalRef.current ?? Promise.resolve(false);
+    }
+    const bridgeUrl = getFullVideoBridgeUrl(currentVideoUrl);
+    if (!bridgeUrl.startsWith('/api/media/full-video')) {
+      return false;
+    }
+    const renewal = (async () => {
+      const response = await fetch(bridgeUrl, {
+        method: 'HEAD',
+        credentials: 'same-origin',
+        cache: 'no-store',
+      });
+      const signedUrl = response.headers.get('x-media-signed-download');
+      const expiresAt = Number(response.headers.get(
+        'x-media-signed-download-expires-at',
+      ));
+      if (!response.ok || !signedUrl || !Number.isFinite(expiresAt) ||
+        expiresAt <= Date.now()) {
+        return false;
+      }
+      const video = videoRef.current;
+      if (!video) { return false; }
+      const resumeTime = Number.isFinite(video.currentTime)
+        ? video.currentTime
+        : 0;
+      const wasPlaying = !video.paused && !video.ended;
+      const restorePlayback = () => {
+        try { video.currentTime = resumeTime; } catch {}
+        if (wasPlaying) { void video.play().catch(() => undefined); }
+      };
+      video.addEventListener('loadedmetadata', restorePlayback, { once: true });
+      setFullVideoDeliveryExpiresAt(expiresAt);
+      setFullVideoDeliveryUrl(signedUrl);
+      window.setTimeout(() => {
+        if (videoRef.current === video && video.currentSrc !== signedUrl) {
+          try { video.src = signedUrl; video.load(); } catch {}
+        } else if (videoRef.current === video) {
+          restorePlayback();
+        }
+      }, 0);
+      return true;
+    })().catch(() => false);
+    fullVideoRenewalRef.current = renewal;
+    try { return await renewal; }
+    finally { fullVideoRenewalRef.current = null; }
+  }, [currentVideoUrl, isFullVideoPlaying, isVideo]);
+
+  useEffect(() => {
+    if (!isVideo || !isFullVideoPlaying) { return; }
+    const expiresAt = fullVideoDeliveryExpiresAt ??
+      Date.now() + FULL_VIDEO_URL_TTL_MS;
+    const delay = Math.max(1_000, expiresAt - Date.now() - FULL_VIDEO_RENEWAL_LEAD_MS);
+    const timer = window.setTimeout(() => {
+      void renewFullVideoPlayback();
+    }, delay);
+    return () => window.clearTimeout(timer);
+  }, [fullVideoDeliveryExpiresAt, isFullVideoPlaying, isVideo, renewFullVideoPlayback]);
 
   const warmFullVideoDownload = useCallback((sourceUrl = photo.url) => {
     if (!isVideo || !sourceUrl) { return; }
@@ -1535,6 +1601,9 @@ export default function MediaLarge({
                   flushSync(() => {
                     setShouldUseCompatibilityPlayback(preferCompatibility);
                     setFullVideoDeliveryUrl(selectedDeliveryUrl);
+                    setFullVideoDeliveryExpiresAt(
+                      preparedDownload?.expiresAt ?? Date.now() + FULL_VIDEO_URL_TTL_MS,
+                    );
                     setIsFullVideoPlaying(true);
                     setIsPiPLocked(false);
                   });

@@ -65,6 +65,8 @@ export default function MoreMenu({
       <DropdownMenu.Trigger asChild>
         <button
           type="button"
+          onPointerDown={event => event.stopPropagation()}
+          onClick={event => event.stopPropagation()}
           className={clsx(
             'px-1 py-[3px]',
             'min-h-0 border-none shadow-none',
@@ -84,6 +86,8 @@ export default function MoreMenu({
       <DropdownMenu.Portal>
         <DropdownMenu.Content
           {...props}
+          onPointerDown={event => event.stopPropagation()}
+          onClick={event => event.stopPropagation()}
           onCloseAutoFocus={e => e.preventDefault()}
           align={align}
           sideOffset={sideOffset}

@@ -566,36 +566,63 @@ export const clearWorkerRegistrationStatusForUrl = async (url: string) =>
     await createWorkerRegistrationStatusTable();
     await ensureWorkerRegistrationStatusColumns();
     await ensureWorkerRegistrationStatusColumnTypes();
+    await createRegisteredUploadFileMapTable();
     await createUploadRegistrationHintsTable();
     await ensureUploadRegistrationHintsColumnTypes();
-    const matchingRows = await query<{
+    const matchingStatusRows = await query<{
       url: string | null
       source_url: string | null
+      media_id: string | null
     }>(
       `
-        SELECT url, source_url
+        SELECT url, source_url, media_id
         FROM worker_registration_status
         WHERE url = $1 OR source_url = $1
       `,
       [url],
     ).then(({ rows }) => rows);
-    const hintUrls = Array.from(new Set([
+    const matchingMapRows = await query<{
+      media_id: string | null
+      stored_url: string | null
+      source_url: string | null
+    }>(
+      `
+        SELECT media_id, stored_url, source_url
+        FROM registered_upload_file_map
+        WHERE stored_url = $1 OR source_url = $1
+      `,
+      [url],
+    ).then(({ rows }) => rows);
+    const relatedMediaIds = Array.from(new Set([
+      ...matchingStatusRows,
+      ...matchingMapRows,
+    ].map(row => row.media_id).filter((value): value is string => Boolean(value))));
+    const relatedUrls = Array.from(new Set([
       url,
-      ...matchingRows.flatMap(row =>
+      ...matchingStatusRows.flatMap(row =>
         [row.url, row.source_url].filter((value): value is string => Boolean(value))),
+      ...matchingMapRows.flatMap(row =>
+        [row.stored_url, row.source_url].filter((value): value is string => Boolean(value))),
     ]));
     await query(
       `
         DELETE FROM worker_registration_status
-        WHERE url = $1 OR source_url = $1
+        WHERE url = ANY($1::text[])
+          OR source_url = ANY($1::text[])
+          OR media_id = ANY($2::text[])
       `,
-      [url],
+      [relatedUrls, relatedMediaIds],
     );
-    if (hintUrls.length > 0) {
-      await mapWithConcurrency(hintUrls, 4, clearUploadRegistrationHintForUrl);
-    } else {
-      await clearUploadRegistrationHintForUrl(url);
-    }
+    await query(
+      `
+        DELETE FROM registered_upload_file_map
+        WHERE stored_url = ANY($1::text[])
+          OR source_url = ANY($1::text[])
+          OR media_id = ANY($2::text[])
+      `,
+      [relatedUrls, relatedMediaIds],
+    );
+    await mapWithConcurrency(relatedUrls, 4, clearUploadRegistrationHintForUrl);
   }, 'clearWorkerRegistrationStatusForUrl');
 
 export const clearWorkerRegistrationTrackingForMedia = async ({

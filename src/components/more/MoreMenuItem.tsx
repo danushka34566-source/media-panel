@@ -113,6 +113,8 @@ export default function MoreMenuItem({
             });
         }
       }}
+      onPointerDown={event => event.stopPropagation()}
+      onClick={event => event.stopPropagation()}
     >
       {href && !hrefDownloadName
         ? <LoaderLink

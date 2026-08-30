@@ -5,6 +5,7 @@ import { clsx } from 'clsx/lite';
 import { FiActivity, FiHardDrive, FiRefreshCw, FiX } from 'react-icons/fi';
 import Modal from '@/components/Modal';
 import Spinner from '@/components/Spinner';
+import AdminRegistrationErrorButton from '../AdminRegistrationErrorButton';
 import type {
   BackendJobStatus,
   BackendRegistrationStatus,
@@ -223,9 +224,11 @@ export default function BackendQueueModal({
               {processing.id &&
                 <div className="text-xs text-dim">Media: {processing.id}</div>}
               {processing.transcode_error && !getProcessingProgress(processing.transcode_error) &&
-                <div className="break-words text-xs text-dim">
-                  {processing.transcode_error}
-                </div>}
+                <AdminRegistrationErrorButton
+                  title={processing.title || processing.id || 'Processing error'}
+                  errorMessage={processing.transcode_error}
+                  dialogTitle="Processing error"
+                />}
               {processing.updated_at &&
                 <div className="text-xs text-dim">
                   Updated: {formatDate(processing.updated_at)}

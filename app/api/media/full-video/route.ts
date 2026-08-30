@@ -17,7 +17,7 @@ const NO_STORE_HEADERS = {
   'cache-control': 'no-store, private',
   'x-content-type-options': 'nosniff',
 };
-const SIGNED_URL_TTL_MS = 14 * 60 * 1000;
+const SIGNED_URL_TTL_MS = 5 * 60 * 60 * 1000;
 const signedDownloads = new Map<string, {
   expiresAt: number
   value: Promise<{ url: string }>

@@ -331,6 +331,8 @@ export const REGISTRATION_DISCOVERY_CRON = REGISTRATION_DISCOVERY_CRONS[0];
 const DELETION_STORAGE_TIMEOUT_MS = 15_000;
 const DELETION_MUTATION_TIMEOUT_MS = 45_000;
 const DELETION_MUTATION_CONCURRENCY = 4;
+const DELETION_INLINE_RETRY_LIMIT = 3;
+const DELETION_INLINE_RETRY_DELAY_MS = 250;
 const REGISTRATION_MAINTENANCE_TIMEOUT_MS = 10_000;
 // Source reconciliation is maintenance only. It must never consume the
 // whole scheduled invocation before the durable registration queue runs.
@@ -1970,27 +1972,56 @@ const cleanupDeletedMediaRecords = async (
   const tables = await sql`
     SELECT
       to_regclass('public.album_media')::text AS album_media,
-      to_regclass('public.auth_user_favorites')::text AS favorites
+      to_regclass('public.auth_user_favorites')::text AS favorites,
+      to_regclass('public.backend_activity_log')::text AS activity_log
   ` as unknown as Array<{
     album_media?: string | null
     favorites?: string | null
+    activity_log?: string | null
   }>;
+  // Re-read registration aliases at deletion time as well as enqueue time.
+  // This covers queue rows created before a registration finished writing its
+  // map and prevents orphaned failed-registration rows or hints.
+  const linkedRows = await sql`
+    SELECT url, source_url
+    FROM worker_registration_status
+    WHERE media_id=${mediaId}
+  ` as unknown as Array<{
+    url?: string | null
+    source_url?: string | null
+  }>;
+  const mappedRows = await sql`
+    SELECT stored_url, source_url
+    FROM registered_upload_file_map
+    WHERE media_id=${mediaId}
+  ` as unknown as Array<{
+    stored_url?: string | null
+    source_url?: string | null
+  }>;
+  const allUrls = Array.from(new Set([
+    ...urls,
+    ...linkedRows.flatMap(row => [row.url, row.source_url]),
+    ...mappedRows.flatMap(row => [row.stored_url, row.source_url]),
+  ].filter((value): value is string => Boolean(value))));
   if (tables[0]?.favorites) {
     await sql`DELETE FROM auth_user_favorites WHERE media_id=${mediaId}`;
   }
   if (tables[0]?.album_media) {
     await sql`DELETE FROM album_media WHERE media_id=${mediaId}`;
   }
-  if (urls.length > 0) {
+  if (tables[0]?.activity_log) {
+    await sql`DELETE FROM backend_activity_log WHERE media_id=${mediaId}`;
+  }
+  if (allUrls.length > 0) {
     await sql`
       DELETE FROM worker_registration_status
       WHERE media_id=${mediaId}
-        OR url = ANY(${urls})
-        OR source_url = ANY(${urls})
+        OR url = ANY(${allUrls})
+        OR source_url = ANY(${allUrls})
     `;
     await sql`
       DELETE FROM upload_registration_hints
-      WHERE url = ANY(${urls})
+      WHERE url = ANY(${allUrls})
     `;
   } else {
     await sql`DELETE FROM worker_registration_status WHERE media_id=${mediaId}`;
@@ -2171,12 +2202,26 @@ const getQueuedDeletionPrefixes = async (env: Env) => {
 
 const drainMediaDeletionQueue = async (env: Env) => {
   let processed = 0;
+  const retryCounts = new Map<string, number>();
   for (let index = 0; index < 50; index += 1) {
     const deletion = await claimMediaDeletion(env);
     if (!deletion) { break; }
     const completed = await processMediaDeletion(env, deletion);
     processed += 1;
-    if (!completed) { break; }
+    if (completed) {
+      retryCounts.delete(deletion.media_id);
+      continue;
+    }
+
+    // A transient Drive/R2 or database failure used to leave the row in
+    // `failed` and stop the drain. That made the user click delete again just
+    // to requeue the same file. Retry the same durable queue item a few times
+    // in this invocation, then leave it failed for an explicit retry when the
+    // dependency is genuinely unavailable.
+    const retries = (retryCounts.get(deletion.media_id) || 0) + 1;
+    retryCounts.set(deletion.media_id, retries);
+    if (retries >= DELETION_INLINE_RETRY_LIMIT) { break; }
+    await sleep(DELETION_INLINE_RETRY_DELAY_MS * retries);
   }
   return processed;
 };
@@ -6448,7 +6493,19 @@ const commitCanonicalVideo = async (
   if (!sourceKey || key !== expectedKey) {
     return json(400, { error: 'Canonical MP4 key does not match the media source' });
   }
-  const storedSize = await storageObjectSize(env, key);
+  // Drive can acknowledge the multipart upload before its object metadata
+  // endpoint exposes the new canonical file. Give that exact destination a
+  // bounded visibility window before deciding that conversion failed.
+  const storedSize = await waitForVerifiedStorageCopy({
+    sourceSize: expectedSize,
+    readDestinationSize: () => storageObjectSize(env, key),
+    attempts: isDriveStorageEnabled(env)
+      ? DRIVE_RETRY_TARGET_VISIBILITY_ATTEMPTS
+      : 1,
+    delayMs: isDriveStorageEnabled(env)
+      ? DRIVE_COPY_VISIBILITY_DELAY_MS
+      : 0,
+  });
   if (!isVerifiedStorageCopy(expectedSize, storedSize)) {
     return json(409, { error: 'Canonical MP4 is not fully readable in storage' });
   }
@@ -6681,7 +6738,7 @@ const failVideoJob = async (
 };
 
 export const shouldRetryInterruptedJob = (errorMessage: string) =>
-    /source download stalled|fetch failed|processor interrupted|(?:drive|storage) (?:put|upload|finalize) failed \(5\d{2}\)|connection terminated|connection reset|econnreset|timed? out|timeout/i
+    /source download stalled|fetch failed|processor interrupted|canonical mp4 commit failed:.*(?:drive|storage|worker|database|connection|timeout|5\d{2})|(?:drive|storage) (?:put|upload|finalize) failed \(5\d{2}\)|connection terminated|connection reset|econnreset|timed? out|timeout/i
       .test(errorMessage);
 
 const heartbeatProcessor = async (
@@ -7032,6 +7089,32 @@ const scheduleScan = (env: Env, ctx: ExecutionContext) => {
     ctx.waitUntil(scan.promise);
   }
   return scan.started;
+};
+
+const retryFailedVideoJobs = async (env: Env) => {
+  const sql = sqlForEnv(env);
+  const rows = await sql`
+    UPDATE media
+    SET
+      transcode_status='pending',
+      transcode_error='Manually requeued for processing',
+      updated_at=now()
+    WHERE transcode_status='failed'
+      AND media_type='video'
+    RETURNING id
+  ` as unknown as Array<{ id: string }>;
+  return rows.length;
+};
+
+const retryFailedRegistrationJobs = async (env: Env) => {
+  const sql = sqlForEnv(env);
+  const rows = await sql`
+    UPDATE worker_registration_status
+    SET status='detected', error_message=NULL, updated_at=now()
+    WHERE status='error'
+    RETURNING url
+  ` as unknown as Array<{ url: string }>;
+  return rows.length;
 };
 
 const runScheduledRegistrationWork = async (
@@ -7455,10 +7538,20 @@ export default {
       if (!isAuthorized(request, env.BACKEND_PROCESSOR_SHARED_SECRET)) {
         return json(401, { error: 'Unauthorized' });
       }
-      return commitCanonicalVideo(
-        env,
-        await request.json().catch(() => ({})) as Record<string, unknown>,
-      );
+      try {
+        return await commitCanonicalVideo(
+          env,
+          await request.json().catch(() => ({})) as Record<string, unknown>,
+        );
+      } catch (error: any) {
+        // Keep a Drive/DB exception inside the processor contract. A thrown
+        // exception becomes Cloudflare 1101 HTML, which hides the real phase
+        // and makes the processor mark a transient canonicalization failure
+        // as permanent.
+        return json(502, {
+          error: `Canonical MP4 commit failed: ${error?.message || 'Worker commit exception'}`,
+        });
+      }
     }
 
     if (url.pathname === '/jobs/fail' && request.method === 'POST') {
@@ -7473,6 +7566,30 @@ export default {
         return await failVideoJob(env, body);
       } catch (error: any) {
         return json(500, { error: error?.message || 'Fail failed' });
+      }
+    }
+
+    if (url.pathname === '/registration/retry-all' && request.method === 'POST') {
+      if (!isAuthorized(request, env.BACKEND_ORCHESTRATOR_SHARED_SECRET)) {
+        return json(401, { error: 'Unauthorized' });
+      }
+      try {
+        const requeued = await retryFailedRegistrationJobs(runtimeEnv);
+        return json(202, { requeued, triggered: false });
+      } catch (error: any) {
+        return json(500, { error: error?.message || 'Unable to retry failed registrations' });
+      }
+    }
+
+    if (url.pathname === '/processing/retry-failed' && request.method === 'POST') {
+      if (!isAuthorized(request, env.BACKEND_ORCHESTRATOR_SHARED_SECRET)) {
+        return json(401, { error: 'Unauthorized' });
+      }
+      try {
+        const requeued = await retryFailedVideoJobs(env);
+        return json(202, { requeued, triggered: false });
+      } catch (error: any) {
+        return json(500, { error: error?.message || 'Unable to retry failed processing jobs' });
       }
     }
 

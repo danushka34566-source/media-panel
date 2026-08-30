@@ -19,14 +19,15 @@ import ScoreCardRow from '@/components/ScoreCardRow';
 import BackendLogsModal from './BackendLogsModal';
 import BackendQueueModal from './BackendQueueModal';
 import AdminRegistrationRetryButton from '../AdminRegistrationRetryButton';
+import AdminRegistrationErrorButton from '../AdminRegistrationErrorButton';
+import { toastSuccess, toastWarning } from '@/toast';
+import LoaderButton from '@/components/primitives/LoaderButton';
 import {
   INITIAL_BACKEND_STATUS_STATE,
   getBackendStatusSnapshot,
   isBackendStatusTransient,
-  readCachedBackendStatusState,
   recordBackendStatusProbe,
   type BackendStatus,
-  writeCachedBackendStatusState,
 } from './status-state';
 
 const formatDate = (value?: string) => {
@@ -50,28 +51,31 @@ const metric = (label: string, value: number, tone?: string) =>
     <div className="text-xs uppercase tracking-wide text-dim">{label}</div>
   </div>;
 
-export default function BackendStats() {
+export default function BackendStats({
+  initialStatus,
+}: {
+  initialStatus?: BackendStatus
+}) {
   const [statusState, setStatusState] = useState(
-    INITIAL_BACKEND_STATUS_STATE,
+    initialStatus
+      ? { ...INITIAL_BACKEND_STATUS_STATE, latest: initialStatus }
+      : INITIAL_BACKEND_STATUS_STATE,
   );
   const [isLogsOpen, setIsLogsOpen] = useState(false);
   const [isRecoveryRunning, setIsRecoveryRunning] = useState(false);
   const [recoveryMessage, setRecoveryMessage] = useState<string>();
+  const [retryingFailedType, setRetryingFailedType] = useState<'processing' | 'registration'>();
   const [queueModal, setQueueModal] = useState<
     'registration' | 'processing' | undefined
   >();
 
   useEffect(() => {
-    const cached = readCachedBackendStatusState();
-    if (cached.lastConnected) {
-      setStatusState(cached);
-    }
     let active = true;
     let timer: number | undefined;
     let controller: AbortController | undefined;
     let inFlight = false;
 
-    const schedule = (delay = 5_000) => {
+    const schedule = (delay = 2_000) => {
       if (!active) { return; }
       timer = window.setTimeout(() => void refresh(), delay);
     };
@@ -115,7 +119,7 @@ export default function BackendStats() {
       }
       if (active) {
         setStatusState(state => recordBackendStatusProbe(state, probe));
-        schedule();
+        schedule(2_000);
       }
     };
 
@@ -145,16 +149,10 @@ export default function BackendStats() {
     };
   }, []);
 
-  useEffect(() => {
-    if (statusState.lastConnected) {
-      writeCachedBackendStatusState(statusState);
-    }
-  }, [statusState]);
-
   const latest = statusState.latest;
   const snapshot = getBackendStatusSnapshot(statusState);
   const isTransient = isBackendStatusTransient(statusState);
-  const isConnected = Boolean(latest?.connected);
+  const isConnected = Boolean(latest?.connected && !latest?.storedSnapshot);
   const isConfigured = latest?.configured !== false;
   const processors = snapshot?.processors || [];
   const jobs = snapshot?.activeJobs || [];
@@ -193,7 +191,10 @@ export default function BackendStats() {
   );
 
   const connectionText = useMemo(() => {
-    if (!latest) { return 'Connecting…'; }
+    if (!latest) { return 'Checking…'; }
+    if (latest.storedSnapshot) {
+      return `Last synced ${formatDate(latest.syncedAt || latest.checkedAt)}`;
+    }
     if (!isConfigured) { return 'Not configured'; }
     if (isConnected) { return 'Connected'; }
     if (isTransient) {
@@ -227,7 +228,7 @@ export default function BackendStats() {
       ? 'Processor-only mode · waiting for processor'
       : latest?.registrationOwner === 'worker'
         ? 'Worker fallback'
-        : 'Checking registration owner…';
+        : 'Checking…';
 
   const runRecoveryScan = async () => {
     if (isRecoveryRunning) { return; }
@@ -249,6 +250,26 @@ export default function BackendStats() {
         : 'Unable to start registration recovery');
     } finally {
       setIsRecoveryRunning(false);
+    }
+  };
+
+  const retryAllFailed = async (type: 'processing' | 'registration') => {
+    if (retryingFailedType) return;
+    setRetryingFailedType(type);
+    try {
+      const response = await fetch('/api/processing/retry-failed', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ type }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || data.error) throw new Error(data.error || 'Retry failed');
+      toastSuccess(`Requeued ${data.requeued || 0} failed ${type} job${data.requeued === 1 ? '' : 's'}`);
+      window.setTimeout(() => window.location.reload(), 250);
+    } catch (error) {
+      toastWarning(error instanceof Error ? error.message : 'Unable to retry failed jobs');
+    } finally {
+      setRetryingFailedType(undefined);
     }
   };
 
@@ -319,10 +340,16 @@ export default function BackendStats() {
           <div className="text-xs font-medium uppercase tracking-wide text-dim">
             Media processing
           </div>
-          <div className="flex flex-wrap gap-6">
+          <div className="flex flex-wrap items-end gap-6">
             {metric('Pending', snapshot?.pending || 0)}
             {metric('Processing', snapshot?.processing || 0)}
             {metric('Failed', snapshot?.failed || 0, 'text-red-600')}
+            {snapshot?.failed ? <LoaderButton
+              className="button px-2 py-1 text-xs"
+              hideText="never"
+              isLoading={retryingFailedType === 'processing'}
+              onClick={() => void retryAllFailed('processing')}
+            >Retry all</LoaderButton> : null}
           </div>
         </div>}
       />
@@ -332,7 +359,7 @@ export default function BackendStats() {
           <div className="text-xs font-medium uppercase tracking-wide text-dim">
             Registration intake
           </div>
-          <div className="flex flex-wrap gap-6">
+          <div className="flex flex-wrap items-end gap-6">
             {metric('Detected', registrationQueue.detected || 0)}
             {metric(
               'Registering',
@@ -344,6 +371,12 @@ export default function BackendStats() {
               registrationQueue.error || 0,
               'text-red-600',
             )}
+            {registrationQueue.error ? <button
+              type="button"
+              className="button px-2 py-1 text-xs"
+              disabled={Boolean(retryingFailedType)}
+              onClick={() => void retryAllFailed('registration')}
+            >{retryingFailedType === 'registration' ? 'Retrying…' : 'Retry all'}</button> : null}
           </div>
         </div>}
       />
@@ -509,11 +542,13 @@ export default function BackendStats() {
                 </div>
               </div>;
             })()}
-            {job.transcode_error &&
-              !getProcessingProgress(job.transcode_error) &&
-              <div className="break-words text-xs text-dim">
-                {job.transcode_error}
-              </div>}
+              {job.transcode_error &&
+                !getProcessingProgress(job.transcode_error) &&
+                <AdminRegistrationErrorButton
+                  title={job.title || job.id || 'Processing error'}
+                  errorMessage={job.transcode_error}
+                  dialogTitle="Processing error"
+                />}
             <div className="text-xs text-dim">
               Updated: {formatDate(job.updated_at)}
             </div>

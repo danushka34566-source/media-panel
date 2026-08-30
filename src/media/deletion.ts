@@ -36,21 +36,38 @@ export const ensureMediaDeletionQueueTable = () => {
 const getRegisteredUrls = async (mediaId: string) => {
   const { rows: tableRows } = await query<{
     file_map: string | null
+    registration_status: string | null
   }>(`
     SELECT
-      to_regclass('public.registered_upload_file_map')::text AS file_map
+      to_regclass('public.registered_upload_file_map')::text AS file_map,
+      to_regclass('public.worker_registration_status')::text AS registration_status
   `);
-  if (!tableRows[0]?.file_map) { return []; }
-  const { rows } = await query<{
-    stored_url: string | null
-    source_url: string | null
-  }>(`
-    SELECT stored_url, source_url
-    FROM registered_upload_file_map
-    WHERE media_id=$1
-  `, [mediaId]);
-  return rows.flatMap(row => [row.stored_url, row.source_url])
-    .filter((value): value is string => Boolean(value));
+  const urls: string[] = [];
+  if (tableRows[0]?.file_map) {
+    const { rows } = await query<{
+      stored_url: string | null
+      source_url: string | null
+    }>(`
+      SELECT stored_url, source_url
+      FROM registered_upload_file_map
+      WHERE media_id=$1
+    `, [mediaId]);
+    urls.push(...rows.flatMap(row => [row.stored_url, row.source_url])
+      .filter((value): value is string => Boolean(value)));
+  }
+  if (tableRows[0]?.registration_status) {
+    const { rows } = await query<{
+      url: string | null
+      source_url: string | null
+    }>(`
+      SELECT url, source_url
+      FROM worker_registration_status
+      WHERE media_id=$1
+    `, [mediaId]);
+    urls.push(...rows.flatMap(row => [row.url, row.source_url])
+      .filter((value): value is string => Boolean(value)));
+  }
+  return urls;
 };
 
 export const enqueueMediaDeletion = async ({

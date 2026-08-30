@@ -1,8 +1,10 @@
 import AdminInfoPage from '@/admin/AdminInfoPage';
 import BackendStats from '@/admin/stats/BackendStats';
+import { getLatestBackendStatusSnapshot } from '@/admin/stats/backend-status-store';
 
-export default function AdminStatsPage() {
+export default async function AdminStatsPage() {
+  const initialStatus = await getLatestBackendStatusSnapshot();
   return <AdminInfoPage>
-    <BackendStats />
+    <BackendStats initialStatus={initialStatus} />
   </AdminInfoPage>;
 }

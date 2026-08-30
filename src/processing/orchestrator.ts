@@ -166,6 +166,36 @@ export const retryWorkerRegistration = async ({
   };
 };
 
+export const retryAllFailedProcessing = async () => {
+  const connection = await getProcessingConnectionSettingsSafe();
+  if (!connection.orchestratorBaseUrl || !connection.orchestratorSharedSecret) {
+    return { triggered: false, requeued: 0 };
+  }
+  const baseUrl = connection.orchestratorBaseUrl.replace(/\/+$/, '');
+  const response = await fetch(`${baseUrl}/processing/retry-failed`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${connection.orchestratorSharedSecret}` },
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data.error || 'Unable to retry failed processing jobs');
+  return { ...data, triggered: true };
+};
+
+export const retryAllFailedRegistrations = async () => {
+  const connection = await getProcessingConnectionSettingsSafe();
+  if (!connection.orchestratorBaseUrl || !connection.orchestratorSharedSecret) {
+    return { triggered: false, requeued: 0 };
+  }
+  const baseUrl = connection.orchestratorBaseUrl.replace(/\/+$/, '');
+  const response = await fetch(`${baseUrl}/registration/retry-all`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${connection.orchestratorSharedSecret}` },
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data.error || 'Unable to retry failed registrations');
+  return { ...data, triggered: true };
+};
+
 export const triggerProcessingOrchestrator = async () => {
   const result = await runProcessingOrchestrator();
   return result.triggered;

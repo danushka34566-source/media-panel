@@ -648,7 +648,23 @@ test('processor termination returns the claimed job to the retry queue', () => {
     shouldRetryInterruptedJob('Drive put failed (403): permission denied'),
     false,
   );
+  assert.equal(
+    shouldRetryInterruptedJob('Canonical MP4 commit failed: Drive source metadata unavailable (500)'),
+    true,
+  );
   assert.equal(shouldRetryInterruptedJob('Unsupported video codec'), false);
+});
+
+test('canonical conversion waits for the generated MP4 and keeps source cleanup after commit', () => {
+  const start = workerSource.indexOf('const commitCanonicalVideo');
+  const end = workerSource.indexOf('const completeVideoJob', start);
+  const source = workerSource.slice(start, end);
+  assert.match(source, /waitForVerifiedStorageCopy/);
+  assert.match(source, /await sql\.transaction/);
+  assert.match(source, /await deleteObject\(env, sourceKey\)/);
+  const routeStart = workerSource.indexOf("url.pathname === '/jobs/canonical/commit'");
+  const routeEnd = workerSource.indexOf("url.pathname === '/jobs/fail'", routeStart);
+  assert.match(workerSource.slice(routeStart, routeEnd), /Canonical MP4 commit failed:/);
 });
 
 test('scheduled maintenance requeues transient processing failures', () => {

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { isSessionAuthorized } from '@/auth/api';
 import { getProcessingConnectionSettingsSafe } from '@/processing/connection-settings';
+import { saveLatestBackendStatusSnapshot } from '@/admin/stats/backend-status-store';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 30;
@@ -58,6 +59,9 @@ export async function GET(request: NextRequest) {
       },
     );
     const data = await response.json().catch(() => ({}));
+    if (response.ok) {
+      await saveLatestBackendStatusSnapshot(data);
+    }
     return NextResponse.json(
       response.ok
         ? {
