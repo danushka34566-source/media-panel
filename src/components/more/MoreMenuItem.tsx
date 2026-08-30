@@ -7,10 +7,10 @@ import {
   ReactNode,
   useState,
 } from 'react';
-import LoaderButton from '../primitives/LoaderButton';
 import { downloadFileFromBrowser } from '@/utility/url';
 import KeyCommand from '../primitives/KeyCommand';
 import LoaderLink from '../LoaderLink';
+import Spinner from '../Spinner';
 
 export default function MoreMenuItem({
   label,
@@ -135,16 +135,22 @@ export default function MoreMenuItem({
         >
           {buttonContent}
         </LoaderLink>
-        : <LoaderButton
-          icon={icon}
-          isLoading={isLoading}
-          hideText="never"
-          styleAs="link-without-hover"
-          className="translate-y-[0.5px] text-sm grow"
-          classNameIcon="translate-y-[-0.5px]!"
+        : <span
+          className={clsx(
+            'inline-flex items-center gap-1.5 grow',
+            'translate-y-[0.5px] text-sm text-main',
+            'pointer-events-none',
+          )}
         >
+          {(icon || isLoading) &&
+            <span className={clsx(
+              'inline-flex justify-center min-w-[1.25rem] max-h-5',
+              'translate-y-[-0.5px]',
+            )}>
+              {isLoading ? <Spinner size={14} /> : icon}
+            </span>}
           {buttonContent}
-        </LoaderButton>}
+        </span>}
       {keyCommand &&
         <KeyCommand
           modifier={keyCommandModifier}

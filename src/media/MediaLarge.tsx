@@ -99,6 +99,7 @@ import {
   type DetailMainVideoPlayback,
 } from './detail-video-playback';
 import PersonalFavoriteButton from './PersonalFavoriteButton';
+import PersonalFavoriteBadge from './PersonalFavoriteBadge';
 import {
   useAdaptiveFullVideoPlayback,
   type FullVideoTelemetry,
@@ -1833,9 +1834,10 @@ export default function MediaLarge({
                           toggleRecipeOverlay={toggleRecipeOverlay}
                           isShowingRecipeOverlay={isShowingRecipeOverlay}
                         />}
-                      {showTagsContent &&
+                      {(showTagsContent || isUserSignedIn) &&
                         <MediaTags
                           tags={tags}
+                          prefix={<PersonalFavoriteBadge mediaId={photo.id} />}
                           contrast="medium"
                           prefetch={prefetchRelatedLinks}
                         />}
@@ -1847,9 +1849,9 @@ export default function MediaLarge({
                   'space-y-baseline',
                   !hasTitleContent && 'md:pr-7',
                 )}>
-                  <div className="float-end flex items-center gap-1 md:hidden">
-                    {renderMetadataFavorite}
+                  <div className="float-end flex flex-col items-center gap-1 md:hidden">
                     {renderAdminMenu}
+                    {renderMetadataFavorite}
                   </div>
                   {showVideoMeta &&
                   <ul className="text-medium space-y-1">

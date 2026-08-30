@@ -3,7 +3,7 @@ import { MediaSetCategories } from '@/category';
 import MaskedScroll from '@/components/MaskedScroll';
 import MediaAlbum from '@/album/MediaAlbum';
 import MediaTag from '@/tag/MediaTag';
-import MediaFavs from '@/tag/MediaFavs';
+import PersonalFavoritesLink from './PersonalFavoritesLink';
 import clsx from 'clsx/lite';
 import { CATEGORY_VISIBILITY } from '@/app/config';
 import MediaRecents from '@/recents/MediaRecents';
@@ -36,7 +36,6 @@ export default function TopMediaEntities({
   const { utility } = useAppText();
 
   const {
-    hasFavs,
     hasRecents,
     albums,
     tags,
@@ -58,11 +57,7 @@ export default function TopMediaEntities({
       )}
       fadeSize={50}
     >
-      {hasFavs &&
-        <MediaFavs
-          {...ENTITY_LINK_PROPS}
-          badgeIconFirst
-        />}
+      <PersonalFavoritesLink {...ENTITY_LINK_PROPS} />
       {hasRecents &&
         <MediaRecents
           key="recents"

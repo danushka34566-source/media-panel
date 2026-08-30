@@ -18,19 +18,32 @@ const updateFavoriteIds = (
   ? Array.from(new Set([mediaId, ...(ids ?? [])]))
   : (ids ?? []).filter(id => id !== mediaId);
 
-export default function usePersonalFavorite(mediaId?: string) {
+export const usePersonalFavoriteIds = () => {
   const { isUserSignedIn, userEmail } = useAppState();
-  const [isMutating, setIsMutating] = useState(false);
-  const [optimisticState, setOptimisticState] = useState<{
-    mediaId: string
-    value: boolean
-  }>();
-  const { data, isLoading, mutate } = useSWR(
+  const favoriteIds = useSWR(
     isUserSignedIn
       ? [PERSONAL_FAVORITES_KEY, userEmail]
       : null,
     () => getPersonalFavoriteIdsAction(),
   );
+  return {
+    ...favoriteIds,
+    isUserSignedIn: Boolean(isUserSignedIn),
+  };
+};
+
+export default function usePersonalFavorite(mediaId?: string) {
+  const [isMutating, setIsMutating] = useState(false);
+  const [optimisticState, setOptimisticState] = useState<{
+    mediaId: string
+    value: boolean
+  }>();
+  const {
+    data,
+    isLoading,
+    isUserSignedIn,
+    mutate,
+  } = usePersonalFavoriteIds();
   const favoriteFromCache = Boolean(mediaId && data?.includes(mediaId));
   const isFavorite = optimisticState && optimisticState.mediaId === mediaId
     ? optimisticState.value
@@ -82,7 +95,7 @@ export default function usePersonalFavorite(mediaId?: string) {
     isFavorite,
     isLoading: Boolean(isLoading || isMutating),
     isReady: data !== undefined,
-    isUserSignedIn: Boolean(isUserSignedIn),
+    isUserSignedIn,
     toggle,
   };
 }

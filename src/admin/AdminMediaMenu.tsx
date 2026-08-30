@@ -10,7 +10,6 @@ import {
 import {
   deleteMediaAction,
   syncMediaAction,
-  toggleFavoriteMediaAction,
   togglePrivateMediaAction,
 } from '@/media/actions';
 import {
@@ -18,7 +17,7 @@ import {
   deleteConfirmationTextForMedia,
   downloadFileNameForMedia,
 } from '@/media';
-import { isPathFavs, isMediaFav, TAG_PRIVATE } from '@/tag';
+import { TAG_PRIVATE } from '@/tag';
 import { usePathname, useRouter } from 'next/navigation';
 import MoreMenu, { MoreMenuSection } from '@/components/more/MoreMenu';
 import { useAppState } from '@/app/AppState';
@@ -39,6 +38,7 @@ import AdminMediaQuickEditModal from './AdminMediaQuickEditModal';
 import useKeydownHandler from '@/utility/useKeydownHandler';
 import { monitorMediaDeletion } from './deletion-progress';
 import { toastSuccess, toastWarning } from '@/toast';
+import usePersonalFavorite from '@/auth/usePersonalFavorite';
 
 export default function AdminMediaMenu({
   photo,
@@ -74,8 +74,11 @@ export default function AdminMediaMenu({
   const router = useRouter();
   const pathComponents = getPathComponents(path);
   const isOnMediaDetail = pathComponents.photoId === photo.id;
-  const isFav = isMediaFav(photo);
-  const shouldRedirectFav = isPathFavs(path) && isFav;
+  const {
+    isFavorite,
+    isLoading: isFavoriteLoading,
+    toggle: toggleFavorite,
+  } = usePersonalFavorite(photo.id);
   const shouldRedirectDelete = isOnMediaDetail;
   const redirectPathOnPrivateToggle = isOnMediaDetail
     ? photo.hidden
@@ -103,18 +106,18 @@ export default function AdminMediaMenu({
     }];
     if (includeFavorite) {
       items.push({
-        label: isFav ? appText.admin.unfavorite : appText.admin.favorite,
+        label: isFavorite ? appText.admin.unfavorite : appText.admin.favorite,
         icon: <IconFavs
           size={14}
           className="translate-x-[-1px] translate-y-[0.5px]"
-          highlight={isFav}
+          highlight={isFavorite}
         />,
-        action: () => toggleFavoriteMediaAction(
-          photo.id,
-          shouldRedirectFav,
-        ).then(() => revalidateMedia?.(photo.id)),
+        action: async () => {
+          if (isFavoriteLoading) { return false; }
+          await toggleFavorite();
+        },
         ...showKeyCommands && {
-          keyCommand: isFav
+          keyCommand: isFavorite
             ? KEY_COMMANDS.unfavorite
             : KEY_COMMANDS.favorite,
         },
@@ -172,8 +175,9 @@ export default function AdminMediaMenu({
     photo,
     showKeyCommands,
     includeFavorite,
-    isFav,
-    shouldRedirectFav,
+    isFavorite,
+    isFavoriteLoading,
+    toggleFavorite,
     redirectPathOnPrivateToggle,
     path,
     revalidateMedia,
@@ -188,6 +192,10 @@ export default function AdminMediaMenu({
       />,
       className: 'text-error *:hover:text-error',
       color: 'red',
+      // Close the portalled menu before opening the confirmation modal. This
+      // prevents the released pointer/focus from activating the Edit link
+      // that occupied the same menu surface on touch devices.
+      shouldPreventDefault: false,
       action: async () => {
         const didConfirm = await confirmDialog?.({
           description: deleteConfirmationTextForMedia(photo, appText),
