@@ -25,6 +25,8 @@ const idsByElement = new WeakMap<Element, string>();
 const observers = new Map<string, IntersectionObserver>();
 const retainedEntries = new Map<string, number>();
 let retentionSequence = 0;
+let rangeUpdateFrame: number | undefined;
+const pendingRangeEntries = new Map<Entry, boolean>();
 // Keep a bounded nearby history so quick back/forward scrolling is stable
 // without retaining decoded bitmaps for an unbounded full-page feed.
 const MAX_RETAINED_IMAGES = 48;
@@ -66,6 +68,20 @@ const setEntryRange = (entry: Entry, isInRange: boolean) => {
   if (isInRange) { retainEntry(entry); }
 };
 
+const scheduleRangeUpdate = () => {
+  if (rangeUpdateFrame !== undefined) { return; }
+  rangeUpdateFrame = window.requestAnimationFrame(() => {
+    rangeUpdateFrame = undefined;
+    const changedEntries = [...pendingRangeEntries.entries()];
+    pendingRangeEntries.clear();
+    changedEntries.forEach(([entry, isInRange]) => {
+      if (entries.has(entry.id)) {
+        setEntryRange(entry, !document.hidden && isInRange);
+      }
+    });
+  });
+};
+
 const refreshRanges = () => {
   const canLoad = !document.hidden;
   entries.forEach(entry => {
@@ -88,14 +104,23 @@ const getObserver = (preloadAheadPx: number, releaseBehindPx: number) => {
     observerEntries.forEach(observerEntry => {
       const id = idsByElement.get(observerEntry.target);
       const entry = id ? entries.get(id) : undefined;
-      if (entry) { setEntryRange(entry, observerEntry.isIntersecting); }
+      if (entry) {
+        // Store the browser's latest decision on the entry, then apply all
+        // changes in one frame. This avoids one state/update burst per card
+        // when a fast fling crosses many rows at once.
+        pendingRangeEntries.set(entry, observerEntry.isIntersecting);
+      }
     });
+    scheduleRangeUpdate();
   }, { root: null, rootMargin, threshold: 0 });
   observers.set(rootMargin, observer);
   return observer;
 };
 
 const onPageHide = () => {
+  // Discard observer decisions queued before the document was suspended.
+  // Applying them after this point would immediately re-promote hidden cards.
+  pendingRangeEntries.clear();
   // Keep the bounded nearby history across a mobile lock. Clearing it here
   // demotes already-loaded posters to native lazy loading while the browser
   // is suspended, which can leave visible cards blank after unlock. The
@@ -123,6 +148,14 @@ const attachPageListeners = () => {
 const detachPageListeners = () => {
   if (!arePageListenersAttached || entries.size > 0) { return; }
   arePageListenersAttached = false;
+  if (rangeUpdateFrame !== undefined) {
+    window.cancelAnimationFrame(rangeUpdateFrame);
+    rangeUpdateFrame = undefined;
+  }
+  pendingRangeEntries.clear();
+  observers.forEach(observer => observer.disconnect());
+  observers.clear();
+  retainedEntries.clear();
   window.removeEventListener('pagehide', onPageHide);
   window.removeEventListener('pageshow', onPageShow);
   document.removeEventListener('visibilitychange', onVisibilityChange);

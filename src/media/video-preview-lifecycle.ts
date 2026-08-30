@@ -449,6 +449,13 @@ const detachGlobalListeners = () => {
     window.cancelAnimationFrame(activePreviewUpdateFrame);
     activePreviewUpdateFrame = undefined;
   }
+  // Release observer registrations when a route removes the last preview.
+  // Keeping empty observers alive is small by itself, but over repeated
+  // route changes it leaves browser-side lifecycle bookkeeping behind.
+  observer?.disconnect();
+  preloadObserver?.disconnect();
+  observer = undefined;
+  preloadObserver = undefined;
   window.removeEventListener('resize', scheduleViewportRefresh);
   document.removeEventListener(
     'visibilitychange',
