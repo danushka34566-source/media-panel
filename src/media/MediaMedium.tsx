@@ -88,12 +88,11 @@ export default function MediaMedium({
   const shouldRenderPreview = shouldMountPreview || isPreviewExiting;
   const { shouldLoad: shouldLoadMediaImage } = useMediaPreload({
     ref,
-    // Prepare several rows ahead so fast scrolls do not outrun image fetches.
-    // Keep several rows prepared even on large/high-density displays so a
-    // fast scroll does not reach a card before its image element is promoted
-    // out of native lazy-loading.
-    preloadAheadPx: 3200,
-    releaseBehindPx: 1200,
+    // The image element is mounted immediately; promote it out of native lazy
+    // loading shortly before the card is reached. A bounded window prevents a
+    // long grid from decoding thousands of posters at once on mobile.
+    preloadAheadPx: 1600,
+    releaseBehindPx: 800,
   });
   // Keep image/poster elements mounted from the first render. Native lazy
   // loading still bounds network work; once a card enters the preload range,

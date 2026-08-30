@@ -48,7 +48,6 @@ export default function MediaSmall({
   const isVideo = isVideoMedia(photo);
   const posterSrc = getMediaPosterUrl(photo);
   const previewSrc = getMediaPreviewUrl(photo);
-  const [videoReadyMediaId, setVideoReadyMediaId] = useState<string>();
   const [videoFailedMediaId, setVideoFailedMediaId] = useState<string>();
   const [posterFailedMediaId, setPosterFailedMediaId] = useState<string>();
   const aspectRatio = thumbnailAspectRatio ?? getMediaAspectRatio(photo);
@@ -75,10 +74,8 @@ export default function MediaSmall({
     onFatalError: () => setVideoFailedMediaId(photo.id),
   });
   const { shouldLoad: shouldLoadMediaImage } = useMediaPreload({ ref });
-  const isVideoReady = videoReadyMediaId === photo.id;
   const hasPosterFailed = posterFailedMediaId === photo.id;
-  const shouldShowPoster = shouldLoadMediaImage &&
-    (!isPreviewActive || !isVideoReady);
+  const eagerMediaImage = shouldLoadMediaImage ? 'eager' : 'lazy';
 
   return (
     <Link
@@ -105,15 +102,21 @@ export default function MediaSmall({
             width: IMAGE_WIDTH_SMALL,
           }}
         >
-          {posterSrc && !hasPosterFailed && shouldShowPoster
-            ? <img
+          {posterSrc && !hasPosterFailed
+            ? <ImageWithFallback
               src={posterSrc}
+              width={IMAGE_WIDTH_SMALL}
+              height={Math.round(IMAGE_WIDTH_SMALL / aspectRatio)}
               alt={altTextForMedia(photo)}
-              className="w-full h-full object-cover"
-              loading="lazy"
+              fallbackToUnoptimized
+              className="absolute inset-0 w-full h-full"
+              classNameImage="w-full h-full object-cover"
+              loading={eagerMediaImage}
+              fetchPriority="low"
               onError={() => setPosterFailedMediaId(photo.id)}
+              showLoadingIndicator
             />
-            : shouldShowPoster && <div className="absolute inset-0 bg-black" />}
+            : <div className="absolute inset-0 bg-black" />}
           {shouldRenderPreview && previewSrc && !hasVideoFailed &&
             <video
               ref={videoRef}
@@ -130,7 +133,6 @@ export default function MediaSmall({
               disableRemotePlayback
               preload="auto"
               onLoadedData={() => {
-                setVideoReadyMediaId(photo.id);
                 videoRecovery.onLoadedData();
               }}
               onCanPlay={() => videoRecovery.onCanPlay()}
@@ -154,7 +156,7 @@ export default function MediaSmall({
               width: IMAGE_WIDTH_SMALL,
             }}
           >
-            {shouldLoadMediaImage && <ImageWithFallback
+            <ImageWithFallback
               src={photo.url}
               width={IMAGE_WIDTH_SMALL}
               height={Math.round(IMAGE_WIDTH_SMALL / aspectRatio)}
@@ -165,26 +167,22 @@ export default function MediaSmall({
               className="w-full h-full"
               classNameImage="object-cover w-full h-full"
               alt={altTextForMedia(photo)}
-              loading="eager"
+              loading={eagerMediaImage}
               fetchPriority="low"
               showLoadingIndicator
-            />}
+            />
           </div>
-          : shouldLoadMediaImage
-            ? <ImageSmall
+          : <ImageSmall
             src={photo.url}
             aspectRatio={photo.aspectRatio}
             blurDataURL={photo.blurData}
             blurCompatibilityMode={doesMediaNeedBlurCompatibility(photo)}
             alt={altTextForMedia(photo)}
-            loading="eager"
+            loading={eagerMediaImage}
             fetchPriority="low"
             showLoadingIndicator
           />
-            : <div
-              className="w-full h-full bg-black/5"
-              style={{ aspectRatio }}
-            />}
+      }
     </Link>
   );
 };

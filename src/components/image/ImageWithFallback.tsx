@@ -16,7 +16,12 @@ import {
 import Spinner from '../Spinner';
 import { isImageLoaded } from './image-loading';
 
-const OPTIMIZED_IMAGE_FALLBACK_DELAY_MS = 250;
+// Remember optimizer failures for the lifetime of this page. A card that is
+// remounted after scrolling should go straight to storage instead of spending
+// another request on a transformation that already failed for this source.
+// This is intentionally per source: cached transformed images can still load
+// even after a different, uncached transformation has exceeded Vercel quota.
+const directFallbackSources = new Set<string>();
 
 export default function ImageWithFallback({
   ref: refProp,
@@ -46,8 +51,9 @@ export default function ImageWithFallback({
 
   const [isLoading, setIsLoading] = useState(true);
   const [didError, setDidError] = useState(false);
-  const [isDirectFallback, setIsDirectFallback] = useState(false);
-  const [hasLoadedImage, setHasLoadedImage] = useState(false);
+  const [isDirectFallback, setIsDirectFallback] = useState(() =>
+    typeof props.src === 'string' && directFallbackSources.has(props.src),
+  );
   const [fadeFallbackTransition, setFadeFallbackTransition] =
     useState(!hasLoadedWithAnimations);
   const directFallbackSrc = fallbackToUnoptimized &&
@@ -55,33 +61,10 @@ export default function ImageWithFallback({
     ? props.src
     : undefined;
 
-  useEffect(() => {
-    if (
-      !directFallbackSrc ||
-      unoptimized ||
-      hasLoadedImage ||
-      (!priority && props.loading === 'lazy')
-    ) {
-      return;
-    }
-
-    // Warm the direct storage URL in parallel. If the optimizer is over quota
-    // or slow, switching to this already-started request stays immediate.
-    const directImage = new window.Image();
-    directImage.decoding = 'async';
-    directImage.fetchPriority = priority ? 'high' : 'auto';
-    directImage.src = directFallbackSrc;
-    return () => {
-      directImage.onload = null;
-      directImage.onerror = null;
-    };
-  }, [directFallbackSrc, hasLoadedImage, priority, props.loading, unoptimized]);
-
   const onLoad = useCallback(
     (event: SyntheticEvent<HTMLImageElement, Event>) => {
       setIsLoading(false);
       setDidError(false);
-      setHasLoadedImage(true);
       onImageLoad?.(event);
     },
     [onImageLoad],
@@ -92,54 +75,37 @@ export default function ImageWithFallback({
         // A transformed image can fail because the optimizer is unavailable or
         // over quota even though the stable storage object is healthy. Retry the
         // same URL directly before showing the permanent image fallback.
+        if (directFallbackSrc) {
+          directFallbackSources.add(directFallbackSrc);
+        }
         setIsDirectFallback(true);
         setIsLoading(true);
         setDidError(false);
-        setHasLoadedImage(false);
         return;
       }
       setDidError(true);
       onImageError?.(event);
     },
-    [fallbackToUnoptimized, isDirectFallback, onImageError],
+    [
+      directFallbackSrc,
+      fallbackToUnoptimized,
+      isDirectFallback,
+      onImageError,
+    ],
   );
-
-  useEffect(() => {
-    if (
-      !fallbackToUnoptimized ||
-      unoptimized ||
-      isDirectFallback ||
-      hasLoadedImage
-    ) {
-      return;
-    }
-
-    const timeoutId = window.setTimeout(() => {
-      setIsDirectFallback(true);
-      setIsLoading(true);
-      setDidError(false);
-      setHasLoadedImage(false);
-    }, OPTIMIZED_IMAGE_FALLBACK_DELAY_MS);
-
-    return () => window.clearTimeout(timeoutId);
-  }, [fallbackToUnoptimized, hasLoadedImage, isDirectFallback, unoptimized]);
 
   useEffect(() => {
     const image = ref.current;
     const syncLoadedState = () => {
       if (isImageLoaded(image)) {
         setIsLoading(false);
-        setHasLoadedImage(true);
       }
     };
     if (isImageLoaded(image)) {
       // Eager offscreen images can finish before React attaches onLoad. Sync
       // from the DOM so their fallback cannot remain over a decoded image.
-      // eslint-disable-next-line react-hooks/set-state-in-effect
       setIsLoading(false);
-      setHasLoadedImage(true);
     } else {
-      // eslint-disable-next-line react-hooks/set-state-in-effect
       setFadeFallbackTransition(true);
     }
 
@@ -179,7 +145,6 @@ export default function ImageWithFallback({
       <Image ref={refProp ?? ref} {...{
         ...props,
         priority,
-        key: isDirectFallback ? 'direct' : 'optimized',
         unoptimized: unoptimized || isDirectFallback,
         className: classNameImage,
         onLoad,

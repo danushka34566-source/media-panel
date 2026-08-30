@@ -43,7 +43,10 @@ export default function MediaDetailRelated({
     prioritizeInitialMedia
     autoplaySmartPreviews
     suspendSmartPreviewsOnMainPlayback
-    mountPreviewsOnlyWhenVisible={false}
+    // Posters are mounted and prepared ahead of the viewport, while video
+    // decoders are reserved for cards that are actually visible. This keeps
+    // the main player responsive without delaying the related image grid.
+    mountPreviewsOnlyWhenVisible
     animateOnFirstLoadOnly
   />} />;
 }

@@ -559,6 +559,20 @@ export default function MediaLarge({
     preloadUrl: automaticPreviewSrc,
   });
   const shouldRenderPreview = shouldMountPreview || isPreviewExiting;
+  // Priority media is the detail hero (or one of the first full-list items).
+  // Include its preview in the initial HTML so the browser can request it
+  // immediately instead of waiting for the observer effect after first paint.
+  const shouldStartPriorityPreview = Boolean(
+    priority &&
+    isVideo &&
+    videoPreviewMode !== 'off' &&
+    automaticPreviewSrc &&
+    !isFullVideoPlaying,
+  );
+  const shouldRenderAutomaticPreview = shouldRenderPreview ||
+    shouldStartPriorityPreview;
+  const isAutomaticPreviewActive = isPreviewActive ||
+    shouldStartPriorityPreview;
   const isAutomaticPreviewReady =
     readyPreviewSrc === automaticPreviewSrc &&
     readyPreviewActivationId === previewActivationId;
@@ -606,7 +620,7 @@ export default function MediaLarge({
 
   const previewRecovery = useVideoPreviewRecovery({
     videoRef,
-    active: Boolean(isVideo && !isFullVideoPlaying && isPreviewActive),
+    active: Boolean(isVideo && !isFullVideoPlaying && isAutomaticPreviewActive),
     src: automaticPreviewSrc,
     onFatalError: () => {
       if (automaticPreviewSrc) {
@@ -1230,7 +1244,7 @@ export default function MediaLarge({
                       className="absolute inset-0 z-0 max-h-full w-full rounded-md bg-black"
                     />
                 )}
-                {(isFullVideoPlaying || shouldRenderPreview) &&
+                {(isFullVideoPlaying || shouldRenderAutomaticPreview) &&
                   <video
                     ref={videoRef}
                     className={clsx(
@@ -1261,7 +1275,7 @@ export default function MediaLarge({
                       ? posterSrc
                       : undefined}
                     playsInline
-                    autoPlay={!isFullVideoPlaying && isPreviewActive}
+                    autoPlay={!isFullVideoPlaying && isAutomaticPreviewActive}
                     muted={!isFullVideoPlaying}
                     loop={!isFullVideoPlaying}
                     controls={isFullVideoPlaying}
@@ -1283,7 +1297,7 @@ export default function MediaLarge({
                     }}
                     preload="auto"
                     onLoadStart={() => {
-                      if (!isFullVideoPlaying && isPreviewActive) {
+                      if (!isFullVideoPlaying && isAutomaticPreviewActive) {
                         setReadyPreviewSrc(undefined);
                         setReadyPreviewActivationId(undefined);
                       }
@@ -1296,7 +1310,7 @@ export default function MediaLarge({
                       }
                     }}
                     onCanPlay={() => {
-                      if (!isFullVideoPlaying && isPreviewActive) {
+                      if (!isFullVideoPlaying && isAutomaticPreviewActive) {
                         previewRecovery.onCanPlay();
                       }
                     }}
@@ -1308,15 +1322,11 @@ export default function MediaLarge({
                       }
                     }}
                     onWaiting={() => {
-                      if (!isFullVideoPlaying) {
-                        setReadyPreviewSrc(undefined);
-                        setReadyPreviewActivationId(undefined);
-                      }
+                      // Preserve the last decoded preview frame while the
+                      // browser buffers instead of revealing a blank poster.
                     }}
                     onStalled={() => {
                       if (!isFullVideoPlaying) {
-                        setReadyPreviewSrc(undefined);
-                        setReadyPreviewActivationId(undefined);
                         previewRecovery.onStalled();
                       }
                     }}

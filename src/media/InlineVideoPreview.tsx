@@ -41,14 +41,19 @@ export default function InlineVideoPreview({
       setIsReady(true);
       recovery.onLoadedData();
     }}
-    onCanPlay={() => recovery.onCanPlay()}
+    onCanPlay={() => {
+      setIsReady(true);
+      recovery.onCanPlay();
+    }}
     onPlaying={() => {
       setIsReady(true);
       recovery.onPlaying();
     }}
-    onWaiting={() => setIsReady(false)}
+    // Once a frame has decoded, leave it painted while the next segment
+    // buffers. Making the video transparent here exposed a blank poster and
+    // looked as if a still-playing preview had disappeared.
+    onWaiting={() => undefined}
     onStalled={() => {
-      setIsReady(false);
       recovery.onStalled();
     }}
     onError={() => {

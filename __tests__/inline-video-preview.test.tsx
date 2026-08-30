@@ -2,7 +2,7 @@ import InlineVideoPreview from '@/media/InlineVideoPreview';
 import { act, fireEvent, render } from '@testing-library/react';
 
 describe('inline video preview', () => {
-  it('stays transparent until a frame is ready and hides during buffering', () => {
+  it('stays transparent until a frame is ready and keeps it during buffering', () => {
     const playSpy = jest.spyOn(
       HTMLMediaElement.prototype,
       'play',
@@ -30,7 +30,7 @@ describe('inline video preview', () => {
     expect(poster).not.toBeNull();
 
     fireEvent.waiting(video);
-    expect(video.classList.contains('opacity-0')).toBe(true);
+    expect(video.classList.contains('opacity-100')).toBe(true);
     expect(poster).not.toBeNull();
 
     rerender(<div>
