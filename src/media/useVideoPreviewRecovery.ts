@@ -159,10 +159,11 @@ export default function useVideoPreviewRecovery({
       playWithRetry(shouldReload);
     };
     const onVisibilityChange = () => retryIfVisible();
-    const scheduleInitialPlay = () => {
-      window.setTimeout(retryIfVisible, 0);
-    };
-    scheduleInitialPlay();
+    // The video is already mounted by the time this effect runs. Start the
+    // request in this task so cached previews do not spend an extra turn in
+    // the event loop before playback begins. The normal retry path still
+    // handles browsers that reject play while resuming or waiting for data.
+    retryIfVisible();
     document.addEventListener('visibilitychange', onVisibilityChange);
     document.addEventListener('resume', retryIfVisible);
     window.addEventListener('pageshow', retryIfVisible);
