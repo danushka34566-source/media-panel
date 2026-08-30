@@ -96,14 +96,14 @@ const getObserver = (preloadAheadPx: number, releaseBehindPx: number) => {
 };
 
 const onPageHide = () => {
-  // Release retained image nodes while the page is suspended. pageshow then
-  // rehydrates only the nearby range instead of restoring every decoded
-  // bitmap at once.
+  // Keep the bounded nearby history across a mobile lock. Clearing it here
+  // demotes already-loaded posters to native lazy loading while the browser
+  // is suspended, which can leave visible cards blank after unlock. The
+  // history is still capped by MAX_RETAINED_IMAGES, so this does not retain
+  // an unbounded feed or restore thousands of decoded bitmaps.
   entries.forEach(entry => {
     setEntryRange(entry, false);
-    entry.setRetained(false);
   });
-  retainedEntries.clear();
 };
 
 const onPageShow = () => requestAnimationFrame(refreshRanges);

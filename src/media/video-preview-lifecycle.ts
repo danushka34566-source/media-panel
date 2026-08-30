@@ -22,6 +22,7 @@ type PreviewEntry = {
   isPrepared: boolean
   preloadUrl?: string
   isMounted: boolean
+  isInPreloadRange: boolean
   intersectionRatio: number
   isActive: boolean
   setMounted: (mounted: boolean) => void
@@ -167,7 +168,7 @@ const updateActivePreviews = (
       !entry.sequenceStartup &&
       Boolean(entry.preloadUrl) &&
       !isFullVideoPlaybackActive &&
-      isInPreviewPreloadRange(entry.element, geometryCache))
+      entry.isInPreloadRange)
     .sort((a, b) => {
       const aRect = getPreviewRect(a.element, geometryCache);
       const bRect = getPreviewRect(b.element, geometryCache);
@@ -271,14 +272,28 @@ const getObserver = () => {
       const id = idsByElement.get(observerEntry.target);
       const entry = id ? entries.get(id) : undefined;
       if (entry) {
-        entry.intersectionRatio = observerEntry.isIntersecting
-          ? observerEntry.intersectionRatio
-          : 0;
+        entry.isInPreloadRange = observerEntry.isIntersecting;
+        const rect = observerEntry.boundingClientRect;
+        const hasGeometry = rect.width > 0 || rect.height > 0 ||
+          rect.bottom !== 0 || rect.top !== 0;
+        const isInViewport = observerEntry.isIntersecting && (
+          !hasGeometry || (
+            rect.bottom > 0 &&
+            rect.right > 0 &&
+            rect.top < window.innerHeight &&
+            rect.left < window.innerWidth
+          )
+        );
+        entry.intersectionRatio = isInViewport ? 1 : 0;
       }
     });
     updateActivePreviews();
   }, {
     root: null,
+    // One observer supplies both near-viewport warm-up and actual viewport
+    // activation. The callback separates the two states using the reported
+    // card geometry, avoiding a full getBoundingClientRect scan on scroll.
+    rootMargin: `${PREVIEW_PRELOAD_AHEAD_PX}px 0px`,
     threshold: 0,
   });
   return observer;
@@ -325,6 +340,10 @@ const refreshViewportIntersections = () => {
   const geometryCache: PreviewGeometryCache = new Map();
   entries.forEach(entry => {
     entry.intersectionRatio = isInViewport(entry.element, geometryCache) ? 1 : 0;
+    entry.isInPreloadRange = isInPreviewPreloadRange(
+      entry.element,
+      geometryCache,
+    );
   });
   updateActivePreviews(geometryCache);
 };
@@ -408,10 +427,6 @@ const attachGlobalListeners = () => {
   window.addEventListener('resize', scheduleViewportRefresh, {
     passive: true,
   });
-  window.addEventListener('scroll', scheduleViewportRefresh, {
-    passive: true,
-    capture: true,
-  });
   document.addEventListener('visibilitychange', onVisibilityOrCapabilityChange);
   document.addEventListener('fullscreenchange', onFullscreenChange);
   document.addEventListener('freeze', onPageHide);
@@ -431,7 +446,6 @@ const detachGlobalListeners = () => {
     activePreviewUpdateFrame = undefined;
   }
   window.removeEventListener('resize', scheduleViewportRefresh);
-  window.removeEventListener('scroll', scheduleViewportRefresh, true);
   document.removeEventListener(
     'visibilitychange',
     onVisibilityOrCapabilityChange,
@@ -498,6 +512,7 @@ export default function useVideoPreviewLifecycle({
       isPrepared: false,
       preloadUrl,
       isMounted: false,
+      isInPreloadRange: false,
       intersectionRatio: 0,
       isActive: false,
       setMounted: setIsMounted,
@@ -545,6 +560,7 @@ export default function useVideoPreviewLifecycle({
     releaseStaleFullVideoPlayback();
     const geometryCache: PreviewGeometryCache = new Map();
     entry.intersectionRatio = isInViewport(element, geometryCache) ? 1 : 0;
+    entry.isInPreloadRange = isInPreviewPreloadRange(element, geometryCache);
     // Small lists benefit from immediate activation (and avoid a blank first
     // frame). Once a detail/full page has many cards, defer repeated geometry
     // scans to one frame instead of doing O(n²) work during mount.

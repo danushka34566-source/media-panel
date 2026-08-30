@@ -62,6 +62,18 @@ export default function PageResumeRecovery() {
               recoveringRef.current = false;
               return;
             }
+            const content = document.querySelector('[data-page-content]');
+            const hasRenderedContent = Boolean(
+              content && content.firstElementChild &&
+              content.getBoundingClientRect().height > 0,
+            );
+            // A healthy mounted tree does not need a document-wide display
+            // toggle. Avoid forcing every image, video, and layout subtree to
+            // recalculate after every mobile unlock.
+            if (hasRenderedContent) {
+              recoveringRef.current = false;
+              return;
+            }
             // iOS can keep a stale composited layer after a tab resumes even
             // though the React tree still contains all of its content. A
             // short display toggle forces that layer to be rebuilt without
@@ -71,11 +83,6 @@ export default function PageResumeRecovery() {
             void root.offsetHeight;
             root.style.display = '';
             window.dispatchEvent(new Event('resize'));
-            const content = document.querySelector('[data-page-content]');
-            const hasRenderedContent = Boolean(
-              content && content.firstElementChild &&
-              content.getBoundingClientRect().height > 0,
-            );
             // Do not refresh every route after a normal mobile resume. A
             // refresh recreates grid data and jumps the user to the top even
             // when the existing tree only needed a compositor repaint.

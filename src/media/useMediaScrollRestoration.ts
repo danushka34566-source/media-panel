@@ -177,6 +177,7 @@ export default function useMediaScrollRestoration(enabled = true) {
     let lastProgrammaticTarget: number | undefined;
     let mutationObserver: MutationObserver | undefined;
     let resizeObserver: ResizeObserver | undefined;
+    let wasPageHidden = false;
     const previousScrollRestoration = window.history.scrollRestoration;
     const root = document.documentElement;
     if (restoring) {
@@ -269,6 +270,7 @@ export default function useMediaScrollRestoration(enabled = true) {
       }
     };
     const onPageHide = () => {
+      wasPageHidden = true;
       // A media click records the precise anchor immediately before the
       // route starts unloading. Do not overwrite that richer record with a
       // pagehide callback that still has the previous hook snapshot.
@@ -280,11 +282,41 @@ export default function useMediaScrollRestoration(enabled = true) {
       saveCurrentScrollPosition(key, saved);
     };
 
+    const restoreAfterPageShow = () => {
+      if (!wasPageHidden || document.hidden) { return; }
+      wasPageHidden = false;
+      let latest: SavedScrollPosition | undefined;
+      try {
+        latest = parseSavedPosition(window.sessionStorage.getItem(key));
+      } catch { return; }
+      if (!latest || latest.top <= 0) { return; }
+      const anchor = findAnchor(latest.anchorId);
+      const target = anchor
+        ? Math.max(0, Math.round(getLayoutTop(anchor) -
+          (latest.anchorOffset ?? 0)))
+        : latest.top;
+      if (Math.abs(window.scrollY - target) <= 2) { return; }
+      // Mobile browsers may reset scrollY while restoring a frozen document.
+      // Reapply the already-saved position once; do not refresh or remount
+      // the route and do not alter the detail-page back-navigation flow.
+      programmaticScroll = true;
+      lastProgrammaticTarget = target;
+      window.scrollTo({ top: target, behavior: 'auto' });
+      window.setTimeout(() => { programmaticScroll = false; }, 250);
+    };
+
+    const onVisibilityChange = () => {
+      if (document.hidden) { onPageHide(); }
+      else { window.requestAnimationFrame(restoreAfterPageShow); }
+    };
+
     const timeoutTimer = restoring
       ? window.setTimeout(stopRestoring, RESTORE_TIMEOUT_MS)
       : undefined;
     window.addEventListener('scroll', onScroll, { passive: true });
     window.addEventListener('pagehide', onPageHide, { passive: true });
+    window.addEventListener('pageshow', restoreAfterPageShow);
+    document.addEventListener('visibilitychange', onVisibilityChange);
     if (restoring && typeof MutationObserver !== 'undefined') {
       mutationObserver = new MutationObserver(restore);
       mutationObserver.observe(document.body, { childList: true, subtree: true });
@@ -304,6 +336,8 @@ export default function useMediaScrollRestoration(enabled = true) {
     return () => {
       window.removeEventListener('scroll', onScroll);
       window.removeEventListener('pagehide', onPageHide);
+      window.removeEventListener('pageshow', restoreAfterPageShow);
+      document.removeEventListener('visibilitychange', onVisibilityChange);
       stopRestoring();
     };
   }, [enabled]);

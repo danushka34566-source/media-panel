@@ -609,6 +609,13 @@ export default function MediaLarge({
   // stale black video layer never hides the poster while the decoder wakes.
   useEffect(() => {
     if (!isVideo) { return; }
+    // Only active playback needs a resume repair. Registering the same
+    // recovery state/timer for every offscreen full-page media item causes a
+    // large rerender burst after a mobile lock/unlock.
+    if (!isMainVideoActuallyPlaying &&
+      (isFullVideoPlaying || !isPreviewActive)) {
+      return;
+    }
     let resetTimer: number | undefined;
     const recoverMedia = () => {
       if (document.hidden) { return; }

@@ -145,7 +145,11 @@ export default function MediaGrid({
     grid: HTMLDivElement,
     pointerType: string,
   ) => {
-    if (videoPreviewMode !== 'smart' || autoplaySmartPreviews) { return; }
+    if (
+      isSelectingMedia ||
+      videoPreviewMode !== 'smart' ||
+      autoplaySmartPreviews
+    ) { return; }
     if (supportsHover ? pointerType !== 'mouse' : pointerType !== 'touch') {
       return;
     }
@@ -196,6 +200,7 @@ export default function MediaGrid({
         // The mode switch animates only visible surfaces, outside Framer's
         // all-item projection, so long feeds remain cheap to scroll.
         onPointerDown={event => {
+          if (isSelectingMedia) { return; }
           const card = (event.target as HTMLElement | null)
             ?.closest<HTMLElement>('[data-preview-id]');
           if (card?.dataset.previewId) {
