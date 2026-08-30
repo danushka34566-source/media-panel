@@ -246,6 +246,7 @@ export default function MediaGrid({
         duration={0.7}
         staggerDelay={0.04}
         distanceOffset={40}
+        removeTransformAfterAnimation
         animateOnFirstLoadOnly={animateOnFirstLoadOnly}
         staggerOnFirstLoadOnly={staggerOnFirstLoadOnly}
         onAnimationComplete={onAnimationComplete}
@@ -258,6 +259,11 @@ export default function MediaGrid({
             className={clsx(
               'flex relative overflow-hidden',
               'group',
+              // Keep long mobile grids scrollable without painting every
+              // offscreen card subtree on each compositor frame. The aspect
+              // ratio below supplies stable geometry while skipped cards are
+              // outside the viewport.
+              '[content-visibility:auto] [contain-intrinsic-size:240px]',
             )}
             style={{
               ...(
