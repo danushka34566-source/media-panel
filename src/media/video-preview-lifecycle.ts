@@ -47,6 +47,7 @@ let isFullVideoPlaybackActive = false;
 const PREVIEW_PRELOAD_AHEAD_PX = 2400;
 const MAX_WARM_DESKTOP_PREVIEWS = 6;
 const MAX_WARM_MOBILE_PREVIEWS = 2;
+const PREVIEW_STARTUP_CONCURRENCY = 5;
 
 type PreviewGeometryCache = Map<HTMLElement, DOMRect>;
 
@@ -91,28 +92,9 @@ export const canAutoplayLargeVideoPreview = ({
   (deviceMemory === undefined || deviceMemory >= 4) &&
   (hardwareConcurrency === undefined || hardwareConcurrency >= 4);
 
-export const getPreviewStartupConcurrency = ({
-  reducedMotion,
-  saveData,
-  deviceMemory,
-  hardwareConcurrency,
-  isMobile,
-}: DeviceCapabilities) => {
-  // Safari/iOS does not expose deviceMemory consistently. Keep mobile at one
-  // startup decoder regardless of reported core count to avoid thermal and
-  // memory-pressure tab reloads.
-  if (reducedMotion || saveData || isMobile) { return 1; }
-  if (
-    deviceMemory !== undefined &&
-    deviceMemory >= 8 &&
-    (hardwareConcurrency ?? 0) >= 12
-  ) { return 3; }
-  if (
-    (deviceMemory === undefined || deviceMemory >= 4) &&
-    (hardwareConcurrency ?? 0) >= 8
-  ) { return 2; }
-  return 1;
-};
+export const getPreviewStartupConcurrency = (
+  _capabilities: DeviceCapabilities,
+) => PREVIEW_STARTUP_CONCURRENCY;
 
 export const shouldSuspendVideoPreviews = ({
   isMainVideoActuallyPlaying,
@@ -242,17 +224,12 @@ const updateActivePreviews = (
     const bRect = getPreviewRect(b.element, geometryCache);
     return aRect.top - bRect.top || aRect.left - bRect.left;
   });
-  const interactedPreparation = orderedPreparationCandidates.find(
-    entry => entry.startupPriority,
+  // The interacted card sorts first, then the remaining startup slots follow
+  // visual order. Keep one device-wide budget across infinite grid batches.
+  const nextGlobalPreparations = orderedPreparationCandidates.slice(
+    0,
+    getPreviewStartupConcurrency(capabilities),
   );
-  // Give the interacted card an uncontested first startup. Once it reports a
-  // decoded frame, fill the adaptive device budget in visual order.
-  const nextGlobalPreparations = interactedPreparation
-    ? [interactedPreparation]
-    : orderedPreparationCandidates.slice(
-      0,
-      getPreviewStartupConcurrency(capabilities),
-    );
   nextGlobalPreparations.forEach(entry => sequenceMountedEntries.add(entry));
   entries.forEach(entry => {
     const isSequenced = entry.sequenceStartup && Boolean(entry.activeGroupId);
@@ -619,9 +596,28 @@ export default function useVideoPreviewLifecycle({
     activationId: previewState.activationId,
     markPrepared: () => {
       const entry = entryRef.current;
-      if (!entry || entry.isPrepared) { return; }
+      if (!entry) { return false; }
+      if (entry.isPrepared) { return entry.isActive; }
       entry.isPrepared = true;
-      updateActivePreviews();
+      const capabilities = getCurrentDeviceCapabilities();
+      const shouldActivate = entry.enabled &&
+        entry.intersectionRatio > 0 &&
+        !document.hidden &&
+        !isFullVideoPlaybackActive &&
+        canAutoplayGeneratedVideoPreview(capabilities) &&
+        (
+          !entry.requiresCapableDevice ||
+          canAutoplayLargeVideoPreview(capabilities)
+        );
+      if (shouldActivate && !entry.isActive) {
+        entry.isActive = true;
+        entry.setActive(true);
+      }
+      // LoadedData events can arrive together. Refill all newly available
+      // decoder slots once per frame instead of rescanning the full grid for
+      // every event, while the decoded card starts immediately above.
+      scheduleActivePreviewUpdate();
+      return shouldActivate;
     },
   };
 }

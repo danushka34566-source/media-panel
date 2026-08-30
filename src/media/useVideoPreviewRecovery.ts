@@ -6,10 +6,12 @@ import { useCallback, useEffect, useRef } from 'react';
 // must not create an infinite reload loop, but a transient mobile connection,
 // decoder wake-up, or page-resume race should not require a full page refresh.
 const RETRY_DELAYS_MS = [180, 500, 1200, 2500] as const;
+const DECODE_WATCHDOG_MS = 6000;
 
 type VideoPreviewRecoveryOptions = {
   videoRef: React.RefObject<HTMLVideoElement | null>
   active: boolean
+  recoverWhileInactive?: boolean
   src?: string
   onFatalError?: () => void
 }
@@ -17,13 +19,24 @@ type VideoPreviewRecoveryOptions = {
 export default function useVideoPreviewRecovery({
   videoRef,
   active,
+  recoverWhileInactive = false,
   src,
   onFatalError,
 }: VideoPreviewRecoveryOptions) {
   const retryCountRef = useRef(0);
   const retryTimerRef = useRef<number | undefined>(undefined);
+  const decodeWatchdogRef = useRef<number | undefined>(undefined);
   const sourceRef = useRef(src);
-  const scheduleRetryRef = useRef<() => void>(() => undefined);
+  const activeRef = useRef(active);
+  const recoverWhileInactiveRef = useRef(recoverWhileInactive);
+  const onFatalErrorRef = useRef(onFatalError);
+  const scheduleRetryRef = useRef<(forceReload?: boolean) => void>(
+    () => undefined,
+  );
+  const armDecodeWatchdogRef = useRef<() => void>(() => undefined);
+  activeRef.current = active;
+  recoverWhileInactiveRef.current = recoverWhileInactive;
+  onFatalErrorRef.current = onFatalError;
 
   const clearRetryTimer = useCallback(() => {
     if (retryTimerRef.current !== undefined) {
@@ -32,59 +45,110 @@ export default function useVideoPreviewRecovery({
     }
   }, []);
 
-  const playWithRetry = useCallback((reload = false) => {
+  const clearDecodeWatchdog = useCallback(() => {
+    if (decodeWatchdogRef.current !== undefined) {
+      window.clearTimeout(decodeWatchdogRef.current);
+      decodeWatchdogRef.current = undefined;
+    }
+  }, []);
+
+  const canRecover = useCallback(() =>
+    activeRef.current || recoverWhileInactiveRef.current, []);
+
+  const playWithRetry = useCallback((
+    reload = false,
+    forcePlay = false,
+  ) => {
     const video = videoRef.current;
-    if (!video || !active || document.hidden) { return; }
+    if (!video || !canRecover() || document.hidden) { return; }
     if (reload) {
       try { video.load(); } catch { /* browser may be tearing down */ }
+      armDecodeWatchdogRef.current();
     }
+    if (!activeRef.current && !forcePlay) { return; }
     void video.play().catch(() => {
       // play() can reject while a mobile browser is resuming a suspended
       // document. The retry path below handles that without hiding the card.
       scheduleRetryRef.current();
     });
-  }, [active, videoRef]);
+  }, [canRecover, videoRef]);
 
-  const scheduleRetry = useCallback(() => {
-    if (!active || document.hidden || retryTimerRef.current !== undefined) {
+  const scheduleRetry = useCallback((forceReload = false) => {
+    if (!canRecover() || document.hidden || retryTimerRef.current !== undefined) {
       return;
     }
     const retryIndex = retryCountRef.current;
     if (retryIndex >= RETRY_DELAYS_MS.length) {
-      onFatalError?.();
+      clearDecodeWatchdog();
+      onFatalErrorRef.current?.();
       return;
     }
     retryCountRef.current += 1;
     retryTimerRef.current = window.setTimeout(() => {
       retryTimerRef.current = undefined;
       const video = videoRef.current;
-      if (!video || !active || document.hidden) { return; }
+      if (!video || !canRecover() || document.hidden) { return; }
       // A media error leaves the element in a failed state until load() is
       // called. Calling it only on recovery attempts avoids needless reloads
       // during normal buffering.
-      const shouldReload = Boolean(video.error) ||
+      const shouldReload = forceReload ||
+        !activeRef.current ||
+        Boolean(video.error) ||
         video.networkState === HTMLMediaElement.NETWORK_NO_SOURCE;
       playWithRetry(shouldReload);
     }, RETRY_DELAYS_MS[retryIndex]);
-  }, [active, onFatalError, playWithRetry, videoRef]);
+  }, [canRecover, clearDecodeWatchdog, playWithRetry, videoRef]);
 
   // Keep play's catch handler pointed at the current retry callback. This
   // small indirection avoids a circular callback dependency while preserving
   // stable event handlers for the video element.
   scheduleRetryRef.current = scheduleRetry;
 
+  const armDecodeWatchdog = useCallback(() => {
+    clearDecodeWatchdog();
+    if (!recoverWhileInactiveRef.current || document.hidden) { return; }
+    decodeWatchdogRef.current = window.setTimeout(() => {
+      decodeWatchdogRef.current = undefined;
+      const video = videoRef.current;
+      if (
+        !video ||
+        video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA
+      ) { return; }
+      scheduleRetryRef.current(true);
+    }, DECODE_WATCHDOG_MS);
+  }, [clearDecodeWatchdog, videoRef]);
+  armDecodeWatchdogRef.current = armDecodeWatchdog;
+
   useEffect(() => {
     if (sourceRef.current === src) { return; }
     sourceRef.current = src;
     retryCountRef.current = 0;
     clearRetryTimer();
-  }, [clearRetryTimer, src]);
+    armDecodeWatchdog();
+  }, [armDecodeWatchdog, clearRetryTimer, src]);
+
+  useEffect(() => {
+    if (!recoverWhileInactive || !src) {
+      clearDecodeWatchdog();
+      return;
+    }
+    armDecodeWatchdog();
+    return clearDecodeWatchdog;
+  }, [
+    armDecodeWatchdog,
+    clearDecodeWatchdog,
+    recoverWhileInactive,
+    src,
+  ]);
 
   useEffect(() => {
     if (!active) {
-      clearRetryTimer();
-      retryCountRef.current = 0;
       videoRef.current?.pause();
+      if (!recoverWhileInactive) {
+        clearRetryTimer();
+        clearDecodeWatchdog();
+        retryCountRef.current = 0;
+      }
       return;
     }
     const retryIfVisible = () => {
@@ -109,19 +173,37 @@ export default function useVideoPreviewRecovery({
       window.removeEventListener('pageshow', retryIfVisible);
       window.removeEventListener('focus', retryIfVisible);
     };
-  }, [active, clearRetryTimer, playWithRetry, videoRef]);
+  }, [
+    active,
+    clearDecodeWatchdog,
+    clearRetryTimer,
+    playWithRetry,
+    recoverWhileInactive,
+    videoRef,
+  ]);
 
-  useEffect(() => () => clearRetryTimer(), [clearRetryTimer]);
+  useEffect(() => () => {
+    clearRetryTimer();
+    clearDecodeWatchdog();
+  }, [clearDecodeWatchdog, clearRetryTimer]);
 
   return {
-    onCanPlay: () => playWithRetry(),
-    onLoadedData: () => playWithRetry(),
+    onLoadStart: () => armDecodeWatchdog(),
+    onCanPlay: () => {
+      clearDecodeWatchdog();
+      playWithRetry();
+    },
+    onLoadedData: (forcePlay = false) => {
+      clearDecodeWatchdog();
+      playWithRetry(false, forcePlay);
+    },
     onPlaying: () => {
       retryCountRef.current = 0;
       clearRetryTimer();
+      clearDecodeWatchdog();
     },
-    onStalled: () => scheduleRetry(),
-    onError: () => scheduleRetry(),
+    onStalled: () => scheduleRetry(false),
+    onError: () => scheduleRetry(true),
     retryNow: () => playWithRetry(true),
   };
 }

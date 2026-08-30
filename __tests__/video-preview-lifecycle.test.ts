@@ -370,45 +370,39 @@ describe('video preview lifecycle policy', () => {
     unmount();
   });
 
-  it('uses conservative adaptive preview startup concurrency', () => {
+  it('uses five preview startup decoders on every device class', () => {
     expect(getPreviewStartupConcurrency({
       reducedMotion: false,
       saveData: false,
       hardwareConcurrency: 16,
       isMobile: true,
-    })).toBe(1);
+    })).toBe(5);
     expect(getPreviewStartupConcurrency({
       reducedMotion: false,
       saveData: false,
       deviceMemory: 8,
       hardwareConcurrency: 8,
       isMobile: false,
-    })).toBe(2);
+    })).toBe(5);
     expect(getPreviewStartupConcurrency({
-      reducedMotion: false,
-      saveData: false,
-      deviceMemory: 8,
-      hardwareConcurrency: 16,
+      reducedMotion: true,
+      saveData: true,
+      hardwareConcurrency: 2,
       isMobile: false,
-    })).toBe(3);
+    })).toBe(5);
   });
 
-  it('decodes an activated group one at a time and keeps prepared videos playing', () => {
-    const previousWidth = window.innerWidth;
-    Object.defineProperty(window, 'innerWidth', {
-      configurable: true,
-      value: 390,
-    });
+  it('starts five decoders with interaction first and activates decoded videos immediately', () => {
     const { unmount } = render(createElement(
       'section',
       {},
-      ...Array.from({ length: 4 }, (_, index) =>
+      ...Array.from({ length: 7 }, (_, index) =>
         createElement(PreviewProbe, {
           activeGroupId: 'grid-startup',
           id: `sequence-${index}`,
           key: index,
           sequenceStartup: true,
-          startupPriority: index === 2,
+          startupPriority: index === 6,
         })),
     ));
     const cards = screen.getAllByTestId(/^sequence-\d+$/);
@@ -416,69 +410,45 @@ describe('video preview lifecycle policy', () => {
       MockIntersectionObserver.instance?.trigger(card, 0.8);
     }));
 
-    expect(screen.getByTestId('sequence-2-preview')
+    expect(screen.getAllByTestId(/^sequence-\d+-preview$/)).toHaveLength(5);
+    expect(screen.getByTestId('sequence-6-preview')
       .getAttribute('data-active')).toBe('false');
-    expect(screen.queryByTestId('sequence-0-preview')).toBeNull();
+    expect(screen.getByTestId('sequence-0-preview')).toBeTruthy();
+    expect(screen.getByTestId('sequence-3-preview')).toBeTruthy();
+    expect(screen.queryByTestId('sequence-4-preview')).toBeNull();
+    expect(screen.queryByTestId('sequence-5-preview')).toBeNull();
 
-    fireEvent.loadedData(screen.getByTestId('sequence-2-preview'));
-    expect(screen.getByTestId('sequence-2-preview')
+    fireEvent.loadedData(screen.getByTestId('sequence-6-preview'));
+    expect(screen.getByTestId('sequence-6-preview')
       .getAttribute('data-active')).toBe('true');
-    expect(screen.getByTestId('sequence-0-preview')
-      .getAttribute('data-active')).toBe('false');
-
-    fireEvent.loadedData(screen.getByTestId('sequence-0-preview'));
-    expect(screen.getByTestId('sequence-2-preview')
-      .getAttribute('data-active')).toBe('true');
-    expect(screen.getByTestId('sequence-0-preview')
-      .getAttribute('data-active')).toBe('true');
-    expect(screen.getByTestId('sequence-1-preview')
-      .getAttribute('data-active')).toBe('false');
+    act(() => MockIntersectionObserver.instance?.trigger(cards[0], 0.8));
+    expect(screen.getAllByTestId(/^sequence-\d+-preview$/)).toHaveLength(6);
     unmount();
-    Object.defineProperty(window, 'innerWidth', {
-      configurable: true,
-      value: previousWidth,
-    });
   });
 
-  it('starts only one decoder across separate visible mobile grid batches', () => {
-    const previousWidth = window.innerWidth;
-    Object.defineProperty(window, 'innerWidth', {
-      configurable: true,
-      value: 390,
-    });
+  it('shares the five-decoder budget across visible grid batches', () => {
     const { unmount } = render(createElement(
       'section',
       {},
-      createElement(PreviewProbe, {
-        activeGroupId: 'batch-one',
-        id: 'batch-one-card',
+      ...Array.from({ length: 6 }, (_, index) => createElement(PreviewProbe, {
+        activeGroupId: `batch-${index}`,
+        id: `batch-${index}-card`,
+        key: index,
         sequenceStartup: true,
-      }),
-      createElement(PreviewProbe, {
-        activeGroupId: 'batch-two',
-        id: 'batch-two-card',
-        sequenceStartup: true,
-      }),
+      })),
     ));
-    const firstCard = screen.getByTestId('batch-one-card');
-    const secondCard = screen.getByTestId('batch-two-card');
-    act(() => {
-      MockIntersectionObserver.instance?.trigger(firstCard, 0.8);
-      MockIntersectionObserver.instance?.trigger(secondCard, 0.8);
-    });
+    const cards = screen.getAllByTestId(/^batch-\d-card$/);
+    act(() => cards.forEach(card => {
+      MockIntersectionObserver.instance?.trigger(card, 0.8);
+    }));
 
-    expect(screen.getAllByTestId(/batch-(one|two)-card-preview/))
-      .toHaveLength(1);
-    fireEvent.loadedData(screen.getByTestId('batch-one-card-preview'));
-    expect(screen.getByTestId('batch-one-card-preview')
+    expect(screen.getAllByTestId(/^batch-\d-card-preview$/)).toHaveLength(5);
+    fireEvent.loadedData(screen.getByTestId('batch-0-card-preview'));
+    expect(screen.getByTestId('batch-0-card-preview')
       .getAttribute('data-active')).toBe('true');
-    expect(screen.getByTestId('batch-two-card-preview')
-      .getAttribute('data-active')).toBe('false');
+    act(() => MockIntersectionObserver.instance?.trigger(cards[0], 0.8));
+    expect(screen.getAllByTestId(/^batch-\d-card-preview$/)).toHaveLength(6);
     unmount();
-    Object.defineProperty(window, 'innerWidth', {
-      configurable: true,
-      value: previousWidth,
-    });
   });
 
   it('mounts every visible capable-device fallback without a numeric cap', () => {

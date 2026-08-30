@@ -174,7 +174,7 @@ export default function MediaGrid({
       const activeIds = [...getSmartPreviewIds(cards.flatMap(item => {
         const id = item.dataset.previewId;
         return id ? [{ id, layoutTop: getDocumentLayoutTop(item) }] : [];
-      }), activeId, !supportsHover)];
+      }), activeId, true)];
       window.dispatchEvent(new CustomEvent<SmartPreviewActivationDetail>(
         SMART_PREVIEW_ACTIVATION_EVENT,
         { detail: { activeIds } },
@@ -315,8 +315,9 @@ export default function MediaGrid({
                 previewGroupId,
                 sequencePreviewStartup: sequenceVideoPreviewStartup,
                 previewStartupPriority: focusedPreviewId === photo.id,
-                // Smart mode is coordinated at grid level: a desktop hover
-                // activates the complete row and mobile activates three rows.
+                // Smart mode is coordinated at grid level: interaction
+                // activates the complete row plus the rows above and below.
+                // Their videos enter the shared five-slot decode queue.
                 hoverPreviewEnabled: videoPreviewMode === 'off',
               }}
             />
