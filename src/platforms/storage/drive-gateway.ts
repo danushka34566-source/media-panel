@@ -18,8 +18,7 @@ const parseInteger = (
 
 const DRIVE_MULTIPART_THRESHOLD_BYTES = parseInteger(
   process.env.NEXT_PUBLIC_DRIVE_MULTIPART_THRESHOLD_BYTES,
-  0,
-  { min: 0 },
+  32 * 1024 * 1024,
 );
 const DRIVE_MULTIPART_PART_SIZE_BYTES = parseInteger(
   process.env.NEXT_PUBLIC_DRIVE_MULTIPART_PART_SIZE_BYTES,
@@ -37,6 +36,7 @@ const DRIVE_MULTIPART_REQUEST_RETRIES = 2;
 const DRIVE_MULTIPART_PART_UPLOAD_RETRIES = 2;
 const DRIVE_MULTIPART_MAX_PART_URL_LOOKAHEAD =
   DRIVE_MULTIPART_CONCURRENCY + 2;
+const DRIVE_UPLOAD_REQUEST_RETRIES = 2;
 
 const DRIVE_BASE_URL = (process.env.DRIVE_STORAGE_BASE_URL || '').replace(/\/+$/, '');
 const DRIVE_PROJECT_ID = process.env.NEXT_PUBLIC_DRIVE_STORAGE_PROJECT_ID || '';
@@ -140,12 +140,26 @@ export const driveCreatePresignedUpload = async (key: string, contentType?: stri
     bucket: DRIVE_BUCKET,
     ...(contentType ? { contentType } : {}),
   });
-  const response = await fetchWithTimeout(`${DRIVE_API_BASE_URL}/api/v1/storage/presigned-url/${encodeURIComponent(key)}?${search.toString()}`, {
-    headers: headers(),
-    cache: 'no-store',
-  }, DRIVE_UPLOAD_REQUEST_TIMEOUT_MS);
+  const endpoint = `${DRIVE_API_BASE_URL}/api/v1/storage/presigned-url/${encodeURIComponent(key)}?${search.toString()}`;
+  let response: Response | undefined;
+  for (let attempt = 0; attempt <= DRIVE_UPLOAD_REQUEST_RETRIES; attempt += 1) {
+    response = await fetchWithTimeout(endpoint, {
+      headers: headers(),
+      cache: 'no-store',
+    }, DRIVE_UPLOAD_REQUEST_TIMEOUT_MS);
+    if (response.ok || response.status < 500 || attempt === DRIVE_UPLOAD_REQUEST_RETRIES) {
+      break;
+    }
+    await new Promise(resolve => window.setTimeout(resolve, 350 * (attempt + 1)));
+  }
+  if (!response) {
+    throw new Error('Unable to create Drive upload URL.');
+  }
   if (!response.ok) {
-    throw new Error(await readDriveError(response, 'Unable to create Drive upload URL.'));
+    throw new Error(await readDriveError(
+      response,
+      `Unable to create Drive upload URL (${response.status}).`,
+    ));
   }
   return response.json() as Promise<{ url: string }>;
 };

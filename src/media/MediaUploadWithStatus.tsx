@@ -29,7 +29,11 @@ const createUploadBatchId = () =>
     : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 
 const MAX_CLIENT_UPLOAD_RETRIES = 2;
-const MAX_CONCURRENT_CLIENT_UPLOADS = 2;
+// Keep several files in flight so a completed file can hand its slot to the
+// next queued file immediately. Four is still bounded enough to avoid
+// saturating the browser/server with an unbounded fan-out.
+const MAX_CONCURRENT_CLIENT_UPLOADS = 4;
+const MIN_PROGRESS_UPDATE_INTERVAL_MS = 80;
 const RETRYABLE_UPLOAD_ERROR_PATTERNS = [
   /timed out/i,
   /stalled/i,
@@ -37,6 +41,7 @@ const RETRYABLE_UPLOAD_ERROR_PATTERNS = [
   /upload failed before storage returned/i,
   /unable to create presigned upload url/i,
   /unable to generate upload url/i,
+  /drive.*(?:upload|multipart).*(?:failed|5\d\d)/i,
 ];
 
 const ACTIVE_CLIENT_UPLOAD_STATUSES = new Set<ClientUploadItem['status']>([
@@ -110,6 +115,7 @@ export default function MediaUploadWithStatus({
   const uploadTaskQueueRef = useRef(
     createUploadTaskQueue(MAX_CONCURRENT_CLIENT_UPLOADS),
   );
+  const lastProgressUpdateAtRef = useRef(new Map<string, number>());
 
   const enqueueClientUpload = useCallback((task: () => Promise<void>) => {
     void uploadTaskQueueRef.current.enqueue(task).catch(error => {
@@ -129,6 +135,7 @@ export default function MediaUploadWithStatus({
     if (!batchId) {
       return;
     }
+    lastProgressUpdateAtRef.current.delete(clientUploadId);
     uploadBatchByUploadIdRef.current.delete(clientUploadId);
     const batchState = uploadBatchStateRef.current.get(batchId);
     if (!batchState) {
@@ -170,6 +177,23 @@ export default function MediaUploadWithStatus({
     id: string,
     update: Partial<(typeof clientUploads)[number]>,
   ) => {
+    // XHR can emit progress events much faster than React needs to paint.
+    // Coalescing only in-progress updates keeps the transfer thread free and
+    // prevents a large multi-file selection from rerendering the whole list
+    // for every network event. State transitions and final progress remain
+    // immediate.
+    if (
+      typeof update.progress === 'number' &&
+      update.status === 'uploading' &&
+      update.progress < 0.995
+    ) {
+      const now = Date.now();
+      const last = lastProgressUpdateAtRef.current.get(id) ?? 0;
+      if (now - last < MIN_PROGRESS_UPDATE_INTERVAL_MS) {
+        return;
+      }
+      lastProgressUpdateAtRef.current.set(id, now);
+    }
     setClientUploads(currentClientUploads =>
       currentClientUploads.map(upload =>
         upload.id === id

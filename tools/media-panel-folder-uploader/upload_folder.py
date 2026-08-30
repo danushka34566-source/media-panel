@@ -1903,8 +1903,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--file-workers",
         type=int,
-        default=2,
-        help="Number of files to upload concurrently (default: 2)",
+        default=4,
+        help="Number of files to upload concurrently (default: 4)",
     )
     parser.add_argument("--part-retries", type=int, default=3)
     parser.add_argument("--request-timeout", type=int, default=120)
