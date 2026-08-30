@@ -1,5 +1,5 @@
 import ImageWithFallback from '@/components/image/ImageWithFallback';
-import { fireEvent, render } from '@testing-library/react';
+import { act, fireEvent, render } from '@testing-library/react';
 
 jest.mock('next/image', () => ({
   __esModule: true,
@@ -70,7 +70,13 @@ describe('optimized image fallback', () => {
     expect(second.container.querySelector('img')?.src).toBe(src);
   });
 
-  it('skips repeated quota failures after direct storage succeeds', () => {
+  it('gives cached transforms one frame before bypassing an unavailable optimizer', () => {
+    const animationFrames: FrameRequestCallback[] = [];
+    const requestFrameSpy = jest.spyOn(window, 'requestAnimationFrame')
+      .mockImplementation(callback => {
+        animationFrames.push(callback);
+        return animationFrames.length;
+      });
     const failedSrc = 'https://storage.example/quota-failure-poster.jpg';
     const failed = render(<ImageWithFallback
       src={failedSrc}
@@ -91,6 +97,33 @@ describe('optimized image fallback', () => {
       alt="Next poster"
       fallbackToUnoptimized
     />);
+    expect(next.container.querySelector('img')?.src).toContain('/_next/image');
+    act(() => animationFrames.splice(0).forEach(callback => callback(0)));
     expect(next.container.querySelector('img')?.src).toBe(nextSrc);
+    requestFrameSpy.mockRestore();
+  });
+
+  it('keeps a transformed response that resolves from browser cache', () => {
+    const animationFrames: FrameRequestCallback[] = [];
+    const requestFrameSpy = jest.spyOn(window, 'requestAnimationFrame')
+      .mockImplementation(callback => {
+        animationFrames.push(callback);
+        return animationFrames.length;
+      });
+    const src = 'https://storage.example/cached-poster.jpg';
+    const cached = render(<ImageWithFallback
+      src={src}
+      width={300}
+      height={200}
+      alt="Cached poster"
+      fallbackToUnoptimized
+    />);
+    const image = cached.container.querySelector('img')!;
+
+    fireEvent.load(image);
+    act(() => animationFrames.splice(0).forEach(callback => callback(0)));
+    expect(cached.container.querySelector('img')?.src)
+      .toContain('/_next/image');
+    requestFrameSpy.mockRestore();
   });
 });

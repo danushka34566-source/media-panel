@@ -10,6 +10,7 @@ import {
   SyntheticEvent,
   useCallback,
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
 } from 'react';
@@ -24,6 +25,34 @@ import { isImageLoaded } from './image-loading';
 const MAX_REMEMBERED_DIRECT_FALLBACK_SOURCES = 512;
 const directFallbackSources = new Set<string>();
 let isImageOptimizerUnavailable = false;
+const optimizerUnavailableListeners = new Set<() => void>();
+const IMAGE_OPTIMIZER_UNAVAILABLE_SESSION_KEY =
+  'media-panel:image-optimizer-unavailable';
+
+const rememberImageOptimizerUnavailable = () => {
+  if (isImageOptimizerUnavailable) { return; }
+  isImageOptimizerUnavailable = true;
+  try {
+    window.sessionStorage.setItem(
+      IMAGE_OPTIMIZER_UNAVAILABLE_SESSION_KEY,
+      '1',
+    );
+  } catch { /* storage can be unavailable in privacy mode */ }
+  optimizerUnavailableListeners.forEach(listener => listener());
+};
+
+const wasImageOptimizerUnavailableInSession = () => {
+  if (isImageOptimizerUnavailable) { return true; }
+  try {
+    if (window.sessionStorage.getItem(
+      IMAGE_OPTIMIZER_UNAVAILABLE_SESSION_KEY,
+    ) === '1') {
+      isImageOptimizerUnavailable = true;
+      return true;
+    }
+  } catch { /* storage can be unavailable in privacy mode */ }
+  return false;
+};
 
 const rememberDirectFallbackSource = (src: string) => {
   directFallbackSources.delete(src);
@@ -58,6 +87,7 @@ export default function ImageWithFallback({
   showLoadingIndicator?: boolean
 }) {
   const ref = useRef<HTMLImageElement>(null);
+  const hasLoadedRef = useRef(false);
 
   const { hasLoadedWithAnimations, shouldDebugImageFallbacks } = useAppState();
 
@@ -65,7 +95,7 @@ export default function ImageWithFallback({
   const [didError, setDidError] = useState(false);
   const [isDirectFallback, setIsDirectFallback] = useState(() =>
     fallbackToUnoptimized && typeof props.src === 'string' && (
-      isImageOptimizerUnavailable || directFallbackSources.has(props.src)
+      directFallbackSources.has(props.src)
     ),
   );
   const [fadeFallbackTransition, setFadeFallbackTransition] =
@@ -77,22 +107,64 @@ export default function ImageWithFallback({
 
   const onLoad = useCallback(
     (event: SyntheticEvent<HTMLImageElement, Event>) => {
+      hasLoadedRef.current = true;
       setIsLoading(false);
       setDidError(false);
       if (isDirectFallback && directFallbackSrc) {
         // A successful direct retry proves storage is healthy and the failed
         // transformed request was the delivery layer. New cards in this
-        // browser session can now skip repeated quota failures. Existing
-        // optimized requests stay mounted, allowing cached variants to win.
-        isImageOptimizerUnavailable = true;
+        // browser session now give a cached transform one frame to resolve,
+        // then skip the unavailable optimizer and use storage directly.
         rememberDirectFallbackSource(directFallbackSrc);
+        rememberImageOptimizerUnavailable();
       }
       onImageLoad?.(event);
     },
     [directFallbackSrc, isDirectFallback, onImageLoad],
   );
+
+  useLayoutEffect(() => {
+    if (!fallbackToUnoptimized || !directFallbackSrc || isDirectFallback) {
+      return;
+    }
+    let fallbackFrame: number | undefined;
+    const getImage = () => refProp?.current ?? ref.current;
+    const cancelFallback = () => {
+      if (fallbackFrame === undefined) { return; }
+      window.cancelAnimationFrame(fallbackFrame);
+      fallbackFrame = undefined;
+    };
+    const scheduleDirectUnlessOptimizedImageIsReady = () => {
+      cancelFallback();
+      // Give a transformed response already present in the browser HTTP cache
+      // one paint opportunity to complete. If it is not ready by then, avoid
+      // waiting on a quota-limited optimizer and request storage directly.
+      fallbackFrame = window.requestAnimationFrame(() => {
+        fallbackFrame = undefined;
+        if (hasLoadedRef.current || isImageLoaded(getImage())) { return; }
+        rememberDirectFallbackSource(directFallbackSrc);
+        hasLoadedRef.current = false;
+        setIsLoading(true);
+        setDidError(false);
+        setIsDirectFallback(true);
+      });
+    };
+    optimizerUnavailableListeners.add(
+      scheduleDirectUnlessOptimizedImageIsReady,
+    );
+    if (wasImageOptimizerUnavailableInSession()) {
+      scheduleDirectUnlessOptimizedImageIsReady();
+    }
+    return () => {
+      optimizerUnavailableListeners.delete(
+        scheduleDirectUnlessOptimizedImageIsReady,
+      );
+      cancelFallback();
+    };
+  }, [directFallbackSrc, fallbackToUnoptimized, isDirectFallback, refProp]);
   const onError = useCallback(
     (event: SyntheticEvent<HTMLImageElement, Event>) => {
+      hasLoadedRef.current = false;
       if (fallbackToUnoptimized && !isDirectFallback) {
         // A transformed image can fail because the optimizer is unavailable or
         // over quota even though the stable storage object is healthy. Retry the
