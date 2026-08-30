@@ -1,10 +1,11 @@
 import useVideoPreviewLifecycle, {
   canAutoplayGeneratedVideoPreview,
   canAutoplayLargeVideoPreview,
+  getPreviewStartupConcurrency,
   setFullVideoPlaybackActive,
   shouldSuspendVideoPreviews,
 } from '@/media/video-preview-lifecycle';
-import { act, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import { createElement, useRef } from 'react';
 
 class MockIntersectionObserver {
@@ -44,6 +45,9 @@ function PreviewProbe({
   preloadUrl,
   mountOnlyWhenVisible = false,
   requiresCapableDevice = false,
+  activeGroupId,
+  sequenceStartup = false,
+  startupPriority = false,
 }: {
   id?: string
   enabled?: boolean
@@ -51,15 +55,26 @@ function PreviewProbe({
   preloadUrl?: string
   mountOnlyWhenVisible?: boolean
   requiresCapableDevice?: boolean
+  activeGroupId?: string
+  sequenceStartup?: boolean
+  startupPriority?: boolean
 }) {
   const ref = useRef<HTMLDivElement>(null);
-  const { activationId, isActive, shouldMount } = useVideoPreviewLifecycle({
+  const {
+    activationId,
+    isActive,
+    markPrepared,
+    shouldMount,
+  } = useVideoPreviewLifecycle({
     ref,
     enabled,
     preloadEnabled,
     preloadUrl,
     mountOnlyWhenVisible,
     requiresCapableDevice,
+    activeGroupId,
+    sequenceStartup,
+    startupPriority,
   });
   return createElement(
     'div',
@@ -69,6 +84,7 @@ function PreviewProbe({
       ? createElement('video', {
         'data-testid': `${id}-preview`,
         'data-active': String(isActive),
+        onLoadedData: markPrepared,
       })
       : null,
   );
@@ -352,6 +368,117 @@ describe('video preview lifecycle policy', () => {
     expect(screen.getAllByTestId(/^card-\d+-preview$/)).toHaveLength(12);
     expect(screen.getAllByAltText('Poster')).toHaveLength(12);
     unmount();
+  });
+
+  it('uses conservative adaptive preview startup concurrency', () => {
+    expect(getPreviewStartupConcurrency({
+      reducedMotion: false,
+      saveData: false,
+      hardwareConcurrency: 16,
+      isMobile: true,
+    })).toBe(1);
+    expect(getPreviewStartupConcurrency({
+      reducedMotion: false,
+      saveData: false,
+      deviceMemory: 8,
+      hardwareConcurrency: 8,
+      isMobile: false,
+    })).toBe(2);
+    expect(getPreviewStartupConcurrency({
+      reducedMotion: false,
+      saveData: false,
+      deviceMemory: 8,
+      hardwareConcurrency: 16,
+      isMobile: false,
+    })).toBe(3);
+  });
+
+  it('decodes an activated group one at a time and keeps prepared videos playing', () => {
+    const previousWidth = window.innerWidth;
+    Object.defineProperty(window, 'innerWidth', {
+      configurable: true,
+      value: 390,
+    });
+    const { unmount } = render(createElement(
+      'section',
+      {},
+      ...Array.from({ length: 4 }, (_, index) =>
+        createElement(PreviewProbe, {
+          activeGroupId: 'grid-startup',
+          id: `sequence-${index}`,
+          key: index,
+          sequenceStartup: true,
+          startupPriority: index === 2,
+        })),
+    ));
+    const cards = screen.getAllByTestId(/^sequence-\d+$/);
+    act(() => cards.forEach(card => {
+      MockIntersectionObserver.instance?.trigger(card, 0.8);
+    }));
+
+    expect(screen.getByTestId('sequence-2-preview')
+      .getAttribute('data-active')).toBe('false');
+    expect(screen.queryByTestId('sequence-0-preview')).toBeNull();
+
+    fireEvent.loadedData(screen.getByTestId('sequence-2-preview'));
+    expect(screen.getByTestId('sequence-2-preview')
+      .getAttribute('data-active')).toBe('true');
+    expect(screen.getByTestId('sequence-0-preview')
+      .getAttribute('data-active')).toBe('false');
+
+    fireEvent.loadedData(screen.getByTestId('sequence-0-preview'));
+    expect(screen.getByTestId('sequence-2-preview')
+      .getAttribute('data-active')).toBe('true');
+    expect(screen.getByTestId('sequence-0-preview')
+      .getAttribute('data-active')).toBe('true');
+    expect(screen.getByTestId('sequence-1-preview')
+      .getAttribute('data-active')).toBe('false');
+    unmount();
+    Object.defineProperty(window, 'innerWidth', {
+      configurable: true,
+      value: previousWidth,
+    });
+  });
+
+  it('starts only one decoder across separate visible mobile grid batches', () => {
+    const previousWidth = window.innerWidth;
+    Object.defineProperty(window, 'innerWidth', {
+      configurable: true,
+      value: 390,
+    });
+    const { unmount } = render(createElement(
+      'section',
+      {},
+      createElement(PreviewProbe, {
+        activeGroupId: 'batch-one',
+        id: 'batch-one-card',
+        sequenceStartup: true,
+      }),
+      createElement(PreviewProbe, {
+        activeGroupId: 'batch-two',
+        id: 'batch-two-card',
+        sequenceStartup: true,
+      }),
+    ));
+    const firstCard = screen.getByTestId('batch-one-card');
+    const secondCard = screen.getByTestId('batch-two-card');
+    act(() => {
+      MockIntersectionObserver.instance?.trigger(firstCard, 0.8);
+      MockIntersectionObserver.instance?.trigger(secondCard, 0.8);
+    });
+
+    expect(screen.getAllByTestId(/batch-(one|two)-card-preview/))
+      .toHaveLength(1);
+    fireEvent.loadedData(screen.getByTestId('batch-one-card-preview'));
+    expect(screen.getByTestId('batch-one-card-preview')
+      .getAttribute('data-active')).toBe('true');
+    expect(screen.getByTestId('batch-two-card-preview')
+      .getAttribute('data-active')).toBe('false');
+    unmount();
+    Object.defineProperty(window, 'innerWidth', {
+      configurable: true,
+      value: previousWidth,
+    });
   });
 
   it('mounts every visible capable-device fallback without a numeric cap', () => {

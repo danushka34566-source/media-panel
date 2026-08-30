@@ -78,6 +78,11 @@ import useVideoPreviewLifecycle, {
   shouldSuspendVideoPreviews,
 } from './video-preview-lifecycle';
 import useVideoPreviewRecovery from './useVideoPreviewRecovery';
+import { releaseVideoElement } from './release-video-element';
+import {
+  beginDetailPreviewStartup,
+  completeDetailPreviewStartup,
+} from './detail-preview-startup';
 import useMediaPreload from './useMediaPreload';
 import { FULL_IMAGE_LOAD_AHEAD_VIEWPORTS } from './loading-policy';
 import {
@@ -218,6 +223,7 @@ export default function MediaLarge({
   preloadSubtitleManifest = false,
   broadcastDetailVideoPlayback = false,
   mountPreviewOnlyWhenVisible = false,
+  preloadFullVideoDownload = true,
 }: {
   photo: Media
   className?: string
@@ -257,6 +263,7 @@ export default function MediaLarge({
   preloadSubtitleManifest?: boolean
   broadcastDetailVideoPlayback?: boolean
   mountPreviewOnlyWhenVisible?: boolean
+  preloadFullVideoDownload?: boolean
 } & Pick<MediaSetCategory, 'camera' | 'lens' | 'tag' | 'category' |
   'studio' | 'performer' | 'contentType' | 'film' | 'recipe' | 'focal'>) {
   const router = useRouter();
@@ -273,6 +280,14 @@ export default function MediaLarge({
   } | undefined>(undefined);
   const [isVideoZoomOpen, setIsVideoZoomOpen] = useState(false);
   const videoRef = useRef<HTMLVideoElement>(null);
+  const lastVideoElementRef = useRef<HTMLVideoElement | null>(null);
+  const setVideoElementRef = useCallback((video: HTMLVideoElement | null) => {
+    if (!video && lastVideoElementRef.current) {
+      releaseVideoElement(lastVideoElementRef.current);
+    }
+    videoRef.current = video;
+    lastVideoElementRef.current = video;
+  }, []);
   const { videoPreviewMode = 'smart' } = useAppState();
   const [isPageResuming, setIsPageResuming] = useState(false);
   const [isFullVideoPlaying, setIsFullVideoPlaying] = useState(false);
@@ -459,6 +474,18 @@ export default function MediaLarge({
     failedGeneratedPreviewSrc !== previewSrc
     ? previewSrc
     : undefined;
+  useEffect(() => {
+    if (!broadcastDetailVideoPlayback) { return; }
+    beginDetailPreviewStartup(photo.id);
+    if (videoPreviewMode === 'off' || !automaticPreviewSrc) {
+      completeDetailPreviewStartup(photo.id);
+    }
+  }, [
+    automaticPreviewSrc,
+    broadcastDetailVideoPlayback,
+    photo.id,
+    videoPreviewMode,
+  ]);
   const hasPosterFailed = posterFailedMediaId === photo.id;
   const displayTranscodeStatus = getDisplayTranscodeStatus(photo);
   const currentVideoUrl = isFullVideoPlaying
@@ -626,6 +653,9 @@ export default function MediaLarge({
       if (automaticPreviewSrc) {
         setFailedGeneratedPreviewSrc(automaticPreviewSrc);
       }
+      if (broadcastDetailVideoPlayback) {
+        completeDetailPreviewStartup(photo.id);
+      }
     },
   });
   // Full-mode tiles are large, so prepare several upcoming images before the
@@ -652,9 +682,14 @@ export default function MediaLarge({
   // the page to crash while scrolling. Cards near the viewport are warmed;
   // pointer-hover and explicit play still warm immediately on demand.
   useEffect(() => {
-    if (!isVideo || !isInPreloadRange) { return; }
+    if (!preloadFullVideoDownload || !isVideo || !isInPreloadRange) { return; }
     warmFullVideoDownload();
-  }, [isInPreloadRange, isVideo, warmFullVideoDownload]);
+  }, [
+    isInPreloadRange,
+    isVideo,
+    preloadFullVideoDownload,
+    warmFullVideoDownload,
+  ]);
   const shouldLoadVideoPoster = shouldLoadPreviewImage &&
     Boolean(posterSrc && !hasPosterFailed);
   const showZoomControls = _showZoomControls && areZoomControlsShown && !isVideo;
@@ -1246,7 +1281,7 @@ export default function MediaLarge({
                 )}
                 {(isFullVideoPlaying || shouldRenderAutomaticPreview) &&
                   <video
-                    ref={videoRef}
+                    ref={setVideoElementRef}
                     className={clsx(
                       'relative z-10 max-h-full w-full',
                       areMediaMatted ? 'object-contain' : 'object-cover',
@@ -1304,6 +1339,9 @@ export default function MediaLarge({
                     }}
                     onLoadedData={() => {
                       if (!isFullVideoPlaying && automaticPreviewSrc) {
+                        if (broadcastDetailVideoPlayback) {
+                          completeDetailPreviewStartup(photo.id);
+                        }
                         setReadyPreviewSrc(automaticPreviewSrc);
                         setReadyPreviewActivationId(previewActivationId);
                         previewRecovery.onLoadedData();
@@ -1349,6 +1387,9 @@ export default function MediaLarge({
                         setReadyPreviewSrc(undefined);
                         setReadyPreviewActivationId(undefined);
                         previewRecovery.onError();
+                        if (broadcastDetailVideoPlayback) {
+                          completeDetailPreviewStartup(photo.id);
+                        }
                       }
                     }}
                     onLoadedMetadata={(e) => {

@@ -214,7 +214,8 @@ export default function MediaDetailPage({
             preloadSubtitleManifest={false}
             broadcastDetailVideoPlayback
             mountPreviewOnlyWhenVisible={false}
-            prefetchRelatedLinks
+            prefetchRelatedLinks={false}
+            preloadFullVideoDownload={false}
             recent={recent}
             year={year}
             showTitle={Boolean(customHeader)}

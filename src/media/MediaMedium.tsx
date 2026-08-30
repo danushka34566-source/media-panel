@@ -36,6 +36,9 @@ export default function MediaMedium({
   preloadVideoPreview = false,
   autoPreviewEnabled = true,
   mountPreviewOnlyWhenVisible = false,
+  previewGroupId,
+  sequencePreviewStartup = false,
+  previewStartupPriority = false,
   hoverPreviewEnabled = false,
   ...categories
 }: {
@@ -51,6 +54,9 @@ export default function MediaMedium({
   preloadVideoPreview?: boolean
   autoPreviewEnabled?: boolean
   mountPreviewOnlyWhenVisible?: boolean
+  previewGroupId?: string
+  sequencePreviewStartup?: boolean
+  previewStartupPriority?: boolean
   hoverPreviewEnabled?: boolean
 } & MediaSetCategory) {
   const ref = useRef<HTMLAnchorElement>(null);
@@ -65,6 +71,7 @@ export default function MediaMedium({
     shouldMount: shouldMountPreview,
     isActive: isPreviewActive,
     isExiting: isPreviewExiting,
+    markPrepared,
   } = useVideoPreviewLifecycle({
     ref,
     enabled: Boolean(
@@ -83,6 +90,9 @@ export default function MediaMedium({
       !hasVideoFailed,
     ),
     mountOnlyWhenVisible: mountPreviewOnlyWhenVisible,
+    activeGroupId: previewGroupId,
+    sequenceStartup: sequencePreviewStartup,
+    startupPriority: previewStartupPriority,
     preloadUrl: previewSrc,
   });
   const shouldRenderPreview = shouldMountPreview || isPreviewExiting;
@@ -172,6 +182,7 @@ export default function MediaMedium({
                 <InlineVideoPreview
                   src={previewSrc}
                   active={isPreviewActive}
+                  onPrepared={markPrepared}
                   onError={() => setVideoFailedMediaId(photo.id)}
                 />
               )}

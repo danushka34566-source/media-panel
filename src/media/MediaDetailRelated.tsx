@@ -1,11 +1,15 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useSyncExternalStore } from 'react';
 import AppGrid from '@/components/AppGrid';
-import { Media } from '.';
+import { getMediaPreviewUrl, Media } from '.';
 import MediaGrid from './MediaGrid';
 import { MediaSetCategory } from '../category';
 import { MediaGridSkeleton } from '@/components/PageSkeletons';
+import {
+  isDetailPreviewStartupComplete,
+  subscribeDetailPreviewStartup,
+} from './detail-preview-startup';
 
 export default function MediaDetailRelated({
   photos,
@@ -16,6 +20,19 @@ export default function MediaDetailRelated({
   selectedMedia?: Media
 } & MediaSetCategory) {
   const [isReady, setIsReady] = useState(false);
+  const waitsForMainPreview = Boolean(
+    selectedMedia && getMediaPreviewUrl(selectedMedia),
+  );
+  const isMainPreviewPrepared = useSyncExternalStore(
+    onStoreChange => subscribeDetailPreviewStartup(onStoreChange),
+    () => Boolean(
+      selectedMedia &&
+      isDetailPreviewStartupComplete(selectedMedia.id),
+    ),
+    () => false,
+  );
+  const canStartRelatedPreviews = !waitsForMainPreview ||
+    isMainPreviewPrepared;
 
   useEffect(() => {
     // Let the detail hero's initial high-priority poster/preview request reach
@@ -38,15 +55,18 @@ export default function MediaDetailRelated({
     photos={photos}
     selectedMedia={selectedMedia}
     {...categories}
-    // Related cards start immediately after the hero commit. Their requests
-    // stay normal priority while the hero poster remains the high-priority asset.
-    prioritizeInitialMedia
+    // The hero is the only priority image. Related posters stay mounted but
+    // use normal native loading order; no small card competes with the main
+    // poster or main preview for an eager/high-priority request.
     autoplaySmartPreviews
     suspendSmartPreviewsOnMainPlayback
     // Posters are mounted and prepared ahead of the viewport, while video
     // decoders are reserved for cards that are actually visible. This keeps
     // the main player responsive without delaying the related image grid.
     mountPreviewsOnlyWhenVisible
+    prefetchInitialMediaLinks={false}
+    sequenceVideoPreviewStartup
+    enableVideoPreviews={canStartRelatedPreviews}
     animateOnFirstLoadOnly
   />} />;
 }

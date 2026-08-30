@@ -21,7 +21,19 @@ import { isImageLoaded } from './image-loading';
 // another request on a transformation that already failed for this source.
 // This is intentionally per source: cached transformed images can still load
 // even after a different, uncached transformation has exceeded Vercel quota.
+const MAX_REMEMBERED_DIRECT_FALLBACK_SOURCES = 512;
 const directFallbackSources = new Set<string>();
+let isImageOptimizerUnavailable = false;
+
+const rememberDirectFallbackSource = (src: string) => {
+  directFallbackSources.delete(src);
+  directFallbackSources.add(src);
+  while (directFallbackSources.size > MAX_REMEMBERED_DIRECT_FALLBACK_SOURCES) {
+    const oldestSrc = directFallbackSources.values().next().value;
+    if (typeof oldestSrc !== 'string') { break; }
+    directFallbackSources.delete(oldestSrc);
+  }
+};
 
 export default function ImageWithFallback({
   ref: refProp,
@@ -52,7 +64,9 @@ export default function ImageWithFallback({
   const [isLoading, setIsLoading] = useState(true);
   const [didError, setDidError] = useState(false);
   const [isDirectFallback, setIsDirectFallback] = useState(() =>
-    typeof props.src === 'string' && directFallbackSources.has(props.src),
+    fallbackToUnoptimized && typeof props.src === 'string' && (
+      isImageOptimizerUnavailable || directFallbackSources.has(props.src)
+    ),
   );
   const [fadeFallbackTransition, setFadeFallbackTransition] =
     useState(!hasLoadedWithAnimations);
@@ -65,9 +79,17 @@ export default function ImageWithFallback({
     (event: SyntheticEvent<HTMLImageElement, Event>) => {
       setIsLoading(false);
       setDidError(false);
+      if (isDirectFallback && directFallbackSrc) {
+        // A successful direct retry proves storage is healthy and the failed
+        // transformed request was the delivery layer. New cards in this
+        // browser session can now skip repeated quota failures. Existing
+        // optimized requests stay mounted, allowing cached variants to win.
+        isImageOptimizerUnavailable = true;
+        rememberDirectFallbackSource(directFallbackSrc);
+      }
       onImageLoad?.(event);
     },
-    [onImageLoad],
+    [directFallbackSrc, isDirectFallback, onImageLoad],
   );
   const onError = useCallback(
     (event: SyntheticEvent<HTMLImageElement, Event>) => {
@@ -76,7 +98,7 @@ export default function ImageWithFallback({
         // over quota even though the stable storage object is healthy. Retry the
         // same URL directly before showing the permanent image fallback.
         if (directFallbackSrc) {
-          directFallbackSources.add(directFallbackSrc);
+          rememberDirectFallbackSource(directFallbackSrc);
         }
         setIsDirectFallback(true);
         setIsLoading(true);

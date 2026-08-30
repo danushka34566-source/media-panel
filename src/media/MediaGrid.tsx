@@ -8,7 +8,7 @@ import AnimateItems from '@/components/AnimateItems';
 import { GRID_ASPECT_RATIO } from '@/app/config';
 import { useAppState } from '@/app/AppState';
 import SelectTileOverlay from '@/components/SelectTileOverlay';
-import { ReactNode, useEffect, useRef, useState } from 'react';
+import { ReactNode, useEffect, useId, useRef, useState } from 'react';
 import { GRID_GAP_CLASSNAME } from '@/components';
 import { useSelectMediaState } from '@/admin/select/SelectMediaState';
 import { DATA_KEY_MEDIA_GRID } from '@/admin/select/SelectMediaProvider';
@@ -57,6 +57,9 @@ export default function MediaGrid({
   autoplaySmartPreviews = false,
   suspendSmartPreviewsOnMainPlayback = false,
   mountPreviewsOnlyWhenVisible = false,
+  prefetchInitialMediaLinks = true,
+  sequenceVideoPreviewStartup = true,
+  enableVideoPreviews = true,
   onLastMediaVisible,
   onAnimationComplete,
   ...categories
@@ -76,6 +79,9 @@ export default function MediaGrid({
   autoplaySmartPreviews?: boolean
   suspendSmartPreviewsOnMainPlayback?: boolean
   mountPreviewsOnlyWhenVisible?: boolean
+  prefetchInitialMediaLinks?: boolean
+  sequenceVideoPreviewStartup?: boolean
+  enableVideoPreviews?: boolean
   onLastMediaVisible?: () => void
   onAnimationComplete?: () => void
 } & MediaSetCategory) {
@@ -87,6 +93,8 @@ export default function MediaGrid({
   } = useAppState();
   const [smartPreviewIds, setSmartPreviewIds] = useState<Set<string>>(new Set());
   const [isMainVideoPlaying, setIsMainVideoPlaying] = useState(false);
+  const [focusedPreviewId, setFocusedPreviewId] = useState<string>();
+  const previewGroupId = useId();
   const smartActivationFrameRef = useRef<number | undefined>(undefined);
   const pendingSmartCardIdRef = useRef<string | undefined>(undefined);
   const activeSmartCardIdRef = useRef<string | undefined>(undefined);
@@ -144,7 +152,9 @@ export default function MediaGrid({
     const card = (target as HTMLElement | null)?.closest<HTMLElement>('[data-preview-id]');
     if (!card || !grid.contains(card)) { return; }
     const cardId = card.dataset.previewId;
-    if (!cardId || activeSmartCardIdRef.current === cardId) { return; }
+    if (!cardId) { return; }
+    setFocusedPreviewId(current => current === cardId ? current : cardId);
+    if (activeSmartCardIdRef.current === cardId) { return; }
     pendingSmartCardIdRef.current = cardId;
     if (smartActivationFrameRef.current !== undefined) { return; }
     smartActivationFrameRef.current = requestAnimationFrame(() => {
@@ -185,11 +195,18 @@ export default function MediaGrid({
         // Preserve the actual card/image/video nodes while grid contents grow.
         // The mode switch animates only visible surfaces, outside Framer's
         // all-item projection, so long feeds remain cheap to scroll.
-        onPointerDown={event => activateSmartRows(
-          event.target,
-          event.currentTarget,
-          event.pointerType,
-        )}
+        onPointerDown={event => {
+          const card = (event.target as HTMLElement | null)
+            ?.closest<HTMLElement>('[data-preview-id]');
+          if (card?.dataset.previewId) {
+            setFocusedPreviewId(card.dataset.previewId);
+          }
+          activateSmartRows(
+            event.target,
+            event.currentTarget,
+            event.pointerType,
+          );
+        }}
         onPointerMove={event => activateSmartRows(
           event.pointerType === 'touch'
             ? document.elementFromPoint(event.clientX, event.clientY)
@@ -199,6 +216,7 @@ export default function MediaGrid({
         )}
         onPointerLeave={event => {
           if (supportsHover && event.pointerType === 'mouse') {
+            setFocusedPreviewId(undefined);
             activeSmartCardIdRef.current = undefined;
             pendingSmartCardIdRef.current = undefined;
             if (smartActivationFrameRef.current !== undefined) {
@@ -265,9 +283,10 @@ export default function MediaGrid({
               {...{
                 photo,
                 ...categories,
+                enableVideoPreview: enableVideoPreviews,
                 // Limit route prefetching to the first viewport. Prefetching
                 // every detail route in a large grid saturates the connection.
-                prefetch: index < 6,
+                prefetch: prefetchInitialMediaLinks && index < 6,
                 selected: photo.id === selectedMedia?.id,
                 // The detail hero owns the browser's high-priority image
                 // slot. Related cards still mount immediately, but their
@@ -293,6 +312,9 @@ export default function MediaGrid({
                     smartPreviewIds.has(photo.id),
                   ),
                 mountPreviewOnlyWhenVisible: mountPreviewsOnlyWhenVisible,
+                previewGroupId,
+                sequencePreviewStartup: sequenceVideoPreviewStartup,
+                previewStartupPriority: focusedPreviewId === photo.id,
                 // Smart mode is coordinated at grid level: a desktop hover
                 // activates the complete row and mobile activates three rows.
                 hoverPreviewEnabled: videoPreviewMode === 'off',

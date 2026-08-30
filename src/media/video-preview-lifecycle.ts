@@ -16,12 +16,16 @@ type PreviewEntry = {
   preloadEnabled: boolean
   mountOnlyWhenVisible: boolean
   requiresCapableDevice: boolean
+  activeGroupId?: string
+  sequenceStartup: boolean
+  startupPriority: boolean
+  isPrepared: boolean
   preloadUrl?: string
   isMounted: boolean
   intersectionRatio: number
   isActive: boolean
   setMounted: (mounted: boolean) => void
-  setActive: (active: boolean) => void
+  setActive: (active: boolean, immediate?: boolean) => void
 }
 
 type NavigatorWithCapabilities = Navigator & {
@@ -87,6 +91,29 @@ export const canAutoplayLargeVideoPreview = ({
   (deviceMemory === undefined || deviceMemory >= 4) &&
   (hardwareConcurrency === undefined || hardwareConcurrency >= 4);
 
+export const getPreviewStartupConcurrency = ({
+  reducedMotion,
+  saveData,
+  deviceMemory,
+  hardwareConcurrency,
+  isMobile,
+}: DeviceCapabilities) => {
+  // Safari/iOS does not expose deviceMemory consistently. Keep mobile at one
+  // startup decoder regardless of reported core count to avoid thermal and
+  // memory-pressure tab reloads.
+  if (reducedMotion || saveData || isMobile) { return 1; }
+  if (
+    deviceMemory !== undefined &&
+    deviceMemory >= 8 &&
+    (hardwareConcurrency ?? 0) >= 12
+  ) { return 3; }
+  if (
+    (deviceMemory === undefined || deviceMemory >= 4) &&
+    (hardwareConcurrency ?? 0) >= 8
+  ) { return 2; }
+  return 1;
+};
+
 export const shouldSuspendVideoPreviews = ({
   isMainVideoActuallyPlaying,
   isVideoFullscreen,
@@ -142,10 +169,11 @@ const updateActivePreviews = (
     !allowGeneratedVideoPreview
   ) {
     entries.forEach(entry => {
+      entry.isPrepared = false;
       setPreviewMounted(entry, false);
       if (entry.isActive) {
         entry.isActive = false;
-        entry.setActive(false);
+        entry.setActive(false, true);
       }
     });
     return;
@@ -154,6 +182,7 @@ const updateActivePreviews = (
   const warmEntries = new Set([...entries.values()]
     .filter(entry => entry.preloadEnabled &&
       !entry.mountOnlyWhenVisible &&
+      !entry.sequenceStartup &&
       Boolean(entry.preloadUrl) &&
       !isFullVideoPlaybackActive &&
       isInPreviewPreloadRange(entry.element, geometryCache))
@@ -168,16 +197,77 @@ const updateActivePreviews = (
     .slice(0, capabilities.isMobile
       ? MAX_WARM_MOBILE_PREVIEWS
       : MAX_WARM_DESKTOP_PREVIEWS));
+  const canActivate = (entry: PreviewEntry) => entry.enabled &&
+    entry.intersectionRatio > 0 &&
+    !isFullVideoPlaybackActive &&
+    (!entry.requiresCapableDevice || allowLargeVideoPreview);
+  const sequenceMountedEntries = new Set<PreviewEntry>();
+  const sequenceActiveEntries = new Set<PreviewEntry>();
+  const sequencePreparationCandidates: PreviewEntry[] = [];
+  const sequenceGroups = new Map<string, PreviewEntry[]>();
   entries.forEach(entry => {
-    const shouldBeActive = entry.enabled &&
-      entry.intersectionRatio > 0 &&
-      !isFullVideoPlaybackActive &&
-      (!entry.requiresCapableDevice || allowLargeVideoPreview);
+    if (!entry.sequenceStartup || !entry.activeGroupId || !canActivate(entry)) {
+      return;
+    }
+    const group = sequenceGroups.get(entry.activeGroupId) ?? [];
+    group.push(entry);
+    sequenceGroups.set(entry.activeGroupId, group);
+  });
+  sequenceGroups.forEach(group => {
+    const ordered = group.sort((a, b) => {
+      if (a.startupPriority !== b.startupPriority) {
+        return a.startupPriority ? -1 : 1;
+      }
+      const aRect = getPreviewRect(a.element, geometryCache);
+      const bRect = getPreviewRect(b.element, geometryCache);
+      return aRect.top - bRect.top || aRect.left - bRect.left;
+    });
+    ordered.filter(entry => entry.isPrepared)
+      .forEach(entry => {
+        sequenceMountedEntries.add(entry);
+        sequenceActiveEntries.add(entry);
+      });
+    sequencePreparationCandidates.push(
+      ...ordered.filter(entry => !entry.isPrepared),
+    );
+  });
+  // There may be several MediaGrid instances on an infinite page. Apply one
+  // device-wide startup budget across all of them; prepared previews keep
+  // playing while the next bounded batch decodes.
+  const orderedPreparationCandidates = sequencePreparationCandidates.sort((a, b) => {
+    if (a.startupPriority !== b.startupPriority) {
+      return a.startupPriority ? -1 : 1;
+    }
+    const aRect = getPreviewRect(a.element, geometryCache);
+    const bRect = getPreviewRect(b.element, geometryCache);
+    return aRect.top - bRect.top || aRect.left - bRect.left;
+  });
+  const interactedPreparation = orderedPreparationCandidates.find(
+    entry => entry.startupPriority,
+  );
+  // Give the interacted card an uncontested first startup. Once it reports a
+  // decoded frame, fill the adaptive device budget in visual order.
+  const nextGlobalPreparations = interactedPreparation
+    ? [interactedPreparation]
+    : orderedPreparationCandidates.slice(
+      0,
+      getPreviewStartupConcurrency(capabilities),
+    );
+  nextGlobalPreparations.forEach(entry => sequenceMountedEntries.add(entry));
+  entries.forEach(entry => {
+    const isSequenced = entry.sequenceStartup && Boolean(entry.activeGroupId);
+    const shouldBeActive = canActivate(entry) && (
+      !isSequenced || sequenceActiveEntries.has(entry)
+    );
+    const shouldBeMounted = shouldBeActive ||
+      (isSequenced && sequenceMountedEntries.has(entry)) ||
+      (!entry.mountOnlyWhenVisible && warmEntries.has(entry));
+    if (!shouldBeMounted && entry.isPrepared) {
+      entry.isPrepared = false;
+    }
     setPreviewMounted(
       entry,
-      shouldBeActive || (
-        !entry.mountOnlyWhenVisible && warmEntries.has(entry)
-      ),
+      shouldBeMounted,
     );
     if (entry.isActive !== shouldBeActive) {
       entry.isActive = shouldBeActive;
@@ -283,10 +373,11 @@ const onPageHide = () => {
     activePreviewUpdateFrame = undefined;
   }
   entries.forEach(entry => {
+    entry.isPrepared = false;
     setPreviewMounted(entry, false);
     if (entry.isActive) {
       entry.isActive = false;
-      entry.setActive(false);
+      entry.setActive(false, true);
     }
   });
 };
@@ -384,6 +475,9 @@ export default function useVideoPreviewLifecycle({
   preloadEnabled = false,
   mountOnlyWhenVisible = false,
   requiresCapableDevice = false,
+  activeGroupId,
+  sequenceStartup = false,
+  startupPriority = false,
   preloadUrl,
 }: {
   ref: RefObject<HTMLElement | null>
@@ -393,6 +487,9 @@ export default function useVideoPreviewLifecycle({
   // of the viewport. Posters remain mounted by the card component.
   mountOnlyWhenVisible?: boolean
   requiresCapableDevice?: boolean
+  activeGroupId?: string
+  sequenceStartup?: boolean
+  startupPriority?: boolean
   preloadUrl?: string
 }) {
   const reactId = useId();
@@ -404,6 +501,9 @@ export default function useVideoPreviewLifecycle({
   }>({ activationId: 0 });
   const [isMounted, setIsMounted] = useState(false);
   const exitFrame = useRef<number | undefined>(undefined);
+  const entryRef = useRef<PreviewEntry | undefined>(undefined);
+  const startupPriorityRef = useRef(startupPriority);
+  startupPriorityRef.current = startupPriority;
 
   useEffect(() => {
     const element = ref.current;
@@ -415,12 +515,16 @@ export default function useVideoPreviewLifecycle({
       preloadEnabled,
       mountOnlyWhenVisible,
       requiresCapableDevice,
+      activeGroupId,
+      sequenceStartup,
+      startupPriority: startupPriorityRef.current,
+      isPrepared: false,
       preloadUrl,
       isMounted: false,
       intersectionRatio: 0,
       isActive: false,
       setMounted: setIsMounted,
-      setActive: active => {
+      setActive: (active, immediate = false) => {
         if (active) {
           if (exitFrame.current !== undefined) {
             cancelAnimationFrame(exitFrame.current);
@@ -430,6 +534,14 @@ export default function useVideoPreviewLifecycle({
             activeKey: activationKey,
             activationId: state.activationId + 1,
           }));
+          return;
+        }
+        if (immediate) {
+          if (exitFrame.current !== undefined) {
+            cancelAnimationFrame(exitFrame.current);
+            exitFrame.current = undefined;
+          }
+          setPreviewState(state => ({ activationId: state.activationId }));
           return;
         }
         // Insert the poster in this render, then remove the video on the next
@@ -446,6 +558,7 @@ export default function useVideoPreviewLifecycle({
         });
       },
     };
+    entryRef.current = entry;
     entries.set(id, entry);
     idsByElement.set(element, id);
     attachGlobalListeners();
@@ -471,17 +584,20 @@ export default function useVideoPreviewLifecycle({
         cancelAnimationFrame(exitFrame.current);
       }
       setPreviewMounted(entry, false);
-      if (entry.isActive) { entry.setActive(false); }
+      entry.isActive = false;
       observer?.unobserve(element);
       idsByElement.delete(element);
       entries.delete(id);
+      if (entryRef.current === entry) { entryRef.current = undefined; }
       detachGlobalListeners();
       scheduleActivePreviewUpdate();
     };
   }, [
     activationKey,
+    activeGroupId,
     enabled,
     mountOnlyWhenVisible,
+    sequenceStartup,
     preloadEnabled,
     preloadUrl,
     reactId,
@@ -489,10 +605,23 @@ export default function useVideoPreviewLifecycle({
     requiresCapableDevice,
   ]);
 
+  useEffect(() => {
+    const entry = entryRef.current;
+    if (!entry || entry.startupPriority === startupPriority) { return; }
+    entry.startupPriority = startupPriority;
+    updateActivePreviews();
+  }, [startupPriority]);
+
   return {
     shouldMount: (enabled || preloadEnabled) && isMounted,
     isActive: enabled && previewState.activeKey === activationKey,
     isExiting: enabled && previewState.exitingKey === activationKey,
     activationId: previewState.activationId,
+    markPrepared: () => {
+      const entry = entryRef.current;
+      if (!entry || entry.isPrepared) { return; }
+      entry.isPrepared = true;
+      updateActivePreviews();
+    },
   };
 }

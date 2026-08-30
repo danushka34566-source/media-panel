@@ -1,17 +1,20 @@
 'use client';
 
 import { clsx } from 'clsx/lite';
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import useVideoPreviewRecovery from './useVideoPreviewRecovery';
+import { releaseVideoElement } from './release-video-element';
 
 export default function InlineVideoPreview({
   src,
   active,
   onError,
+  onPrepared,
 }: {
   src: string
   active: boolean
   onError: () => void
+  onPrepared?: () => void
 }) {
   const [isReady, setIsReady] = useState(false);
   const ref = useRef<HTMLVideoElement>(null);
@@ -21,6 +24,10 @@ export default function InlineVideoPreview({
     src,
     onFatalError: onError,
   });
+  useEffect(() => {
+    const video = ref.current;
+    return () => releaseVideoElement(video);
+  }, []);
   return <video
     ref={ref}
     className={clsx(
@@ -39,6 +46,7 @@ export default function InlineVideoPreview({
     onLoadStart={() => setIsReady(false)}
     onLoadedData={() => {
       setIsReady(true);
+      onPrepared?.();
       recovery.onLoadedData();
     }}
     onCanPlay={() => {
