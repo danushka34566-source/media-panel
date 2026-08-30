@@ -301,7 +301,10 @@ export default function AdminBatchEditPanelClient({
       className={clsx(
         // Keep the toolbox in normal page flow below the header. It should
         // never cover media, the header, or the visible edge of a sidebar.
-        'relative z-10 mb-3 pointer-events-auto',
+        // It remains in flow for layout, then stays available while the
+        // selected grid/list is scrolled. The offset matches the responsive
+        // navigation height so it does not hide underneath the header.
+        'sticky top-[4rem] sm:top-[5rem] z-30 mb-3 pointer-events-auto',
       )}
       classNameMain="md:col-span-12"
       contentMain={<div className="flex flex-col gap-2">
