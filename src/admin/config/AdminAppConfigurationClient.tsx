@@ -49,6 +49,7 @@ import {
   SITE_ACCESS_SETTINGS_DEFAULTS,
   type SiteAccessSettings,
 } from '@/auth/site-access-schema';
+import { PATH_ADMIN_CONFIGURATION } from '@/app/path';
 
 export default function AdminAppConfigurationClient({
   // Storage
@@ -343,6 +344,11 @@ export default function AdminAppConfigurationClient({
                     ? 'SSL enabled for Neon (manual override).'
                     : 'SSL enabled automatically for Neon.'
                   : 'SSL disabled for Neon (manual override).'}
+            </div>
+            <div className="mt-3">
+              <AdminLink href={`${PATH_ADMIN_CONFIGURATION}/storage-cleanup`}>
+                Audit and clean storage objects
+              </AdminLink>
             </div>
             {postgresSslMode === 'manual' && renderEnvVars([
               'DISABLE_POSTGRES_SSL',

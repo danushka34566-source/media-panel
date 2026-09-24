@@ -1,6 +1,7 @@
 import {
   S3Client,
   ListObjectsCommand,
+  ListObjectsV2Command,
   PutObjectCommand,
   DeleteObjectCommand,
   CopyObjectCommand,
@@ -100,7 +101,31 @@ export const cloudflareR2List = async (
       fileName: Key ?? '',
       uploadedAt: LastModified,
       size: Size ? formatBytes(Size) : undefined,
+      sizeBytes: typeof Size === 'number' ? Size : undefined,
     })) ?? []);
+
+export const cloudflareR2ListPage = async (
+  prefix = '',
+  continuationToken?: string,
+  limit = 250,
+) => {
+  const data = await cloudflareR2Client().send(new ListObjectsV2Command({
+    Bucket: CLOUDFLARE_R2_BUCKET,
+    Prefix: prefix,
+    ContinuationToken: continuationToken,
+    MaxKeys: limit,
+  }));
+  return {
+    objects: data.Contents?.map(({ Key, LastModified, Size }) => ({
+      url: urlForKey(Key),
+      fileName: Key ?? '',
+      uploadedAt: LastModified,
+      size: typeof Size === 'number' ? formatBytes(Size) : undefined,
+      sizeBytes: Size,
+    })) ?? [],
+    nextContinuationToken: data.NextContinuationToken,
+  };
+};
 
 export const cloudflareR2Delete = async (Key: string) => {
   await cloudflareR2Client().send(new DeleteObjectCommand({

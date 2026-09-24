@@ -745,7 +745,95 @@ export const driveList = async (prefix: string, limit = 1000) => {
     fileName: item.fileName,
     uploadedAt: item.uploadedAt ? new Date(item.uploadedAt) : undefined,
     size: typeof item.size === 'number' ? formatBytes(item.size) : undefined,
+    sizeBytes: typeof item.size === 'number' ? item.size : undefined,
   }));
+};
+
+export const driveListAll = async (prefix = '') => {
+  const inventory: Awaited<ReturnType<typeof driveList>> = [];
+  let continuationToken: string | undefined;
+  const seenTokens = new Set<string>();
+
+  do {
+    const search = new URLSearchParams({
+      projectId: DRIVE_PROJECT_ID,
+      bucket: DRIVE_BUCKET,
+      prefix,
+      paged: '1',
+      limit: '1000',
+      ...(continuationToken ? { continuationToken } : {}),
+    });
+    const response = await fetchWithTimeout(
+      `${DRIVE_API_BASE_URL}/api/v1/storage/list?${search.toString()}`,
+      { headers: headers(), cache: 'no-store' },
+      DRIVE_LIST_TIMEOUT_MS,
+    );
+    if (!response.ok) {
+      throw new Error(await readDriveError(response, 'Unable to list Drive objects.'));
+    }
+    const data = await response.json() as {
+      objects?: Array<{
+        url: string
+        fileName: string
+        uploadedAt?: string | null
+        size?: number
+      }>
+      nextContinuationToken?: string | null
+    };
+    inventory.push(...(data.objects || []).map(item => ({
+      url: item.url,
+      fileName: item.fileName,
+      uploadedAt: item.uploadedAt ? new Date(item.uploadedAt) : undefined,
+      size: typeof item.size === 'number' ? formatBytes(item.size) : undefined,
+      sizeBytes: typeof item.size === 'number' ? item.size : undefined,
+    })));
+    const next = data.nextContinuationToken?.trim() || '';
+    if (!next) { break; }
+    if (seenTokens.has(next)) {
+      throw new Error('Drive inventory returned a repeated continuation token.');
+    }
+    seenTokens.add(next);
+    continuationToken = next;
+  } while (continuationToken);
+
+  return inventory;
+};
+
+export const driveListPage = async (
+  prefix = '',
+  continuationToken?: string,
+  limit = 250,
+) => {
+  const search = new URLSearchParams({
+    projectId: DRIVE_PROJECT_ID,
+    bucket: DRIVE_BUCKET,
+    prefix,
+    paged: '1',
+    limit: String(limit),
+    ...(continuationToken ? { continuationToken } : {}),
+  });
+  const response = await fetchWithTimeout(
+    `${DRIVE_API_BASE_URL}/api/v1/storage/list?${search.toString()}`,
+    { headers: headers(), cache: 'no-store' },
+    DRIVE_LIST_TIMEOUT_MS,
+  );
+  if (!response.ok) {
+    throw new Error(await readDriveError(response, 'Unable to list Drive objects.'));
+  }
+  const data = await response.json() as {
+    objects?: Array<{ url: string; fileName: string; uploadedAt?: string | null; size?: number }>
+    nextContinuationToken?: string | null
+  };
+  return {
+    objects: (data.objects || []).map(item => ({
+      url: item.url,
+      fileName: item.fileName,
+      uploadedAt: item.uploadedAt ? new Date(item.uploadedAt) : undefined,
+      size: typeof item.size === 'number' ? formatBytes(item.size) : undefined,
+      sizeBytes: typeof item.size === 'number' ? item.size : undefined,
+    })),
+    nextContinuationToken: data.nextContinuationToken?.trim() || undefined,
+  };
 };
 
 export const drivePut = async (file: Buffer, fileName: string) => {

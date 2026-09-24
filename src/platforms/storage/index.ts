@@ -9,6 +9,7 @@ import {
   cloudflareR2Copy,
   cloudflareR2Delete,
   cloudflareR2List,
+  cloudflareR2ListPage,
   cloudflareR2ObjectExists,
   cloudflareR2Put,
   isUrlFromCloudflareR2,
@@ -18,6 +19,8 @@ import {
   driveCopy,
   driveDelete,
   driveList,
+  driveListAll,
+  driveListPage,
   driveMove,
   drivePut,
   driveUploadFromClient,
@@ -72,6 +75,7 @@ export type StorageListItem = {
   fileName: string
   uploadedAt?: Date
   size?: string
+  sizeBytes?: number
 };
 
 export type StorageListResponse = StorageListItem[];
@@ -543,6 +547,38 @@ export const getCurrentStorageUrlsForPrefixStrict = async (
     if (!b.uploadedAt) { return -1; }
     return b.uploadedAt.getTime() - a.uploadedAt.getTime();
   });
+};
+
+/**
+ * Read the complete current-provider inventory. This is intentionally kept
+ * separate from the bounded UI listing helpers because maintenance tools need
+ * continuation-safe reconciliation before they can classify an object.
+ */
+export const getCurrentStorageInventory = async () => {
+  if (CURRENT_STORAGE === 'drive') {
+    return driveListAll('');
+  }
+  const inventory: StorageListResponse = [];
+  let cursor: string | undefined;
+  do {
+    const page = await cloudflareR2ListPage('', cursor, 1000);
+    inventory.push(...page.objects);
+    cursor = page.nextContinuationToken;
+  } while (cursor);
+  return inventory;
+};
+
+export const getCurrentStorageInventoryPage = async (
+  prefix = '',
+  continuationToken?: string,
+  limit = 250,
+) => {
+  if (CURRENT_STORAGE === 'drive') {
+    const page = await driveListPage(prefix, continuationToken, limit);
+    return { ...page, provider: 'Drive' };
+  }
+  const page = await cloudflareR2ListPage(prefix, continuationToken, limit);
+  return { ...page, provider: 'Cloudflare R2' };
 };
 
 
