@@ -59,7 +59,7 @@ export default function MediaGridInfinite({
       // page early enough for the media query to finish before the current
       // batch ends. This only prefetches the metadata page; card images and
       // video decoders remain governed by their existing viewport queues.
-      loadAheadViewports={12}
+      loadAheadViewports={4}
       restoreCachedPagesOnRemount
       {...categories}
     >
