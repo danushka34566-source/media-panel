@@ -6593,6 +6593,12 @@ const completeVideoJob = async (
     }
     : {};
   const poster = formData.get('poster');
+  const suppliedBlurData = formData.get('blurData');
+  const blurData = typeof suppliedBlurData === 'string' &&
+    suppliedBlurData.length <= 12_000 &&
+    /^data:image\/jpeg;base64,[A-Za-z0-9+/]+={0,2}$/.test(suppliedBlurData)
+    ? suppliedBlurData
+    : null;
   const preview = formData.get('preview');
   const subtitleFiles = formData.getAll('subtitles')
     .filter((value): value is File => value instanceof File);
@@ -6677,6 +6683,7 @@ const completeVideoJob = async (
     UPDATE media
     SET
       poster_url=${posterUrl ?? null},
+      blur_data=${blurData},
       preview_url=${previewUrl ?? null},
       hls_manifest_url=NULL,
       hls_verified_at=NULL,

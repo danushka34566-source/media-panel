@@ -225,6 +225,7 @@ const probeVideo = async (inputPath) => new Promise((resolve, reject) => {
 const generateDerivatives = async (inputPath, fileNameBase, durationSeconds, onPreviewProgress) => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'processor-'));
     const posterPath = path.join(tempDir, `${fileNameBase}-poster.jpg`);
+    const tinyPosterPath = path.join(tempDir, `${fileNameBase}-poster-tiny.jpg`);
     const previewPath = path.join(tempDir, `${fileNameBase}-preview.mp4`);
     const { midpoint, previewSeek, previewDuration, } = getPreviewWindow(durationSeconds);
     await new Promise((resolve, reject) => {
@@ -237,6 +238,25 @@ const generateDerivatives = async (inputPath, fileNameBase, durationSeconds, onP
             .on('error', reject)
             .run();
     });
+    let posterBlurData;
+    try {
+        await new Promise((resolve, reject) => {
+            ffmpeg(posterPath)
+                .frames(1)
+                .outputOptions(['-vf', 'scale=160:-2', '-q:v', '8'])
+                .output(tinyPosterPath)
+                .on('end', () => resolve())
+                .on('error', reject)
+                .run();
+        });
+        const tinyPoster = await fs.readFile(tinyPosterPath);
+        posterBlurData = `data:image/jpeg;base64,${tinyPoster.toString('base64')}`;
+    }
+    catch (error) {
+        log('job:poster-placeholder-failed', {
+            error: error instanceof Error ? error.message : String(error),
+        });
+    }
     await new Promise((resolve, reject) => {
         ffmpeg(inputPath)
             .seekInput(previewSeek)
@@ -261,7 +281,7 @@ const generateDerivatives = async (inputPath, fileNameBase, durationSeconds, onP
         fs.readFile(previewPath),
     ]);
     await fs.rm(tempDir, { recursive: true, force: true });
-    return { posterBuffer, previewBuffer };
+    return { posterBuffer, previewBuffer, posterBlurData };
 };
 const generateCompatibilityStream = async (inputPath, outputPath, metadata, onProgress) => {
     const strategy = getCompatibilityStreamStrategy(metadata);
@@ -375,11 +395,14 @@ const extractEmbeddedSubtitles = async (inputPath, fileNameBase, tracks) => {
         await fs.rm(tempDir, { recursive: true, force: true });
     }
 };
-const completeJob = async (job, metadata, posterBuffer, previewBuffer, subtitleFiles) => {
+const completeJob = async (job, metadata, posterBuffer, posterBlurData, previewBuffer, subtitleFiles) => {
     const formData = new FormData();
     formData.set('photoId', job.photoId);
     formData.set('fileNameBase', job.fileNameBase);
     formData.set('metadata', JSON.stringify(metadata));
+    if (posterBlurData) {
+        formData.set('blurData', posterBlurData);
+    }
     formData.set('poster', new File([toArrayBuffer(posterBuffer)], `${job.fileNameBase}-poster.jpg`, {
         type: 'image/jpeg',
     }));
@@ -661,7 +684,7 @@ const processJob = async (job) => {
             });
         }
         await updateHeartbeat('Generating poster and preview: 0%');
-        const { posterBuffer, previewBuffer } = await generateDerivatives(inputPath, job.fileNameBase, metadata.durationSeconds, createFfmpegProgressReporter({
+        const { posterBuffer, previewBuffer, posterBlurData } = await generateDerivatives(inputPath, job.fileNameBase, metadata.durationSeconds, createFfmpegProgressReporter({
             job,
             stage: 'Generating preview',
             durationSeconds: Math.min(PREVIEW_DURATION_SECONDS, Math.max(1, (metadata.durationSeconds || 0) *
@@ -681,7 +704,7 @@ const processJob = async (job) => {
             })),
         });
         await updateHeartbeat('Uploading processed files');
-        await completeJob(job, metadata, posterBuffer, previewBuffer, subtitleFiles);
+        await completeJob(job, metadata, posterBuffer, posterBlurData, previewBuffer, subtitleFiles);
         log('job:complete', {
             photoId: job.photoId,
         });

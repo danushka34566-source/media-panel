@@ -16,13 +16,16 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
-  const body = await req.json().catch(() => ({})) as { photoId?: string };
+  const body = await req.json().catch(() => ({})) as {
+    photoId?: string
+    immediateMedia?: boolean
+  };
   const photoId = body.photoId?.trim();
 
   if (photoId) {
     revalidateMedia(photoId);
   } else {
-    revalidateAllKeysAndPaths();
+    revalidateAllKeysAndPaths(body.immediateMedia === true);
   }
 
   return NextResponse.json({ ok: true, photoId: photoId || null });

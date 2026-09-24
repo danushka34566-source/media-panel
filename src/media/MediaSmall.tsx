@@ -108,6 +108,7 @@ export default function MediaSmall({
               width={IMAGE_WIDTH_SMALL}
               height={Math.round(IMAGE_WIDTH_SMALL / aspectRatio)}
               alt={altTextForMedia(photo)}
+              blurDataURL={photo.blurData}
               fallbackToUnoptimized
               revealBeforeHydration
               className="absolute inset-0 w-full h-full"

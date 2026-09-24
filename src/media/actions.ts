@@ -428,6 +428,7 @@ const applyConvertedMediaToMedia = (
   photo: MediaDbInsert,
   converted: ConvertUploadToMediaResult,
 ) => {
+  const previousPosterUrl = photo.posterUrl;
   photo.url = converted.url;
   photo.mediaType = converted.mediaType;
   photo.posterUrl = converted.mediaType === 'video'
@@ -436,6 +437,13 @@ const applyConvertedMediaToMedia = (
   photo.previewUrl = converted.mediaType === 'video'
     ? converted.previewUrl ?? photo.previewUrl
     : converted.previewUrl;
+  if (converted.mediaType === 'video') {
+    photo.blurData = converted.blurData ?? (
+      photo.posterUrl && photo.posterUrl === previousPosterUrl
+        ? photo.blurData
+        : undefined
+    );
+  }
   photo.durationSeconds = converted.durationSeconds;
   photo.frameRate = converted.frameRate;
   photo.mediaWidth = converted.mediaWidth;
@@ -445,6 +453,7 @@ const applyConvertedMediaToMedia = (
   if (converted.mediaType === 'video' && converted.transcodeStatus === 'failed') {
     photo.posterUrl = undefined;
     photo.previewUrl = undefined;
+    photo.blurData = undefined;
   }
   if (converted.mediaType === 'photo') {
     photo.transcodeStatus = undefined;
@@ -462,10 +471,8 @@ const applyConvertedMediaToMedia = (
     converted.mediaHeight
   ) {
     photo.aspectRatio = converted.mediaWidth / converted.mediaHeight;
-    photo.blurData = undefined;
   } else if (converted.mediaType === 'video') {
     photo.aspectRatio = 16 / 9;
-    photo.blurData = undefined;
   }
 };
 
@@ -1927,7 +1934,7 @@ export const renameMediaContentTypeGloballyAction = async (formData: FormData) =
 
 export const upgradeTagToAlbumAction = async (tag: string) =>
   runAuthenticatedAdminServerAction(async () =>
-    upgradeTagToAlbum(tag).then(revalidateAllKeysAndPaths),
+    upgradeTagToAlbum(tag).then(() => revalidateAllKeysAndPaths()),
   );
 
 export const getMediaNeedingRecipeTitleCountAction = async (

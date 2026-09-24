@@ -176,8 +176,8 @@ export const revalidateFocalLengthsKey = () =>
 export const revalidateYearsKey = () =>
   revalidateTag(KEY_YEARS, 'max');
 
-export const revalidateAllKeys = () => {
-  revalidateMediaKey();
+export const revalidateAllKeys = (immediateMedia = false) => {
+  revalidateMediaKey(immediateMedia);
   revalidateAlbumsKey();
   revalidateTagsKey();
   revalidateCategoriesKey();
@@ -196,8 +196,8 @@ export const revalidateAdminPaths = () => {
   PATHS_ADMIN.forEach(path => revalidatePath(path));
 };
 
-export const revalidateAllKeysAndPaths = () => {
-  revalidateAllKeys();
+export const revalidateAllKeysAndPaths = (immediateMedia = false) => {
+  revalidateAllKeys(immediateMedia);
   PATHS_TO_CACHE.forEach(path => revalidatePath(path, 'layout'));
 };
 

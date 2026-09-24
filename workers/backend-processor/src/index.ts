@@ -347,6 +347,7 @@ const generateDerivatives = async (
 ) => {
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'processor-'));
   const posterPath = path.join(tempDir, `${fileNameBase}-poster.jpg`);
+  const tinyPosterPath = path.join(tempDir, `${fileNameBase}-poster-tiny.jpg`);
   const previewPath = path.join(tempDir, `${fileNameBase}-preview.mp4`);
   const {
     midpoint,
@@ -364,6 +365,25 @@ const generateDerivatives = async (
       .on('error', reject)
       .run();
   });
+
+  let posterBlurData: string | undefined;
+  try {
+    await new Promise<void>((resolve, reject) => {
+      ffmpeg(posterPath)
+        .frames(1)
+        .outputOptions(['-vf', 'scale=160:-2', '-q:v', '8'])
+        .output(tinyPosterPath)
+        .on('end', () => resolve())
+        .on('error', reject)
+        .run();
+    });
+    const tinyPoster = await fs.readFile(tinyPosterPath);
+    posterBlurData = `data:image/jpeg;base64,${tinyPoster.toString('base64')}`;
+  } catch (error) {
+    log('job:poster-placeholder-failed', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
 
   await new Promise<void>((resolve, reject) => {
     ffmpeg(inputPath)
@@ -390,7 +410,7 @@ const generateDerivatives = async (
     fs.readFile(previewPath),
   ]);
   await fs.rm(tempDir, { recursive: true, force: true });
-  return { posterBuffer, previewBuffer };
+  return { posterBuffer, previewBuffer, posterBlurData };
 };
 
 const generateCompatibilityStream = async (
@@ -526,6 +546,7 @@ const completeJob = async (
   job: VideoJob,
   metadata: VideoMetadata,
   posterBuffer: Buffer,
+  posterBlurData: string | undefined,
   previewBuffer: Buffer,
   subtitleFiles: SubtitleFile[],
 ) => {
@@ -533,6 +554,7 @@ const completeJob = async (
   formData.set('photoId', job.photoId);
   formData.set('fileNameBase', job.fileNameBase);
   formData.set('metadata', JSON.stringify(metadata));
+  if (posterBlurData) { formData.set('blurData', posterBlurData); }
   formData.set(
     'poster',
     new File([toArrayBuffer(posterBuffer)], `${job.fileNameBase}-poster.jpg`, {
@@ -862,7 +884,7 @@ const processJob = async (job: VideoJob) => {
       });
     }
     await updateHeartbeat('Generating poster and preview: 0%');
-    const { posterBuffer, previewBuffer } = await generateDerivatives(
+    const { posterBuffer, previewBuffer, posterBlurData } = await generateDerivatives(
       inputPath,
       job.fileNameBase,
       metadata.durationSeconds,
@@ -898,6 +920,7 @@ const processJob = async (job: VideoJob) => {
       job,
       metadata,
       posterBuffer,
+      posterBlurData,
       previewBuffer,
       subtitleFiles,
     );

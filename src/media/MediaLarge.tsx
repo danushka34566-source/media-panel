@@ -1369,6 +1369,7 @@ export default function MediaLarge({
                         fallbackToUnoptimized
                         aspectRatio={mediaAspectRatio}
                         alt={altTextForMedia(photo)}
+                        blurDataURL={photo.blurData}
                         priority={priority}
                         loading={eagerMediaImage ? 'eager' : 'lazy'}
                         fetchPriority={priority ? 'high' : 'auto'}

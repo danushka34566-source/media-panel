@@ -178,6 +178,7 @@ export default function MediaMedium({
                   revealBeforeHydration
                   aspectRatio={getMediaAspectRatio(photo)}
                   alt={altTextForMedia(photo)}
+                  blurDataURL={photo.blurData}
                   className="absolute inset-0 w-full h-full"
                   classNameImage="w-full h-full object-cover"
                   loading={eagerPreviewImage ? 'eager' : 'lazy'}

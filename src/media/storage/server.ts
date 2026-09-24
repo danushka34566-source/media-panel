@@ -24,6 +24,7 @@ import {
 } from '@/app/config';
 import { getProcessingConnectionSettingsSafe } from '@/processing/connection-settings';
 import { mapWithConcurrency } from '@/utility/concurrency';
+import sharp from 'sharp';
 
 const VIDEO_EXTENSIONS = new Set([
   'mp4', 'mkv', 'mov', 'm4v', 'webm', 'avi', 'ts', 'm2ts', 'mts',
@@ -251,6 +252,7 @@ export type ConvertUploadToMediaResult = VideoMetadata & {
   mediaType: MediaType
   posterUrl?: string
   previewUrl?: string
+  blurData?: string
   transcodeStatus?: TranscodeStatus
   transcodeError?: string
 };
@@ -903,6 +905,7 @@ const convertUploadToMediaInternal = async ({
 
   let posterUrl: string | undefined;
   let previewUrl: string | undefined;
+  let blurData: string | undefined;
   let transcodeStatus: ConvertUploadToMediaResult['transcodeStatus'] =
     shouldTranscodeNow
       ? 'processing'
@@ -939,6 +942,15 @@ const convertUploadToMediaInternal = async ({
             ffmpegInstance: videoTooling.ffmpeg!,
           });
           const posterBuffer = await fs.readFile(posterFilePath);
+          try {
+            const tinyPoster = await sharp(posterBuffer)
+              .resize({ width: 160, withoutEnlargement: true })
+              .jpeg({ quality: 60, mozjpeg: true })
+              .toBuffer();
+            blurData = `data:image/jpeg;base64,${tinyPoster.toString('base64')}`;
+          } catch (error) {
+            console.warn('Could not prepare inline video poster', error);
+          }
           posterUrl = await withRetry(
             () => putFile(posterBuffer, `${fileNameBase}-poster.jpg`),
             { label: `store video poster ${fileNameBase}` },
@@ -1074,6 +1086,7 @@ const convertUploadToMediaInternal = async ({
     mediaType,
     posterUrl: transcodeStatus === 'failed' ? undefined : posterUrl,
     previewUrl: transcodeStatus === 'failed' ? undefined : previewUrl,
+    blurData: transcodeStatus === 'failed' ? undefined : blurData,
     transcodeStatus,
     transcodeError,
     ...metadata,
