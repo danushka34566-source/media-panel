@@ -1222,6 +1222,7 @@ export default function MediaLarge({
       sortBy={feedSortBy}
       className="font-bold uppercase grow break-all whitespace-normal"
       prefetch={prefetch}
+      replace={broadcastDetailVideoPlayback}
     />;
 
   // Restrict width for landscape photos

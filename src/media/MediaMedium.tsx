@@ -31,6 +31,7 @@ export default function MediaMedium({
   selected,
   priority,
   prefetch,
+  replace,
   className,
   onVisible,
   debugColor,
@@ -50,6 +51,7 @@ export default function MediaMedium({
   selected?: boolean
   priority?: boolean
   prefetch?: boolean
+  replace?: boolean
   className?: string
   onVisible?: () => void
   debugColor?: boolean
@@ -136,9 +138,14 @@ export default function MediaMedium({
         className,
       )}
       prefetch={prefetch}
+      replace={replace}
       scroll={false}
       flickerThreshold={0}
-      onClick={event => rememberMediaScrollPosition(photo.id, event.currentTarget)}
+      onClick={event => {
+        if (!replace) {
+          rememberMediaScrollPosition(photo.id, event.currentTarget);
+        }
+      }}
       onPointerEnter={event => {
         if (event.pointerType === 'mouse') {
           setIsHovered(true);
