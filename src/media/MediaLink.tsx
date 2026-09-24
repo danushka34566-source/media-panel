@@ -7,6 +7,7 @@ import { AnimationConfig } from '../components/AnimateItems';
 import { useAppState } from '@/app/AppState';
 import { useRouter } from 'next/navigation';
 import { pathForMedia } from '@/app/path';
+import type { SortBy } from './sort';
 import { clsx } from 'clsx/lite';
 import LinkWithStatus from '@/components/LinkWithStatus';
 import Spinner from '@/components/Spinner';
@@ -24,6 +25,7 @@ export default function MediaLink({
   children: _children,
   loaderType = 'spinner',
   onNavigateStart,
+  sortBy,
   ...categories
 }: {
   ref?: RefObject<HTMLAnchorElement | null>
@@ -36,6 +38,7 @@ export default function MediaLink({
   children?: ReactNode
   loaderType?: 'spinner' | 'badge'
   onNavigateStart?: () => void
+  sortBy?: SortBy
 } & MediaSetCategory) {
   const { setNextMediaAnimation } = useAppState();
   const router = useRouter();
@@ -44,7 +47,7 @@ export default function MediaLink({
     Omit<ComponentProps<typeof LinkWithStatus>, 'children'> |
     undefined = photo
       ? (() => {
-        const href = pathForMedia({ photo, ...categories });
+        const href = pathForMedia({ photo, sortBy, ...categories });
         return {
           ref,
           className,

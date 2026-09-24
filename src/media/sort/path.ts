@@ -119,6 +119,17 @@ export const hasExplicitMediaSort = (pathname: string) => {
     Boolean(sortType && sortOrder);
 };
 
+export const getFeedSortByFromPath = (pathname: string): SortBy | undefined => {
+  if (hasExplicitMediaSort(pathname)) {
+    return getPathSortComponents(pathname).sortBy;
+  }
+  return pathname === '/' || pathname === '/grid' ||
+    pathname === '/full' || pathname === PATH_GRID_INFERRED ||
+    pathname === PATH_FULL_INFERRED
+    ? USER_DEFAULT_SORT_BY
+    : undefined;
+};
+
 export const getPathForSortBy = (pathname: string, sortBy: SortBy) => {
   const { gridOrFull } = getPathSortComponents(pathname);
   const { sortType, sortOrder } = getSortByComponents(sortBy);
@@ -171,14 +182,9 @@ export const getSortStateFromPath = (
     return `/${gridOrFull}/${sortType}/${sortOrder}`;
   };
 
-  // Core paths
-  // (reset custom sort when clicking grid/full a second time)
-  const pathGrid = _gridOrFull === 'grid' && sortBy !== USER_DEFAULT_SORT_BY
-    ? PATH_GRID_INFERRED
-    : getPath({ gridOrFull: 'grid', sortType, sortOrder });
-  const pathFull = _gridOrFull === 'full' && sortBy !== USER_DEFAULT_SORT_BY
-    ? PATH_FULL_INFERRED
-    : getPath({ gridOrFull: 'full', sortType, sortOrder });
+  // Keep the current order while changing between grid and full views.
+  const pathGrid = getPath({ gridOrFull: 'grid', sortType, sortOrder });
+  const pathFull = getPath({ gridOrFull: 'full', sortType, sortOrder });
 
   // Sort toggle path
   const pathSortToggle =

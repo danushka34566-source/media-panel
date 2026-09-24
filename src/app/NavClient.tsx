@@ -21,7 +21,7 @@ import {
   GRID_HOMEPAGE_ENABLED,
   NAV_CAPTION,
 } from './config';
-import { useRef, useState, useTransition } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import useStickyNav from './useStickyNav';
 import { useAppState } from '@/app/AppState';
 import { signOutAction } from '@/auth/actions';
@@ -38,6 +38,7 @@ import LinkWithStatus from '@/components/LinkWithStatus';
 import Spinner from '@/components/Spinner';
 import type { ReactNode } from 'react';
 import { motion } from 'framer-motion';
+import { toastWarning } from '@/toast';
 
 const NAV_HEIGHT_CLASS = NAV_CAPTION
   ? 'min-h-[4rem] sm:min-h-[5rem]'
@@ -59,7 +60,8 @@ export default function NavClient({
   }
 }) {
   const ref = useRef<HTMLElement>(null);
-  const [isSigningOut, startSignOutTransition] = useTransition();
+  const [activeAvatarAction, setActiveAvatarAction] = useState<string>();
+  const isSigningOut = activeAvatarAction === 'sign-out';
 
   const pathname = usePathname();
   const showNav = !isPathSignIn(pathname);
@@ -100,31 +102,47 @@ export default function NavClient({
       }
     : undefined;
   const effectiveUser = (
-    isSigningOut || (!isCheckingAuth && !isUserSignedIn && !hasHydratedUser)
+    !isCheckingAuth && !isUserSignedIn && !hasHydratedUser
   ) ? undefined : user ?? hydratedUser;
   const isSignedIn = Boolean(effectiveUser?.email || effectiveUser?.name);
   const avatarLabel = effectiveUser?.name || effectiveUser?.email || 'Sign in';
   const [isAvatarMenuOpen, setIsAvatarMenuOpen] = useState(false);
   const [isAdminMenuOpen, setIsAdminMenuOpen] = useState(false);
+  useEffect(() => {
+    // The menu stays visible for its selected spinner until navigation lands.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setIsAvatarMenuOpen(false);
+    setActiveAvatarAction(undefined);
+  }, [pathname]);
   const renderAvatarMenuLink = (
     href: string,
     label: string,
     icon: ReactNode,
-  ) => <DropdownMenu.Item asChild>
+  ) => <DropdownMenu.Item
+    asChild
+    disabled={Boolean(activeAvatarAction) && activeAvatarAction !== href}
+    onSelect={event => event.preventDefault()}
+  >
     <LinkWithStatus
       href={href}
       flickerThreshold={0}
+      onClick={() => {
+        if (pathname === href) {
+          setIsAvatarMenuOpen(false);
+        } else {
+          setActiveAvatarAction(href);
+        }
+      }}
+      aria-busy={activeAvatarAction === href}
       className="flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm hover:bg-dim"
     >
       {({ isLoading }) => <>
-        <span className={clsx(
-          'flex size-4 items-center justify-center transition-opacity',
-          isLoading && 'opacity-0',
-        )}>
-          {icon}
+        <span className="flex size-4 items-center justify-center">
+          {activeAvatarAction === href || isLoading
+            ? <Spinner size={14} color="dim" />
+            : icon}
         </span>
         <span className="grow">{label}</span>
-        {isLoading && <Spinner size={14} color="dim" />}
       </>}
     </LinkWithStatus>
   </DropdownMenu.Item>;
@@ -134,6 +152,7 @@ export default function NavClient({
     onOpenChange={isOpen => {
       setIsAvatarMenuOpen(isOpen);
       if (isOpen) { setIsAdminMenuOpen(false); }
+      if (!isOpen && !isSigningOut) { setActiveAvatarAction(undefined); }
     }}
   >
     <DropdownMenu.Trigger asChild>
@@ -241,44 +260,41 @@ export default function NavClient({
               <IoPersonOutline aria-hidden="true" size={16} className="text-dim" />,
             )}
             <DropdownMenu.Separator className="my-1 h-px bg-medium" />
-            <DropdownMenu.Item asChild>
+            <DropdownMenu.Item
+              asChild
+              onSelect={event => event.preventDefault()}
+            >
               <button
                 type="button"
-                disabled={isSigningOut}
+                disabled={Boolean(activeAvatarAction)}
                 aria-busy={isSigningOut}
                 className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-sm text-red-500 hover:bg-red-500/10"
-                onClick={() => startSignOutTransition(async () => {
-                  await signOutAction();
-                  clearAuthStateAndRedirectIfNecessary?.();
-                })}
+                onClick={() => {
+                  setActiveAvatarAction('sign-out');
+                  void signOutAction().then(() => {
+                    clearAuthStateAndRedirectIfNecessary?.();
+                    setIsAvatarMenuOpen(false);
+                    setActiveAvatarAction(undefined);
+                  }).catch(() => {
+                    setActiveAvatarAction(undefined);
+                    toastWarning('Could not sign out. Please try again.');
+                  });
+                }}
               >
                 <span className="flex size-4 items-center justify-center">
                   {isSigningOut
                     ? <Spinner size={14} color="dim" />
                     : <IconSignOut aria-hidden="true" size={16} />}
                 </span>
-                <span>{isSigningOut ? 'Signing out...' : 'Sign out'}</span>
+                <span>Sign out</span>
               </button>
             </DropdownMenu.Item>
           </>
-          : <DropdownMenu.Item asChild>
-            <LinkWithStatus
-              href="/sign-in"
-              flickerThreshold={0}
-              className="flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm hover:bg-dim"
-            >
-              {({ isLoading }) => <>
-                <span className={clsx(
-                  'flex size-4 items-center justify-center transition-opacity',
-                  isLoading && 'opacity-0',
-                )}>
-                  <IoPersonOutline aria-hidden="true" size={16} className="text-dim" />
-                </span>
-                <span className="grow">Sign in</span>
-                {isLoading && <Spinner size={14} color="dim" />}
-              </>}
-            </LinkWithStatus>
-          </DropdownMenu.Item>}
+          : renderAvatarMenuLink(
+            '/sign-in',
+            'Sign in',
+            <IoPersonOutline aria-hidden="true" size={16} className="text-dim" />,
+          )}
       </DropdownMenu.Content>
     </DropdownMenu.Portal>
   </DropdownMenu.Root>;

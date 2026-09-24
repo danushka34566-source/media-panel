@@ -13,6 +13,8 @@ import { MediaSetCategory } from '../category';
 import ImageMedium from '@/components/image/ImageMedium';
 import { clsx } from 'clsx/lite';
 import { pathForMedia } from '@/app/path';
+import { usePathname } from 'next/navigation';
+import { getFeedSortByFromPath } from './sort/path';
 import { useRef, useState } from 'react';
 import useVisibility from '@/utility/useVisibility';
 import LinkWithStatus from '@/components/LinkWithStatus';
@@ -25,6 +27,7 @@ import { rememberMediaScrollPosition } from './useMediaScrollRestoration';
 
 export default function MediaMedium({
   photo,
+  sortBy: sortByProp,
   selected,
   priority,
   prefetch,
@@ -43,6 +46,7 @@ export default function MediaMedium({
   ...categories
 }: {
   photo: Media
+  sortBy?: import('./sort').SortBy
   selected?: boolean
   priority?: boolean
   prefetch?: boolean
@@ -60,6 +64,8 @@ export default function MediaMedium({
   hoverPreviewEnabled?: boolean
 } & MediaSetCategory) {
   const ref = useRef<HTMLAnchorElement>(null);
+  const pathname = usePathname();
+  const sortBy = sortByProp ?? getFeedSortByFromPath(pathname);
   const [isHovered, setIsHovered] = useState(false);
   const [videoFailedMediaId, setVideoFailedMediaId] = useState<string>();
   const [posterFailedMediaId, setPosterFailedMediaId] = useState<string>();
@@ -119,7 +125,7 @@ export default function MediaMedium({
   return (
     <LinkWithStatus
       ref={ref}
-      href={pathForMedia({ photo, ...categories })}
+      href={pathForMedia({ photo, sortBy, ...categories })}
       data-media-id={photo.id}
       className={clsx(
         'group',

@@ -23,8 +23,10 @@ import {
   type DetailMainVideoPlayback,
 } from './detail-video-playback';
 import PersonalFavoriteButton from './PersonalFavoriteButton';
+import type { SortBy } from './sort';
 
 const WIDE_GRID_ASPECT_RATIO = 16 / 9;
+const INITIAL_GRID_IMAGE_COUNT = 8;
 const SMART_PREVIEW_ACTIVATION_EVENT = 'media-grid-smart-preview-activation';
 
 type SmartPreviewActivationDetail = {
@@ -44,6 +46,7 @@ const getDocumentLayoutTop = (card: HTMLElement) => {
 export default function MediaGrid({
   photos,
   selectedMedia,
+  sortBy,
   prioritizeInitialMedia,
   className,
   classNameMedia,
@@ -66,6 +69,7 @@ export default function MediaGrid({
 }: {
   photos: Media[]
   selectedMedia?: Media
+  sortBy?: SortBy
   prioritizeInitialMedia?: boolean
   className?: string
   classNameMedia?: string
@@ -248,8 +252,9 @@ export default function MediaGrid({
         )}
         type={animate === false ? 'none' : undefined}
         canStart={canStart}
-        duration={0.7}
+        duration={0.45}
         staggerDelay={0.04}
+        animationItemLimit={INITIAL_GRID_IMAGE_COUNT}
         distanceOffset={40}
         removeTransformAfterAnimation
         animateOnFirstLoadOnly={animateOnFirstLoadOnly}
@@ -268,7 +273,8 @@ export default function MediaGrid({
               // offscreen card subtree on each compositor frame. The aspect
               // ratio below supplies stable geometry while skipped cards are
               // outside the viewport.
-              '[content-visibility:auto] [contain-intrinsic-size:240px]',
+              index >= INITIAL_GRID_IMAGE_COUNT &&
+                '[content-visibility:auto] [contain-intrinsic-size:240px]',
             )}
             style={{
               ...(
@@ -293,6 +299,7 @@ export default function MediaGrid({
               )}
               {...{
                 photo,
+                sortBy,
                 ...categories,
                 enableVideoPreview: enableVideoPreviews,
                 // Limit route prefetching to the first viewport. Prefetching
@@ -305,7 +312,7 @@ export default function MediaGrid({
                 // hero poster or the first frame during navigation.
                 priority: undefined,
                 initiallyLoadPreviewImage:
-                  prioritizeInitialMedia && index < 2,
+                  prioritizeInitialMedia && index < INITIAL_GRID_IMAGE_COUNT,
                 preloadVideoPreview: !areSmartPreviewsSuspended &&
                   !mountPreviewsOnlyWhenVisible &&
                   shouldPreloadGridPreview(

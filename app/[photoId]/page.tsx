@@ -12,12 +12,27 @@ import {
 } from '@/app/path';
 import MediaDetailPage from '@/media/MediaDetailPage';
 import { getMediaCached, getMediaNearIdCached } from '@/media/cache';
+import { getEffectiveMediaSortOptions } from '@/media/sort/preference';
+import { SORT_BY_OPTIONS, type SortBy } from '@/media/sort';
 import { cache } from 'react';
-import { staticallyGenerateMediaIfConfigured } from '@/app/static';
 
 export const maxDuration = 60;
+// Nearby cards and next/previous navigation depend on the signed-in account.
+export const dynamic = 'force-dynamic';
 
-const getMediaNearIdCachedCached = cache(async (photoId: string) => {
+const getEffectiveMediaSortOptionsCached = cache(getEffectiveMediaSortOptions);
+const resolveSortBy = async (searchParams: MediaProps['searchParams']) => {
+  const { sort } = await searchParams;
+  if (SORT_BY_OPTIONS.some(option => option.sortBy === sort)) {
+    return sort as SortBy;
+  }
+  return (await getEffectiveMediaSortOptionsCached()).sortBy;
+};
+
+const getMediaNearIdCachedCached = cache(async (
+  photoId: string,
+  sortBy: SortBy,
+) => {
   // The near-id query already returns the primary item. Avoid the old
   // getMediaCached + getMediaNearIdCached serial pair on every detail hit;
   // that extra database round trip was the dominant delay during next/prev
@@ -28,6 +43,7 @@ const getMediaNearIdCachedCached = cache(async (photoId: string) => {
       photoId, {
         limit: (RELATED_GRID_MEDIA_TO_SHOW * 2) + 1,
         excludeFromFeeds: true,
+        sortBy,
       },
     );
     if (nearby.photo) { return nearby; }
@@ -50,20 +66,18 @@ const getMediaNearIdCachedCached = cache(async (photoId: string) => {
   };
 });
 
-export const generateStaticParams = staticallyGenerateMediaIfConfigured(
-  'page',
-);
-export const dynamicParams = true;
-
 interface MediaProps {
   params: Promise<{ photoId: string }>
+  searchParams: Promise<{ sort?: string }>
 }
 
 export async function generateMetadata({
   params,
+  searchParams,
 }:MediaProps): Promise<Metadata> {
   const { photoId } = await params;
-  const { photo } = await getMediaNearIdCachedCached(photoId);
+  const sortBy = await resolveSortBy(searchParams);
+  const { photo } = await getMediaNearIdCachedCached(photoId, sortBy);
 
   if (!photo) { return {}; }
 
@@ -93,14 +107,16 @@ export async function generateMetadata({
 
 export default async function MediaPage({
   params,
+  searchParams,
 }: MediaProps) {
   const { photoId } = await params;
+  const sortBy = await resolveSortBy(searchParams);
   const { photo, photos, photosGrid } =
-    await getMediaNearIdCachedCached(photoId);
+    await getMediaNearIdCachedCached(photoId, sortBy);
 
   if (!photo) { redirect(PATH_ROOT); }
 
   return (
-    <MediaDetailPage {...{ photo, photos, photosGrid }} />
+    <MediaDetailPage {...{ photo, photos, photosGrid, sortBy }} />
   );
 }

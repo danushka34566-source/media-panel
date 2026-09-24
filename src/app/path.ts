@@ -163,6 +163,7 @@ export const PATHS_TO_CACHE = [
 
 type MediaPathParams  = { photo: MediaOrMediaId } & MediaSetCategory & {
   showRecipe?: boolean
+  sortBy?: import('@/media/sort').SortBy
 };
 
 const getMediaId = (photoOrMediaId: MediaOrMediaId) =>
@@ -235,6 +236,7 @@ export const pathForMedia = ({
   film,
   focal,
   recipe,
+  sortBy,
 }: MediaPathParams) => {
   // Default to root (no trailing slash) to avoid generating //{id}
   let prefix = '';
@@ -269,7 +271,8 @@ export const pathForMedia = ({
     prefix = pathForFocalLength(focal);
   }
 
-  return `${prefix}/${getMediaId(photo)}`;
+  const path = `${prefix}/${getMediaId(photo)}`;
+  return sortBy ? `${path}?sort=${encodeURIComponent(sortBy)}` : path;
 };
 
 export const pathForYear = (year: string) =>

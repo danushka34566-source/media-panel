@@ -19,7 +19,9 @@ jest.mock('../src/app/config', () => ({
 }));
 
 import {
+  getFeedSortByFromPath,
   getPathForSortBy,
+  getSortStateFromPath,
   hasExplicitMediaSort,
 } from '../src/media/sort/path';
 
@@ -45,5 +47,19 @@ describe('media sort paths', () => {
     expect(getPathForSortBy('/full', 'createdAtAsc')).toBe(
       '/full/uploaded-at/ascending',
     );
+  });
+
+  it('keeps the selected order across grid, full, and detail links', () => {
+    expect(getFeedSortByFromPath('/grid/uploaded-at/ascending'))
+      .toBe('createdAtAsc');
+    expect(getFeedSortByFromPath('/full/uploaded-at/ascending'))
+      .toBe('createdAtAsc');
+    expect(getFeedSortByFromPath('/tag/example/media-id')).toBeUndefined();
+
+    const state = getSortStateFromPath('/grid/uploaded-at/ascending', {
+      sort: { newestFirst: 'Newest', oldestFirst: 'Oldest' },
+    } as any);
+    expect(state.pathFull).toBe('/full/uploaded-at/ascending');
+    expect(state.pathGrid).toBe('/grid/uploaded-at/ascending');
   });
 });

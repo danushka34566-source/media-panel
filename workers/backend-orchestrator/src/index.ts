@@ -447,7 +447,10 @@ const revalidateMediaPanel = async (env: Env, photoId?: string) => {
   const secret = (
     env.AUTOMATION_API_SECRET || env.BACKEND_ORCHESTRATOR_SHARED_SECRET
   )?.trim();
-  if (!baseUrl || !secret) { return; }
+  if (!baseUrl || !secret) {
+    console.warn('Media panel revalidation is not configured', { photoId });
+    return;
+  }
 
   await fetch(`${baseUrl}/api/processing/revalidate`, {
     method: 'POST',
@@ -457,7 +460,19 @@ const revalidateMediaPanel = async (env: Env, photoId?: string) => {
     },
     body: JSON.stringify(photoId ? { photoId } : {}),
     signal: AbortSignal.timeout(REGISTRATION_STORAGE_TIMEOUT_MS),
-  }).catch(() => undefined);
+  }).then(response => {
+    if (!response.ok) {
+      console.warn('Media panel revalidation failed', {
+        photoId,
+        status: response.status,
+      });
+    }
+  }).catch(error => {
+    console.warn('Media panel revalidation request failed', {
+      photoId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  });
 };
 
 const driveHeaders = (env: Env, extras?: Record<string, string>) => ({

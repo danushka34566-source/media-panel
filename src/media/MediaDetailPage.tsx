@@ -25,11 +25,14 @@ import RecentsHeader from '@/recents/RecentsHeader';
 import AlbumHeader from '@/album/AlbumHeader';
 import { pathForMedia } from '@/app/path';
 import MediaDetailScrollReset from './MediaDetailScrollReset';
+import type { SortBy } from './sort';
+import MediaDetailStatusRefresh from './MediaDetailStatusRefresh';
 
 export default function MediaDetailPage({
   photo,
   photos,
   photosGrid,
+  sortBy,
   recent,
   year,
   camera,
@@ -53,6 +56,7 @@ export default function MediaDetailPage({
   photo: Media
   photos: Media[]
   photosGrid?: Media[]
+  sortBy?: SortBy
   indexNumber?: number
   count?: number
   dateRange?: MediaDateRangePostgres
@@ -171,20 +175,25 @@ export default function MediaDetailPage({
     focal,
   };
   const swipePreviousPath = previousMedia
-    ? pathForMedia({ photo: previousMedia, ...categoryPathParams })
+    ? pathForMedia({ photo: previousMedia, sortBy, ...categoryPathParams })
     : undefined;
   const swipeNextPath = nextMedia
-    ? pathForMedia({ photo: nextMedia, ...categoryPathParams })
+    ? pathForMedia({ photo: nextMedia, sortBy, ...categoryPathParams })
     : undefined;
 
   return (
     <div>
+      {photo.mediaType === 'video' &&
+        (photo.transcodeStatus === 'pending' ||
+          photo.transcodeStatus === 'processing') &&
+        <MediaDetailStatusRefresh />}
       <MediaDetailScrollReset />
       <AppGrid
         className="mt-1.5 mb-6"
         contentMain={customHeader ?? <MediaHeader
           selectedMedia={photo}
           photos={photos}
+          sortBy={sortBy}
           recipe={recipe}
           hasAiTextGeneration={AI_CONTENT_GENERATION_ENABLED}
         />}
@@ -244,6 +253,7 @@ export default function MediaDetailPage({
       <MediaDetailRelated
         photos={photosGrid ?? photos}
         selectedMedia={photo}
+        sortBy={sortBy}
         {...categoryPathParams}
       />
     </div>

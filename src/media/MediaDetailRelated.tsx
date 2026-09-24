@@ -1,11 +1,11 @@
 'use client';
 
-import { useEffect, useState, useSyncExternalStore } from 'react';
+import { useSyncExternalStore } from 'react';
 import AppGrid from '@/components/AppGrid';
-import { getMediaPreviewUrl, Media } from '.';
+import { getDisplayTranscodeStatus, getMediaPreviewUrl, Media } from '.';
 import MediaGrid from './MediaGrid';
 import { MediaSetCategory } from '../category';
-import { MediaGridSkeleton } from '@/components/PageSkeletons';
+import type { SortBy } from './sort';
 import {
   isDetailPreviewStartupComplete,
   subscribeDetailPreviewStartup,
@@ -14,14 +14,17 @@ import {
 export default function MediaDetailRelated({
   photos,
   selectedMedia,
+  sortBy,
   ...categories
 }: {
   photos: Media[]
   selectedMedia?: Media
+  sortBy?: SortBy
 } & MediaSetCategory) {
-  const [isReady, setIsReady] = useState(false);
   const waitsForMainPreview = Boolean(
-    selectedMedia && getMediaPreviewUrl(selectedMedia),
+    selectedMedia &&
+    !getDisplayTranscodeStatus(selectedMedia) &&
+    getMediaPreviewUrl(selectedMedia),
   );
   const isMainPreviewPrepared = useSyncExternalStore(
     onStoreChange => subscribeDetailPreviewStartup(onStoreChange),
@@ -34,26 +37,10 @@ export default function MediaDetailRelated({
   const canStartRelatedPreviews = !waitsForMainPreview ||
     isMainPreviewPrepared;
 
-  useEffect(() => {
-    // Let the detail hero's initial high-priority poster/preview request reach
-    // the browser first. Start related cards on the next frame rather than
-    // waiting for idle time, so their images and previews load in parallel.
-    const startRelated = () => setIsReady(true);
-    if (typeof window.requestAnimationFrame === 'function') {
-      const frame = window.requestAnimationFrame(startRelated);
-      return () => window.cancelAnimationFrame(frame);
-    }
-    const timeout = window.setTimeout(startRelated, 0);
-    return () => window.clearTimeout(timeout);
-  }, []);
-
-  if (!isReady) {
-    return <MediaGridSkeleton withSidebar={false} />;
-  }
-
   return <AppGrid contentMain={<MediaGrid
     photos={photos}
     selectedMedia={selectedMedia}
+    sortBy={sortBy}
     {...categories}
     // The hero is the only priority image. Related posters stay mounted but
     // use normal native loading order; no small card competes with the main

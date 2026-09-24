@@ -19,6 +19,7 @@ import ResponsiveText from '@/components/primitives/ResponsiveText';
 import { useAppState } from '@/app/AppState';
 import { GRID_GAP_CLASSNAME } from '@/components';
 import { useAppText } from '@/i18n/state/client';
+import type { SortBy } from './sort';
 
 export default function MediaHeader({
   photos,
@@ -33,6 +34,7 @@ export default function MediaHeader({
   richContent,
   hasAiTextGeneration,
   includeShareButton,
+  sortBy,
   ...categories
 }: {
   photos: Media[]
@@ -47,6 +49,7 @@ export default function MediaHeader({
   richContent?: ReactNode
   hasAiTextGeneration: boolean
   includeShareButton?: boolean
+  sortBy?: SortBy
 } & MediaSetCategory) {
   const { isGridHighDensity } = useAppState();
 
@@ -73,6 +76,7 @@ export default function MediaHeader({
       photo: selectedMedia,
       photos,
       hasAiTextGeneration,
+      sortBy,
       ...categories,
     }} />;
 

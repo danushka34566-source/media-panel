@@ -33,6 +33,7 @@ import { syncMediaConfirmText } from '@/admin/confirm';
 import { useAppText } from '@/i18n/state/client';
 import usePersonalFavorite from '@/auth/usePersonalFavorite';
 import { usePathname } from 'next/navigation';
+import type { SortBy } from './sort';
 import Spinner from '@/components/Spinner';
 import {
   announceDetailNavigationStart,
@@ -48,12 +49,14 @@ export default function MediaPrevNextActions({
   photos = [],
   className,
   hasAiTextGeneration,
+  sortBy,
   ...categories
 }: {
   photo?: Media
   photos?: Media[]
   className?: string
   hasAiTextGeneration: boolean
+  sortBy?: SortBy
 } & MediaSetCategory) {
   const {
     canDelete,
@@ -147,11 +150,11 @@ export default function MediaPrevNextActions({
   const nextMedia = photo ? getNextMedia(photo, photos) : undefined;
 
   const pathPrevious = previousMedia
-    ? pathForMedia({ photo: previousMedia, ...categories })
+    ? pathForMedia({ photo: previousMedia, sortBy, ...categories })
     : undefined;
 
   const pathNext = nextMedia
-    ? pathForMedia({ photo: nextMedia, ...categories })
+    ? pathForMedia({ photo: nextMedia, sortBy, ...categories })
     : undefined;
 
   const onKeyDown = useCallback((e: KeyboardEvent) => {
@@ -269,6 +272,7 @@ export default function MediaPrevNextActions({
         }}>
           <MediaLink
             {...categories}
+            sortBy={sortBy}
             ref={refPrevious}
             photo={previousMedia}
             nextMediaAnimation={ANIMATION_RIGHT}
@@ -297,6 +301,7 @@ export default function MediaPrevNextActions({
         }}>
           <MediaLink
             {...categories}
+            sortBy={sortBy}
             ref={refNext}
             photo={nextMedia}
             nextMediaAnimation={ANIMATION_LEFT}

@@ -40,10 +40,15 @@ import {
   PATH_GRID,
   PATH_ROOT,
   PREFIX_CAMERA,
+  PREFIX_CATEGORY,
+  PREFIX_CONTENT_TYPE,
   PREFIX_FILM,
   PREFIX_FOCAL_LENGTH,
   PREFIX_LENS,
+  PREFIX_PERFORMER,
   PREFIX_RECIPE,
+  PREFIX_RECENTS,
+  PREFIX_STUDIO,
   PREFIX_TAG,
   pathForMedia,
   PREFIX_YEAR,
@@ -51,6 +56,8 @@ import {
 } from '@/app/path';
 import { createLensKey } from '@/lens';
 import { USER_DEFAULT_SORT_OPTIONS } from '@/app/config';
+import { getDisplayTranscodeStatus } from './processing-status';
+import { getRelatedMediaWindow } from './related-media-window';
 
 // Table key
 export const KEY_MEDIA     = 'photos';
@@ -130,8 +137,8 @@ const getCacheOptions = (
   ...(revalidate === undefined ? {} : { revalidate }),
 });
 
-export const revalidateMediaKey = () =>
-  revalidateTag(KEY_MEDIA, 'max');
+export const revalidateMediaKey = (immediate = false) =>
+  revalidateTag(KEY_MEDIA, immediate ? { expire: 0 } : 'max');
 
 export const revalidateAlbumsKey = () =>
   revalidateTag(KEY_ALBUMS, 'max');
@@ -196,8 +203,10 @@ export const revalidateAllKeysAndPaths = () => {
 
 export const revalidateMedia = (photoId: string) => {
   // Tags
-  revalidateMediaKey();
-  revalidateTag(photoId, 'max');
+  // Processing callbacks must expire the old status before the next detail
+  // request. Stale-while-revalidate would serve 'pending' one more time.
+  revalidateMediaKey(true);
+  revalidateTag(photoId, { expire: 0 });
   revalidateYearsKey();
   revalidateCamerasKey();
   revalidateLensesKey();
@@ -216,11 +225,16 @@ export const revalidateMedia = (photoId: string) => {
   revalidatePath(PATH_GRID, 'layout');
   revalidatePath(PATH_FULL, 'layout');
   revalidatePath(PREFIX_CAMERA, 'layout');
+  revalidatePath(PREFIX_CATEGORY, 'layout');
+  revalidatePath(PREFIX_CONTENT_TYPE, 'layout');
   revalidatePath(PREFIX_LENS, 'layout');
   revalidatePath(PREFIX_ALBUM, 'layout');
   revalidatePath(PREFIX_TAG, 'layout');
+  revalidatePath(PREFIX_PERFORMER, 'layout');
   revalidatePath(PREFIX_FILM, 'layout');
   revalidatePath(PREFIX_RECIPE, 'layout');
+  revalidatePath(PREFIX_RECENTS, 'layout');
+  revalidatePath(PREFIX_STUDIO, 'layout');
   revalidatePath(PREFIX_FOCAL_LENGTH, 'layout');
   revalidatePath(PREFIX_YEAR, 'layout');
   revalidatePath(PATH_ADMIN, 'layout');
@@ -280,15 +294,25 @@ export const getMediaNearIdCached = (
         indexNumber: photo ? 1 : undefined,
       };
     })
-    .then(({ photos, indexNumber }) => {
-      const photo = photos.find(({ id }) => id === photoId);
-      const currentIndex = photos.findIndex(p => p.id === photoId);
-      const nextStart = currentIndex >= 0 ? currentIndex + 1 : 1;
-      const nextEnd = nextStart + RELATED_GRID_MEDIA_TO_SHOW;
+    .then(async ({ photos, indexNumber }) => {
+      const cachedPhoto = photos.find(({ id }) => id === photoId);
+      // Processing can finish after this nearby set was cached. Verify only
+      // non-ready video rows against the database before displaying status.
+      const freshPhoto = cachedPhoto && getDisplayTranscodeStatus(cachedPhoto)
+        ? await getMedia(photoId, true).catch(() => undefined)
+        : undefined;
+      const currentPhotos = freshPhoto
+        ? photos.map(photo => photo.id === photoId ? freshPhoto : photo)
+        : photos;
+      const photo = currentPhotos.find(({ id }) => id === photoId);
       return {
         photo: photo ? parseCachedMediaDates(photo) : undefined,
-        photos: parseCachedMediaItemsDates(photos),
-        photosGrid: photos.slice(nextStart, nextEnd),
+        photos: parseCachedMediaItemsDates(currentPhotos),
+        photosGrid: getRelatedMediaWindow(
+          currentPhotos,
+          photoId,
+          RELATED_GRID_MEDIA_TO_SHOW,
+        ),
         indexNumber,
       };
     });

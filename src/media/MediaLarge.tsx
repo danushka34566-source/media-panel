@@ -20,7 +20,8 @@ import AppGrid from '@/components/AppGrid';
 import ImageLarge from '@/components/image/ImageLarge';
 import { clsx } from 'clsx/lite';
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
+import { usePathname, useRouter } from 'next/navigation';
+import { getFeedSortByFromPath } from './sort/path';
 import { pathForFocalLength, pathForMedia } from '@/app/path';
 import MediaTags from '@/tag/MediaTags';
 import ShareButton from '@/share/ShareButton';
@@ -271,6 +272,7 @@ export default function MediaLarge({
 } & Pick<MediaSetCategory, 'camera' | 'lens' | 'tag' | 'category' |
   'studio' | 'performer' | 'contentType' | 'film' | 'recipe' | 'focal'>) {
   const router = useRouter();
+  const feedSortBy = getFeedSortByFromPath(usePathname());
   const isVideo = isVideoMedia(photo);
   const ref = useRef<HTMLDivElement>(null);
   const refZoomControls = useRef<ZoomControlsRef>(null);
@@ -304,8 +306,10 @@ export default function MediaLarge({
     url: string
     expiresAt: number
   }>>({});
+  const pendingFullVideoWarmups = useRef(new Set<string>());
   const [isMainVideoActuallyPlaying, setIsMainVideoActuallyPlaying] =
     useState(false);
+  const [isFullVideoFrameReady, setIsFullVideoFrameReady] = useState(false);
   const [hasStartedMainVideoPlayback, setHasStartedMainVideoPlayback] =
     useState(false);
   const [isVideoFullscreen, setIsVideoFullscreen] = useState(false);
@@ -369,6 +373,7 @@ export default function MediaLarge({
     setFullVideoDeliveryExpiresAt(undefined);
     setPreparedFullVideoDownloads({});
     setIsMainVideoActuallyPlaying(false);
+    setIsFullVideoFrameReady(false);
     setHasStartedMainVideoPlayback(false);
     setFailedGeneratedPreviewSrc(undefined);
     setReadyPreviewSrc(undefined);
@@ -587,6 +592,10 @@ export default function MediaLarge({
     if (!isVideo || !sourceUrl) { return; }
     const url = getFullVideoBridgeUrl(sourceUrl);
     if (!url.startsWith('/api/media/full-video')) { return; }
+    if (pendingFullVideoWarmups.current.has(sourceUrl)) { return; }
+    const prepared = preparedFullVideoDownloads[sourceUrl];
+    if (prepared && prepared.expiresAt > Date.now() + 10_000) { return; }
+    pendingFullVideoWarmups.current.add(sourceUrl);
     void fetch(url, {
       method: 'HEAD',
       credentials: 'same-origin',
@@ -606,8 +615,23 @@ export default function MediaLarge({
         }
         return { ...current, [sourceUrl]: { url: signedUrl, expiresAt } };
       });
-    }).catch(() => undefined);
-  }, [isVideo, photo.url]);
+    }).catch(() => undefined).finally(() => {
+      pendingFullVideoWarmups.current.delete(sourceUrl);
+    });
+  }, [isVideo, photo.url, preparedFullVideoDownloads]);
+  const getPreferredFullVideoUrl = () => {
+    const capabilityVideo = videoRef.current ?? document.createElement('video');
+    const isMobile = window.matchMedia('(pointer: coarse)').matches ||
+      window.innerWidth < 768;
+    return selectInitialVideoPlaybackUrl({
+      sourceUrl: photo.url,
+      compatibilityUrl: compatibilityPlaybackUrl,
+      isMobile,
+      nativeMatroskaSupport: capabilityVideo.canPlayType('video/x-matroska'),
+    });
+  };
+  const warmPreferredFullVideoDownload = () =>
+    warmFullVideoDownload(getPreferredFullVideoUrl());
   useAdaptiveFullVideoPlayback({
     // Zoom owns the active full-video session while open; keeping the inline
     // controller detached prevents two HLS pipelines from downloading at once.
@@ -1166,6 +1190,7 @@ export default function MediaLarge({
   const renderMediaLink =
     <MediaLink
       photo={photo}
+      sortBy={feedSortBy}
       className="font-bold uppercase grow break-all whitespace-normal"
       prefetch={prefetch}
     />;
@@ -1323,7 +1348,7 @@ export default function MediaLarge({
         style={isVideo ? { aspectRatio: mediaAspectRatio } : undefined}>
           {isVideo
             ? <>
-                {!isFullVideoPlaying && (
+                {(
                   posterSrc && shouldLoadVideoPoster && !hasPosterFailed
                     ? <div
                       key={`poster-${photo.id}`}
@@ -1347,6 +1372,9 @@ export default function MediaLarge({
                         priority={priority}
                         loading={eagerMediaImage ? 'eager' : 'lazy'}
                         fetchPriority={priority ? 'high' : 'auto'}
+                        onLoad={priority || isInPreloadRange
+                          ? warmPreferredFullVideoDownload
+                          : undefined}
                         onError={() => setPosterFailedMediaId(photo.id)}
                         showLoadingIndicator
                       />
@@ -1367,6 +1395,8 @@ export default function MediaLarge({
                         'transition-opacity duration-150',
                       !isFullVideoPlaying &&
                         !isAutomaticPreviewReady &&
+                        'opacity-0',
+                      isFullVideoPlaying && !isFullVideoFrameReady &&
                         'opacity-0',
                     )}
                     key={[
@@ -1409,12 +1439,18 @@ export default function MediaLarge({
                     }}
                     preload="auto"
                     onLoadStart={() => {
+                      if (isFullVideoPlaying) {
+                        setIsFullVideoFrameReady(false);
+                      }
                       if (!isFullVideoPlaying && isAutomaticPreviewActive) {
                         setReadyPreviewSrc(undefined);
                         setReadyPreviewActivationId(undefined);
                       }
                     }}
                     onLoadedData={() => {
+                      if (isFullVideoPlaying) {
+                        setIsFullVideoFrameReady(true);
+                      }
                       if (!isFullVideoPlaying && automaticPreviewSrc) {
                         if (broadcastDetailVideoPlayback) {
                           completeDetailPreviewStartup(photo.id);
@@ -1430,6 +1466,9 @@ export default function MediaLarge({
                       }
                     }}
                     onPlaying={() => {
+                      if (isFullVideoPlaying) {
+                        setIsFullVideoFrameReady(true);
+                      }
                       if (!isFullVideoPlaying && automaticPreviewSrc) {
                         setReadyPreviewSrc(automaticPreviewSrc);
                         setReadyPreviewActivationId(previewActivationId);
@@ -1450,6 +1489,7 @@ export default function MediaLarge({
                         if (event.currentTarget.dataset.fullVideoHlsInitializing === 'true') {
                           return;
                         }
+                        setIsFullVideoFrameReady(false);
                         setShouldUseCompatibilityPlayback(true);
                         const fallbackUrl = fullVideoCompatibilityUrl;
                         if (fallbackUrl) {
@@ -1562,35 +1602,13 @@ export default function MediaLarge({
                 'bg-black/0 hover:bg-black/10 focus:bg-black/10 transition-colors',
                 'cursor-pointer',
               )}
-              onPointerEnter={() => {
-                warmFullVideoDownload();
-                if (compatibilityPlaybackUrl) {
-                  warmFullVideoDownload(compatibilityPlaybackUrl);
-                }
-              }}
-              onPointerDown={() => {
-                warmFullVideoDownload();
-                if (compatibilityPlaybackUrl) {
-                  warmFullVideoDownload(compatibilityPlaybackUrl);
-                }
-              }}
+              onPointerEnter={warmPreferredFullVideoDownload}
+              onPointerDown={warmPreferredFullVideoDownload}
               onClick={async () => {
                 if (isPreparingFullVideo) { return; }
                 setIsPreparingFullVideo(true);
                 try {
-                  const previewVideo = videoRef.current;
-                  const capabilityVideo = previewVideo ??
-                    document.createElement('video');
-                  const isMobile = window.matchMedia('(pointer: coarse)')
-                    .matches || window.innerWidth < 768;
-                  const selectedPlaybackUrl = selectInitialVideoPlaybackUrl({
-                    sourceUrl: photo.url,
-                    compatibilityUrl: compatibilityPlaybackUrl,
-                    isMobile,
-                    nativeMatroskaSupport: capabilityVideo.canPlayType(
-                      'video/x-matroska',
-                    ),
-                  });
+                  const selectedPlaybackUrl = getPreferredFullVideoUrl();
                   const preferCompatibility = Boolean(
                     compatibilityPlaybackUrl &&
                     selectedPlaybackUrl === compatibilityPlaybackUrl,
@@ -1603,6 +1621,7 @@ export default function MediaLarge({
                     ? preparedDownload.url
                     : getFullVideoBridgeUrl(selectedPlaybackUrl);
                   flushSync(() => {
+                    setIsFullVideoFrameReady(false);
                     setShouldUseCompatibilityPlayback(preferCompatibility);
                     setFullVideoDeliveryUrl(selectedDeliveryUrl);
                     setFullVideoDeliveryExpiresAt(
@@ -1706,7 +1725,7 @@ export default function MediaLarge({
           </div>)
           : shouldWrapInLink
             ? renderMediaWithFavorite(<Link
-              href={pathForMedia({ photo })}
+              href={pathForMedia({ photo, sortBy: feedSortBy })}
               className={largeMediaContainerClassName}
               prefetch={prefetch}
             >
