@@ -12,6 +12,7 @@ const readNumber = (flag, fallback) => {
 
 const limit = readNumber('--limit', 200);
 const concurrency = Math.min(readNumber('--concurrency', 6), 32);
+const timeoutMs = readNumber('--timeout-ms', 20_000);
 const dryRun = process.argv.includes('--dry-run');
 const connectionString = process.env.POSTGRES_URL;
 if (!connectionString) { throw new Error('POSTGRES_URL is required'); }
@@ -48,7 +49,7 @@ try {
       const row = rows[nextIndex++];
       try {
         const response = await fetch(row.poster_url, {
-          signal: AbortSignal.timeout(20_000),
+          signal: AbortSignal.timeout(timeoutMs),
         });
         if (!response.ok) { throw new Error(`poster HTTP ${response.status}`); }
         const source = Buffer.from(await response.arrayBuffer());
