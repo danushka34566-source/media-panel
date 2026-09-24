@@ -253,7 +253,7 @@ const generateDerivatives = async (inputPath, fileNameBase, durationSeconds, onP
                 .run();
         });
         let inlinePoster = await fs.readFile(inlinePosterPath);
-        if (inlinePoster.length > 36_000) {
+        if (inlinePoster.length > 35_980) {
             const smallerPosterPath = path.join(tempDir, `${fileNameBase}-poster-inline-small.webp`);
             await new Promise((resolve, reject) => {
                 ffmpeg(posterPath)
@@ -269,7 +269,7 @@ const generateDerivatives = async (inputPath, fileNameBase, durationSeconds, onP
             });
             inlinePoster = await fs.readFile(smallerPosterPath);
         }
-        if (inlinePoster.length > 36_000) {
+        if (inlinePoster.length > 35_980) {
             const smallestPosterPath = path.join(tempDir, `${fileNameBase}-poster-inline-smallest.webp`);
             await new Promise((resolve, reject) => {
                 ffmpeg(posterPath)
@@ -285,8 +285,8 @@ const generateDerivatives = async (inputPath, fileNameBase, durationSeconds, onP
             });
             inlinePoster = await fs.readFile(smallestPosterPath);
         }
-        if (inlinePoster.length > 36_000) {
-            throw new Error('Inline video poster exceeds 36 KB');
+        if (inlinePoster.length > 35_980) {
+            throw new Error('Inline video poster exceeds the accepted size');
         }
         posterBlurData = `data:image/webp;base64,${inlinePoster.toString('base64')}`;
     }

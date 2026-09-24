@@ -15,6 +15,7 @@ const concurrency = Math.min(readNumber('--concurrency', 6), 32);
 const timeoutMs = readNumber('--timeout-ms', 20_000);
 const dryRun = process.argv.includes('--dry-run');
 const upgradeJpeg = process.argv.includes('--upgrade-jpeg');
+const maxInlinePosterBytes = 35_980;
 const connectionString = process.env.POSTGRES_URL;
 if (!connectionString) { throw new Error('POSTGRES_URL is required'); }
 
@@ -60,14 +61,14 @@ try {
           .resize({ width: 640, withoutEnlargement: true })
           .webp({ quality: 55, effort: 4 })
           .toBuffer();
-        if (inlinePoster.length > 36_000) {
+        if (inlinePoster.length > maxInlinePosterBytes) {
           inlinePoster = await sharp(source)
             .rotate()
             .resize({ width: 480, withoutEnlargement: true })
             .webp({ quality: 45, effort: 4 })
             .toBuffer();
         }
-        if (inlinePoster.length > 36_000) {
+        if (inlinePoster.length > maxInlinePosterBytes) {
           inlinePoster = await sharp(source)
             .rotate()
             .resize({ width: 320, withoutEnlargement: true })

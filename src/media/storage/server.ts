@@ -947,20 +947,20 @@ const convertUploadToMediaInternal = async ({
               .resize({ width: 640, withoutEnlargement: true })
               .webp({ quality: 55, effort: 4 })
               .toBuffer();
-            if (inlinePoster.length > 36_000) {
+            if (inlinePoster.length > 35_980) {
               inlinePoster = await sharp(posterBuffer)
                 .resize({ width: 480, withoutEnlargement: true })
                 .webp({ quality: 45, effort: 4 })
                 .toBuffer();
             }
-            if (inlinePoster.length > 36_000) {
+            if (inlinePoster.length > 35_980) {
               inlinePoster = await sharp(posterBuffer)
                 .resize({ width: 320, withoutEnlargement: true })
                 .webp({ quality: 40, effort: 4 })
                 .toBuffer();
             }
-            if (inlinePoster.length > 36_000) {
-              throw new Error('Inline video poster exceeds 36 KB');
+            if (inlinePoster.length > 35_980) {
+              throw new Error('Inline video poster exceeds the accepted size');
             }
             blurData = `data:image/webp;base64,${inlinePoster.toString('base64')}`;
           } catch (error) {

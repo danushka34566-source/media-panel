@@ -381,7 +381,7 @@ const generateDerivatives = async (
         .run();
     });
     let inlinePoster = await fs.readFile(inlinePosterPath);
-    if (inlinePoster.length > 36_000) {
+    if (inlinePoster.length > 35_980) {
       const smallerPosterPath = path.join(
         tempDir,
         `${fileNameBase}-poster-inline-small.webp`,
@@ -400,7 +400,7 @@ const generateDerivatives = async (
       });
       inlinePoster = await fs.readFile(smallerPosterPath);
     }
-    if (inlinePoster.length > 36_000) {
+    if (inlinePoster.length > 35_980) {
       const smallestPosterPath = path.join(
         tempDir,
         `${fileNameBase}-poster-inline-smallest.webp`,
@@ -419,8 +419,8 @@ const generateDerivatives = async (
       });
       inlinePoster = await fs.readFile(smallestPosterPath);
     }
-    if (inlinePoster.length > 36_000) {
-      throw new Error('Inline video poster exceeds 36 KB');
+    if (inlinePoster.length > 35_980) {
+      throw new Error('Inline video poster exceeds the accepted size');
     }
     posterBlurData = `data:image/webp;base64,${inlinePoster.toString('base64')}`;
   } catch (error) {
