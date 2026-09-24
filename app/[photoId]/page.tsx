@@ -11,8 +11,7 @@ import {
   absolutePathForMediaImage,
 } from '@/app/path';
 import MediaDetailPage from '@/media/MediaDetailPage';
-import { getMediaCached, getMediaNearIdCached } from '@/media/cache';
-import { getMedia } from '@/media/query';
+import { getMediaNearIdCached } from '@/media/cache';
 import { getEffectiveMediaSortOptions } from '@/media/sort/preference';
 import { SORT_BY_OPTIONS, type SortBy } from '@/media/sort';
 import { cache } from 'react';
@@ -30,46 +29,17 @@ const resolveSortBy = async (searchParams: MediaProps['searchParams']) => {
   return (await getEffectiveMediaSortOptionsCached()).sortBy;
 };
 
-const getMediaNearIdCachedCached = cache(async (
+const getMediaNearIdCachedCached = cache((
   photoId: string,
   sortBy: SortBy,
-) => {
-  // The near-id query already returns the primary item. Avoid the old
-  // getMediaCached + getMediaNearIdCached serial pair on every detail hit;
-  // that extra database round trip was the dominant delay during next/prev
-  // navigation. Excluded items are intentionally handled by the fallback so
-  // they never become part of a public neighbour list.
-  try {
-    const nearby = await getMediaNearIdCached(
-      photoId, {
-        limit: (RELATED_GRID_MEDIA_TO_SHOW * 2) + 1,
-        excludeFromFeeds: true,
-        sortBy,
-      },
-    );
-    if (nearby.photo) { return nearby; }
-  } catch (error) {
-    // A related-media query must not make the primary detail page fail.
-    // This is especially important with Supabase transaction-pooler
-    // connections, where a transient read can fail independently.
-    console.error('Failed to load related media; rendering the primary item', {
-      photoId,
-      error,
-    });
-  }
-
-  // A stale cached "missing" result must not bounce an existing item back
-  // to the grid after its card was already shown there. Check the primary
-  // row directly before treating this detail route as unavailable.
-  const photo = await getMedia(photoId).catch(() => undefined) ??
-    await getMediaCached(photoId);
-  return {
-    photo,
-    photos: [],
-    photosGrid: [],
-    indexNumber: 0,
-  };
-});
+) =>
+  getMediaNearIdCached(
+    photoId, {
+      limit: (RELATED_GRID_MEDIA_TO_SHOW * 2) + 1,
+      excludeFromFeeds: true,
+      sortBy,
+    },
+  ));
 
 interface MediaProps {
   params: Promise<{ photoId: string }>

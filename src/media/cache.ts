@@ -25,6 +25,7 @@ import {
   getPendingMediaProcessingCount,
   getMediaInNeedOfUpdateCount,
 } from '@/media/query';
+import { resolveDetailPrimary } from './detail-primary';
 import { MediaQueryOptions } from '@/db';
 import {
   parseCachedMediaDates,
@@ -283,27 +284,32 @@ export const getMediaNearIdCached = (
     cacheKeys,
     getCacheOptions(cacheKeys),
   )(photoId, options)
-    .catch(async error => {
+    .catch(error => {
       // Do not turn a transient related-items query failure into a broken
       // detail page. The primary item is independently readable and can
       // render alone.
       console.error('Failed to load related media', { photoId, error });
-      const photo = await getMediaCached(photoId);
       return {
-        photos: photo ? [photo] : [],
-        indexNumber: photo ? 1 : undefined,
+        photos: [],
+        indexNumber: undefined,
       };
     })
     .then(async ({ photos, indexNumber }) => {
-      const cachedPhoto = photos.find(({ id }) => id === photoId);
+      const resolved = await resolveDetailPrimary(
+        photoId,
+        photos,
+        () => getMedia(photoId, options.hidden === 'only' ||
+          options.hidden === 'include'),
+      );
+      const cachedPhoto = resolved.photo;
       // Processing can finish after this nearby set was cached. Verify only
       // non-ready video rows against the database before displaying status.
       const freshPhoto = cachedPhoto && getDisplayTranscodeStatus(cachedPhoto)
         ? await getMedia(photoId, true).catch(() => undefined)
         : undefined;
       const currentPhotos = freshPhoto
-        ? photos.map(photo => photo.id === photoId ? freshPhoto : photo)
-        : photos;
+        ? resolved.photos.map(photo => photo.id === photoId ? freshPhoto : photo)
+        : resolved.photos;
       const photo = currentPhotos.find(({ id }) => id === photoId);
       return {
         photo: photo ? parseCachedMediaDates(photo) : undefined,

@@ -4,6 +4,7 @@ import {
   MOBILE_COMPATIBILITY_ENCODING,
   getCanonicalMp4Strategy,
   getCompatibilityStreamStrategy,
+  needsFaststartStream,
   needsCompatibilityStream,
 } from '../src/compatibility-stream.js';
 
@@ -38,6 +39,15 @@ test('browser-safe H264/AAC MP4 sources do not need a duplicate stream', () => {
     videoCodec: 'h264',
     audioCodec: 'aac',
   }), false);
+});
+
+test('late-moov H264/AAC MP4 receives a remuxed stream', () => {
+  const metadata = { videoCodec: 'h264', audioCodec: 'aac' };
+  assert.equal(needsFaststartStream('mp4', metadata, 'tail', false), true);
+  assert.equal(needsFaststartStream('MP4', metadata, 'tail', false), true);
+  assert.equal(needsFaststartStream('mp4', metadata, 'front', false), false);
+  assert.equal(needsFaststartStream('mp4', metadata, 'unknown', false), false);
+  assert.equal(needsFaststartStream('mp4', metadata, 'tail', true), false);
 });
 
 test('incompatible audio in an MP4 still receives a safe stream', () => {

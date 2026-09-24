@@ -3,7 +3,7 @@
 
 export type PlayOptions = {
   preferPiP?: boolean;
-  preservePreviousUntilPlaying?: boolean;
+  preserveVideoUntilPlaying?: HTMLVideoElement | null;
 };
 
 class VideoPlaybackManagerImpl {
@@ -217,7 +217,7 @@ class VideoPlaybackManagerImpl {
     if (this.currentVideo && this.currentVideo !== video) {
       // Stop previously managed video and exit PiP if it had it
       await this.exitPiP();
-      if (!opts.preservePreviousUntilPlaying || wasPiPActive) {
+      if (this.currentVideo !== opts.preserveVideoUntilPlaying || wasPiPActive) {
         this.pauseVideo(this.currentVideo);
       }
     }

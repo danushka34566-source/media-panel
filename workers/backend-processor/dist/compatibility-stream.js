@@ -9,6 +9,11 @@ const MP4_VIDEO_CODECS = new Set([
 ]);
 const MOBILE_VIDEO_CODECS = new Set(['h264', 'avc1']);
 const MOBILE_AUDIO_CODECS = new Set(['aac', 'mp3']);
+/** A browser-safe MP4 still needs remuxing when moov follows mdat. */
+export const needsFaststartStream = (extension, metadata, placement, hasCanonicalMp4) => extension?.toLowerCase() === 'mp4' &&
+    !hasCanonicalMp4 &&
+    placement === 'tail' &&
+    getCompatibilityStreamStrategy(metadata) === 'remux';
 export const MOBILE_COMPATIBILITY_ENCODING = {
     crf: '20',
     preset: 'veryfast',

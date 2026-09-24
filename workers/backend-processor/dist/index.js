@@ -8,7 +8,8 @@ import ffmpeg from 'fluent-ffmpeg';
 import ffmpegStatic from 'ffmpeg-static';
 import ffprobeStatic from 'ffprobe-static';
 import { getEmbeddedSubtitleTracks, } from './subtitles.js';
-import { MOBILE_COMPATIBILITY_ENCODING, getCanonicalMp4Strategy, getCompatibilityStreamStrategy, needsCompatibilityStream, } from './compatibility-stream.js';
+import { MOBILE_COMPATIBILITY_ENCODING, getCanonicalMp4Strategy, getCompatibilityStreamStrategy, needsFaststartStream, needsCompatibilityStream, } from './compatibility-stream.js';
+import { getMp4MetadataPlacement } from './mp4-faststart.js';
 import { uploadStreamDerivative } from './multipart-upload.js';
 import { getFfmpegProgressPercent, } from './progress.js';
 const BACKEND_ORCHESTRATOR_BASE_URL = process.env.BACKEND_ORCHESTRATOR_BASE_URL ?? '';
@@ -668,9 +669,17 @@ const processJob = async (job) => {
         }
         const streamKey = `${job.fileNameBase}-stream.mp4`;
         const compatibilityStrategy = getCompatibilityStreamStrategy(metadata);
+        const mp4MetadataPlacement = job.extension.toLowerCase() === 'mp4'
+            ? await getMp4MetadataPlacement(inputPath)
+            : 'unknown';
+        const faststartStreamRequired = needsFaststartStream(job.extension, metadata, mp4MetadataPlacement, Boolean(job.canonicalOutputKey));
         const compatibilityRequired = job.canonicalOutputKey
             ? compatibilityStrategy === 'transcode'
-            : needsCompatibilityStream(job.extension, metadata);
+            : needsCompatibilityStream(job.extension, metadata) ||
+                faststartStreamRequired;
+        if (faststartStreamRequired) {
+            log('job:late-mp4-metadata', { photoId: job.photoId, streamKey });
+        }
         const rebuildCompatibilityStream = job.processingReason?.toLowerCase().includes('compatibility stream') ??
             false;
         if (compatibilityRequired &&

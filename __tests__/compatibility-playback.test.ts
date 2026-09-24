@@ -2,6 +2,7 @@ import {
   getCompatibilityPlaybackUrl,
   isMatroskaPlaybackUrl,
   selectInitialVideoPlaybackUrl,
+  selectRetryVideoPlaybackUrl,
   shouldPreferCompatibilityPlayback,
 } from '@/media/compatibility-playback';
 
@@ -56,5 +57,16 @@ describe('getCompatibilityPlaybackUrl', () => {
       compatibilityUrl: '/media/video-stream.mp4',
       nativeMatroskaSupport: '',
     })).toBe('/media/video-stream.mp4');
+  });
+
+  it('retries the original MP4 when its optional stream does not exist', () => {
+    expect(selectRetryVideoPlaybackUrl({
+      sourceUrl: '/storage/xhub/332642348989.MP4?token=abc',
+      compatibilityUrl: '/storage/xhub/332642348989-stream.mp4',
+      wasUsingCompatibility: false,
+    })).toEqual({
+      url: '/storage/xhub/332642348989.MP4?token=abc',
+      useCompatibility: false,
+    });
   });
 });

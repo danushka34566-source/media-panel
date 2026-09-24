@@ -233,7 +233,11 @@ export const useAdaptiveFullVideoPlayback = ({
       if (wasPlaying) { void video.play().catch(() => undefined); }
     };
     const onNativeError = () => {
-      if (!fallbackRef.current && !hlsInitializing) { fallbackToProgressive(); }
+      // Progressive errors belong to the caller. Retrying an optional
+      // compatibility derivative here can replace a valid original with 404.
+      if (manifestUrl && !fallbackRef.current && !hlsInitializing) {
+        fallbackToProgressive();
+      }
     };
     const events: Array<[string, EventListener]> = [
       ['play', () => {

@@ -96,6 +96,7 @@ import {
 import {
   getCompatibilityPlaybackUrl,
   selectInitialVideoPlaybackUrl,
+  selectRetryVideoPlaybackUrl,
 } from './compatibility-playback';
 import {
   DETAIL_MAIN_VIDEO_PLAYBACK_EVENT,
@@ -317,6 +318,7 @@ export default function MediaLarge({
     expiresAt: number
   }>>({});
   const pendingFullVideoWarmups = useRef(new Set<string>());
+  const unavailableFullVideoWarmups = useRef(new Map<string, number>());
   const [isMainVideoActuallyPlaying, setIsMainVideoActuallyPlaying] =
     useState(false);
   const [isFullVideoFrameReady, setIsFullVideoFrameReady] = useState(false);
@@ -552,15 +554,30 @@ export default function MediaLarge({
   const recoverFullVideoStartup = useCallback((video: HTMLVideoElement) => {
     if (video.dataset.fullVideoHlsInitializing === 'true') { return; }
     setIsFullVideoFrameReady(false);
-    const fallbackUrl = fullVideoCompatibilityUrl;
-    if (fallbackUrl && !didRetryFullVideoSourceRef.current) {
+    if (!didRetryFullVideoSourceRef.current) {
       didRetryFullVideoSourceRef.current = true;
-      setShouldUseCompatibilityPlayback(true);
-      // React and the media element must agree on the retry source. Leaving
-      // the old delivery URL in state reinstates it on the next render.
-      setFullVideoDeliveryUrl(fallbackUrl);
+      // A generated stream is optional even when the preview is ready. Retry
+      // the actual original for MP4 instead of a guessed, often missing file.
+      const retry = selectRetryVideoPlaybackUrl({
+        sourceUrl: photo.url,
+        compatibilityUrl: fullVideoCompatibilityUrl,
+        wasUsingCompatibility: shouldUseCompatibilityPlayback,
+      });
+      const retryUrl = retry.useCompatibility
+        ? retry.url
+        : getFullVideoBridgeUrl(retry.url);
+      const resumeTime = Number.isFinite(video.currentTime)
+        ? video.currentTime
+        : 0;
+      if (resumeTime > 0) {
+        video.addEventListener('loadedmetadata', () => {
+          try { video.currentTime = resumeTime; } catch {}
+        }, { once: true });
+      }
+      setShouldUseCompatibilityPlayback(retry.useCompatibility);
+      setFullVideoDeliveryUrl(retryUrl);
       setFullVideoDeliveryExpiresAt(Date.now() + FULL_VIDEO_URL_TTL_MS);
-      video.src = fallbackUrl;
+      video.src = retryUrl;
       video.load();
       void video.play().catch(() => undefined);
       return;
@@ -568,23 +585,7 @@ export default function MediaLarge({
     setIsFullVideoBuffering(false);
     setIsFullVideoPlaying(false);
     setHasFullVideoPlaybackError(true);
-  }, [fullVideoCompatibilityUrl]);
-
-  useEffect(() => {
-    if (!isFullVideoPlaying || isFullVideoFrameReady) { return; }
-    // Some failed range requests never produce a media error event. Bound the
-    // initial wait and use the same one-time source recovery as onError.
-    const timer = window.setTimeout(() => {
-      const video = fullVideoRef.current;
-      if (video) { recoverFullVideoStartup(video); }
-    }, 10_000);
-    return () => window.clearTimeout(timer);
-  }, [
-    fullVideoSourceUrl,
-    isFullVideoFrameReady,
-    isFullVideoPlaying,
-    recoverFullVideoStartup,
-  ]);
+  }, [fullVideoCompatibilityUrl, photo.url, shouldUseCompatibilityPlayback]);
 
   const renewFullVideoPlayback = useCallback(async () => {
     if (!isVideo || !isFullVideoPlaying || fullVideoRenewalRef.current) {
@@ -646,11 +647,19 @@ export default function MediaLarge({
     return () => window.clearTimeout(timer);
   }, [fullVideoDeliveryExpiresAt, isFullVideoPlaying, isVideo, renewFullVideoPlayback]);
 
-  const warmFullVideoDownload = useCallback((sourceUrl = photo.url) => {
+  const warmFullVideoDownload = useCallback((
+    sourceUrl = photo.url,
+    verifyExists = false,
+  ) => {
     if (!isVideo || !sourceUrl) { return; }
-    const url = getFullVideoBridgeUrl(sourceUrl);
+    const bridgeUrl = getFullVideoBridgeUrl(sourceUrl);
+    const url = verifyExists ? `${bridgeUrl}&verify=1` : bridgeUrl;
     if (!url.startsWith('/api/media/full-video')) { return; }
     if (pendingFullVideoWarmups.current.has(sourceUrl)) { return; }
+    if (verifyExists &&
+      (unavailableFullVideoWarmups.current.get(sourceUrl) ?? 0) > Date.now()) {
+      return;
+    }
     const prepared = preparedFullVideoDownloads[sourceUrl];
     if (prepared && prepared.expiresAt > Date.now() + 10_000) { return; }
     pendingFullVideoWarmups.current.add(sourceUrl);
@@ -659,6 +668,13 @@ export default function MediaLarge({
       credentials: 'same-origin',
       cache: 'no-store',
     }).then(response => {
+      if (verifyExists && response.status === 404) {
+        unavailableFullVideoWarmups.current.set(
+          sourceUrl,
+          Date.now() + 5 * 60_000,
+        );
+        return;
+      }
       const signedUrl = response.headers.get('x-media-signed-download');
       const expiresAt = Number(response.headers.get(
         'x-media-signed-download-expires-at',
@@ -678,16 +694,27 @@ export default function MediaLarge({
     });
   }, [isVideo, photo.url, preparedFullVideoDownloads]);
   const getPreferredFullVideoUrl = useCallback(() => {
+    const preparedCompatibility = compatibilityPlaybackUrl &&
+      preparedFullVideoDownloads[compatibilityPlaybackUrl];
+    if (preparedCompatibility &&
+      preparedCompatibility.expiresAt > Date.now() + 10_000) {
+      return compatibilityPlaybackUrl;
+    }
     const capabilityVideo = videoRef.current ?? document.createElement('video');
     return selectInitialVideoPlaybackUrl({
       sourceUrl: photo.url,
       compatibilityUrl: compatibilityPlaybackUrl,
       nativeMatroskaSupport: capabilityVideo.canPlayType('video/x-matroska'),
     });
-  }, [compatibilityPlaybackUrl, photo.url]);
-  const warmPreferredFullVideoDownload = useCallback(() =>
-    warmFullVideoDownload(getPreferredFullVideoUrl()), [
-    getPreferredFullVideoUrl,
+  }, [compatibilityPlaybackUrl, photo.url, preparedFullVideoDownloads]);
+  const warmPreferredFullVideoDownload = useCallback(() => {
+    warmFullVideoDownload(photo.url);
+    if (compatibilityPlaybackUrl) {
+      warmFullVideoDownload(compatibilityPlaybackUrl, true);
+    }
+  }, [
+    compatibilityPlaybackUrl,
+    photo.url,
     warmFullVideoDownload,
   ]);
   useAdaptiveFullVideoPlayback({
@@ -1721,7 +1748,7 @@ export default function MediaLarge({
                   if (!video) { return; }
                   await VideoPlaybackManager.requestPlay(video, {
                     preferPiP: VideoPlaybackManager.isPiPActive(),
-                    preservePreviousUntilPlaying: true,
+                    preserveVideoUntilPlaying: previewVideoRef.current,
                   });
                 } finally {
                   setIsPreparingFullVideo(false);

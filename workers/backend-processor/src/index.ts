@@ -15,8 +15,10 @@ import {
   MOBILE_COMPATIBILITY_ENCODING,
   getCanonicalMp4Strategy,
   getCompatibilityStreamStrategy,
+  needsFaststartStream,
   needsCompatibilityStream,
 } from './compatibility-stream.js';
+import { getMp4MetadataPlacement } from './mp4-faststart.js';
 import { uploadStreamDerivative } from './multipart-upload.js';
 import {
   getFfmpegProgressPercent,
@@ -862,9 +864,22 @@ const processJob = async (job: VideoJob) => {
     }
     const streamKey = `${job.fileNameBase}-stream.mp4`;
     const compatibilityStrategy = getCompatibilityStreamStrategy(metadata);
+    const mp4MetadataPlacement = job.extension.toLowerCase() === 'mp4'
+      ? await getMp4MetadataPlacement(inputPath)
+      : 'unknown';
+    const faststartStreamRequired = needsFaststartStream(
+      job.extension,
+      metadata,
+      mp4MetadataPlacement,
+      Boolean(job.canonicalOutputKey),
+    );
     const compatibilityRequired = job.canonicalOutputKey
       ? compatibilityStrategy === 'transcode'
-      : needsCompatibilityStream(job.extension, metadata);
+      : needsCompatibilityStream(job.extension, metadata) ||
+        faststartStreamRequired;
+    if (faststartStreamRequired) {
+      log('job:late-mp4-metadata', { photoId: job.photoId, streamKey });
+    }
     const rebuildCompatibilityStream =
       job.processingReason?.toLowerCase().includes('compatibility stream') ??
       false;

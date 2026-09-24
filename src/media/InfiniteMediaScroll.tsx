@@ -17,22 +17,20 @@ const SIZE_KEY_SEPARATOR = '__';
 const getSizeFromKey = (key: string) =>
   parseInt(key.split(SIZE_KEY_SEPARATOR)[1]);
 
-// SWR retains fetched page payloads while the root provider remains mounted,
-// but useSWRInfinite forgets its size when a public feed unmounts for a media
-// detail route. Remember only the number of in-memory pages so Back can read
-// those cached payloads immediately. This is deliberately not persisted to
-// browser storage: a reload starts from the normal bounded first page.
-const MAX_REMEMBERED_FEEDS = 32;
-const rememberedFeedPageCounts = new Map<string, number>();
+// Keep the pages already seen in this tab across a detail-route unmount. A
+// saved page count alone makes SWR rebuild each page before the clicked card
+// exists, so scroll restoration visibly advances through the feed.
+const MAX_REMEMBERED_FEEDS = 8;
+const rememberedFeedPages = new Map<string, Media[][]>();
 
-const rememberFeedPageCount = (key: string, count: number) => {
-  if (count <= 0) { return; }
-  rememberedFeedPageCounts.delete(key);
-  rememberedFeedPageCounts.set(key, count);
-  while (rememberedFeedPageCounts.size > MAX_REMEMBERED_FEEDS) {
-    const oldestKey = rememberedFeedPageCounts.keys().next().value;
+const rememberFeedPages = (key: string, pages: Media[][]) => {
+  if (pages.length === 0) { return; }
+  rememberedFeedPages.delete(key);
+  rememberedFeedPages.set(key, pages);
+  while (rememberedFeedPages.size > MAX_REMEMBERED_FEEDS) {
+    const oldestKey = rememberedFeedPages.keys().next().value;
     if (typeof oldestKey !== 'string') { break; }
-    rememberedFeedPageCounts.delete(oldestKey);
+    rememberedFeedPages.delete(oldestKey);
   }
 };
 
@@ -90,14 +88,18 @@ export default function InfiniteMediaScroll({
   }) => ReactNode
 } & MediaSetCategory) {
   const excludedIdsKey = excludeIds?.join(',') ?? 'none';
-  const feedKey = `${cacheKey}-${sortBy ?? 'default'}-${sortWithPriority ? 'priority' : 'plain'}-exclude-${excludedIdsKey}`;
-  const rememberedPageCountRef = useRef(
-    restoreCachedPagesOnRemount
-      ? rememberedFeedPageCounts.get(feedKey) ?? 0
-      : 0,
-  );
+  const snapshotKey = JSON.stringify({
+    cacheKey, initialOffset, itemsPerPage, sortBy, sortWithPriority,
+    excludeFromFeeds, query, camera, lens, tag, recipe, film, focal,
+    includeHiddenMedia, includeMissingStorageStatus,
+  });
+  const feedKey = `${snapshotKey}-exclude-${excludedIdsKey}`;
+  const rememberedPages = restoreCachedPagesOnRemount
+    ? rememberedFeedPages.get(snapshotKey)
+    : undefined;
+  const initialPageCountRef = useRef(Math.max(1, rememberedPages?.length ?? 0));
   const [hasStartedLoading, setHasStartedLoading] = useState(
-    startImmediately || rememberedPageCountRef.current > 0,
+    startImmediately || Boolean(rememberedPages?.length),
   );
   
   const { utility } = useAppText();
@@ -153,7 +155,8 @@ export default function InfiniteMediaScroll({
       keyGenerator,
       fetcher,
       {
-        initialSize: Math.max(1, rememberedPageCountRef.current),
+        initialSize: initialPageCountRef.current,
+        fallbackData: rememberedPages,
         persistSize: true,
         revalidateFirstPage: false,
         // A long full-page feed may contain hundreds of already-rendered
@@ -186,9 +189,9 @@ export default function InfiniteMediaScroll({
 
   useEffect(() => {
     if (restoreCachedPagesOnRemount && pages.length > 0) {
-      rememberFeedPageCount(feedKey, pages.length);
+      rememberFeedPages(snapshotKey, pages.map(page => [...page]));
     }
-  }, [feedKey, pages.length, restoreCachedPagesOnRemount]);
+  }, [pages, restoreCachedPagesOnRemount, snapshotKey]);
 
   const renderedPages = useMemo(() => {
     const seenIds = new Set<string>();

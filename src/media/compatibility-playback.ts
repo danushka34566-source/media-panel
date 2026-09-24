@@ -59,3 +59,23 @@ export const selectInitialVideoPlaybackUrl = ({
 })
   ? compatibilityUrl
   : sourceUrl;
+
+export const selectRetryVideoPlaybackUrl = ({
+  sourceUrl,
+  compatibilityUrl,
+  wasUsingCompatibility,
+}: {
+  sourceUrl: string
+  compatibilityUrl?: string
+  wasUsingCompatibility: boolean
+}) => {
+  const extension = sourceUrl.split(/[?#]/, 1)[0]?.toLowerCase();
+  const useCompatibility = Boolean(
+    compatibilityUrl && !extension?.endsWith('.mp4') &&
+    !wasUsingCompatibility,
+  );
+  return {
+    url: useCompatibility ? compatibilityUrl! : sourceUrl,
+    useCompatibility,
+  };
+};

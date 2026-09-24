@@ -17,6 +17,17 @@ const MOBILE_AUDIO_CODECS = new Set(['aac', 'mp3']);
 
 export type CompatibilityStreamStrategy = 'remux' | 'transcode';
 
+/** A browser-safe MP4 still needs remuxing when moov follows mdat. */
+export const needsFaststartStream = (
+  extension: string | undefined,
+  metadata: CompatibilityMetadata,
+  placement: 'front' | 'tail' | 'unknown',
+  hasCanonicalMp4: boolean,
+) => extension?.toLowerCase() === 'mp4' &&
+  !hasCanonicalMp4 &&
+  placement === 'tail' &&
+  getCompatibilityStreamStrategy(metadata) === 'remux';
+
 export const MOBILE_COMPATIBILITY_ENCODING = {
   crf: '20',
   preset: 'veryfast',

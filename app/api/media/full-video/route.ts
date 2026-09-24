@@ -4,6 +4,7 @@ import {
   DRIVE_STORAGE_BASE_URL,
   driveCreatePresignedDownload,
   driveKeyFromUrl,
+  driveObjectExists,
   isUrlFromDrive,
 } from '@/platforms/storage/drive-gateway';
 import {
@@ -127,8 +128,13 @@ export async function HEAD(request: NextRequest) {
     return new NextResponse(null, { status: 400, headers: NO_STORE_HEADERS });
   }
   try {
+    const key = driveKeyFromUrl(sourceUrl.toString());
+    if (request.nextUrl.searchParams.get('verify') === '1' &&
+      !await driveObjectExists(key)) {
+      return new NextResponse(null, { status: 404, headers: NO_STORE_HEADERS });
+    }
     const signedDownload = getSignedDownload(
-      driveKeyFromUrl(sourceUrl.toString()),
+      key,
       requestedDownloadName(request),
     );
     const signed = await signedDownload.value;
