@@ -50,7 +50,7 @@ export const normalizeTitle = (value?: string | null) => {
 export const INFINITE_SCROLL_GRID_INITIAL =
   process.env.NODE_ENV === 'development' ? 24 : 48;
 export const INFINITE_SCROLL_GRID_MULTIPLE =
-  process.env.NODE_ENV === 'development' ? 24 : 48;
+  process.env.NODE_ENV === 'development' ? 36 : 72;
 
 // Thumbnails below large media detail pages.
 export const RELATED_GRID_MEDIA_TO_SHOW = 12;

@@ -274,7 +274,7 @@ const GENERATED_MEDIA_SUFFIX_REGEX =
 const STALE_REGISTRATION_ERROR_MESSAGE =
   'Previous registration attempt stalled; queued for retry';
 const MISSING_UPLOAD_ERROR_PREFIX = 'Upload not found in storage';
-const WORKER_BUILD_ID = 'v125';
+const WORKER_BUILD_ID = 'v126';
 // A scheduled Worker must finish promptly. Drive copies can become visible
 // asynchronously, so persist the in-flight state and check again on the next
 // minute instead of polling long enough to lose the registration lease.
@@ -6595,8 +6595,8 @@ const completeVideoJob = async (
   const poster = formData.get('poster');
   const suppliedBlurData = formData.get('blurData');
   const blurData = typeof suppliedBlurData === 'string' &&
-    suppliedBlurData.length <= 12_000 &&
-    /^data:image\/jpeg;base64,[A-Za-z0-9+/]+={0,2}$/.test(suppliedBlurData)
+    suppliedBlurData.length <= 48_000 &&
+    /^data:image\/(?:jpeg|webp);base64,[A-Za-z0-9+/]+={0,2}$/.test(suppliedBlurData)
     ? suppliedBlurData
     : null;
   const preview = formData.get('preview');

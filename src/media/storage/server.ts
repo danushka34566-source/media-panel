@@ -943,11 +943,26 @@ const convertUploadToMediaInternal = async ({
           });
           const posterBuffer = await fs.readFile(posterFilePath);
           try {
-            const tinyPoster = await sharp(posterBuffer)
-              .resize({ width: 160, withoutEnlargement: true })
-              .jpeg({ quality: 60, mozjpeg: true })
+            let inlinePoster = await sharp(posterBuffer)
+              .resize({ width: 640, withoutEnlargement: true })
+              .webp({ quality: 55, effort: 4 })
               .toBuffer();
-            blurData = `data:image/jpeg;base64,${tinyPoster.toString('base64')}`;
+            if (inlinePoster.length > 36_000) {
+              inlinePoster = await sharp(posterBuffer)
+                .resize({ width: 480, withoutEnlargement: true })
+                .webp({ quality: 45, effort: 4 })
+                .toBuffer();
+            }
+            if (inlinePoster.length > 36_000) {
+              inlinePoster = await sharp(posterBuffer)
+                .resize({ width: 320, withoutEnlargement: true })
+                .webp({ quality: 40, effort: 4 })
+                .toBuffer();
+            }
+            if (inlinePoster.length > 36_000) {
+              throw new Error('Inline video poster exceeds 36 KB');
+            }
+            blurData = `data:image/webp;base64,${inlinePoster.toString('base64')}`;
           } catch (error) {
             console.warn('Could not prepare inline video poster', error);
           }

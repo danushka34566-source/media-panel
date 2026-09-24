@@ -59,6 +59,7 @@ export default function InfiniteMediaScroll({
   wrapMoreButtonInGrid,
   coalescePages = false,
   loadAheadViewports = 2,
+  startImmediately = false,
   useCachedMedia = true,
   restoreCachedPagesOnRemount = false,
   includeHiddenMedia,
@@ -76,6 +77,7 @@ export default function InfiniteMediaScroll({
   wrapMoreButtonInGrid?: boolean
   coalescePages?: boolean
   loadAheadViewports?: number
+  startImmediately?: boolean
   useCachedMedia?: boolean
   restoreCachedPagesOnRemount?: boolean
   includeHiddenMedia?: boolean
@@ -95,7 +97,7 @@ export default function InfiniteMediaScroll({
       : 0,
   );
   const [hasStartedLoading, setHasStartedLoading] = useState(
-    rememberedPageCountRef.current > 0,
+    startImmediately || rememberedPageCountRef.current > 0,
   );
   
   const { utility } = useAppText();

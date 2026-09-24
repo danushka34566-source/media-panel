@@ -314,7 +314,7 @@ export default function MediaGrid({
                     autoplaySmartPreviews,
                     supportsHover,
                   ),
-                onVisible: index === photos.length - 1
+                onVisible: index === Math.max(0, photos.length - 24)
                   ? onLastMediaVisible
                   : undefined,
                 autoPreviewEnabled: !areSmartPreviewsSuspended &&

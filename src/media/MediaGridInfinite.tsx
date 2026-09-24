@@ -50,6 +50,7 @@ export default function MediaGridInfinite({
       useCachedMedia={false}
       itemsPerPage={INFINITE_SCROLL_GRID_MULTIPLE}
       coalescePages
+      startImmediately
       sortBy={sortBy}
       sortWithPriority={sortWithPriority}
       excludeFromFeeds={excludeFromFeeds}
@@ -58,7 +59,7 @@ export default function MediaGridInfinite({
       // page early enough for the media query to finish before the current
       // batch ends. This only prefetches the metadata page; card images and
       // video decoders remain governed by their existing viewport queues.
-      loadAheadViewports={8}
+      loadAheadViewports={12}
       restoreCachedPagesOnRemount
       {...categories}
     >

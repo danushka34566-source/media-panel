@@ -34,7 +34,7 @@ export async function GET() {
   const githubUrl = publicUrl(TEMPLATE_REPO_URL);
 
   return NextResponse.json({
-    imageLoadingVersion: 2,
+    imageLoadingVersion: 3,
     // The worker landing page title identifies the template/application. The
     // deployed site's domain is separate metadata and must not replace it.
     title: TEMPLATE_TITLE,

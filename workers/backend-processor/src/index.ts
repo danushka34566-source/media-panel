@@ -347,7 +347,7 @@ const generateDerivatives = async (
 ) => {
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'processor-'));
   const posterPath = path.join(tempDir, `${fileNameBase}-poster.jpg`);
-  const tinyPosterPath = path.join(tempDir, `${fileNameBase}-poster-tiny.jpg`);
+  const inlinePosterPath = path.join(tempDir, `${fileNameBase}-poster-inline.webp`);
   const previewPath = path.join(tempDir, `${fileNameBase}-preview.mp4`);
   const {
     midpoint,
@@ -371,14 +371,58 @@ const generateDerivatives = async (
     await new Promise<void>((resolve, reject) => {
       ffmpeg(posterPath)
         .frames(1)
-        .outputOptions(['-vf', 'scale=160:-2', '-q:v', '8'])
-        .output(tinyPosterPath)
+        .outputOptions([
+          '-vf', 'scale=640:-2:flags=lanczos',
+          '-c:v', 'libwebp', '-quality', '55', '-preset', 'picture',
+        ])
+        .output(inlinePosterPath)
         .on('end', () => resolve())
         .on('error', reject)
         .run();
     });
-    const tinyPoster = await fs.readFile(tinyPosterPath);
-    posterBlurData = `data:image/jpeg;base64,${tinyPoster.toString('base64')}`;
+    let inlinePoster = await fs.readFile(inlinePosterPath);
+    if (inlinePoster.length > 36_000) {
+      const smallerPosterPath = path.join(
+        tempDir,
+        `${fileNameBase}-poster-inline-small.webp`,
+      );
+      await new Promise<void>((resolve, reject) => {
+        ffmpeg(posterPath)
+          .frames(1)
+          .outputOptions([
+            '-vf', 'scale=480:-2:flags=lanczos',
+            '-c:v', 'libwebp', '-quality', '45', '-preset', 'picture',
+          ])
+          .output(smallerPosterPath)
+          .on('end', () => resolve())
+          .on('error', reject)
+          .run();
+      });
+      inlinePoster = await fs.readFile(smallerPosterPath);
+    }
+    if (inlinePoster.length > 36_000) {
+      const smallestPosterPath = path.join(
+        tempDir,
+        `${fileNameBase}-poster-inline-smallest.webp`,
+      );
+      await new Promise<void>((resolve, reject) => {
+        ffmpeg(posterPath)
+          .frames(1)
+          .outputOptions([
+            '-vf', 'scale=320:-2:flags=lanczos',
+            '-c:v', 'libwebp', '-quality', '40', '-preset', 'picture',
+          ])
+          .output(smallestPosterPath)
+          .on('end', () => resolve())
+          .on('error', reject)
+          .run();
+      });
+      inlinePoster = await fs.readFile(smallestPosterPath);
+    }
+    if (inlinePoster.length > 36_000) {
+      throw new Error('Inline video poster exceeds 36 KB');
+    }
+    posterBlurData = `data:image/webp;base64,${inlinePoster.toString('base64')}`;
   } catch (error) {
     log('job:poster-placeholder-failed', {
       error: error instanceof Error ? error.message : String(error),

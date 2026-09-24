@@ -14,6 +14,7 @@ const limit = readNumber('--limit', 200);
 const concurrency = Math.min(readNumber('--concurrency', 6), 32);
 const timeoutMs = readNumber('--timeout-ms', 20_000);
 const dryRun = process.argv.includes('--dry-run');
+const upgradeJpeg = process.argv.includes('--upgrade-jpeg');
 const connectionString = process.env.POSTGRES_URL;
 if (!connectionString) { throw new Error('POSTGRES_URL is required'); }
 
@@ -34,15 +35,16 @@ const startedAt = Date.now();
 
 try {
   const { rows } = await pool.query(`
-    SELECT id, poster_url
+    SELECT id, poster_url, blur_data
     FROM media
     WHERE media_type = 'video'
       AND poster_url IS NOT NULL
-      AND (blur_data IS NULL OR blur_data = '')
+      AND (blur_data IS NULL OR blur_data = ''
+        OR ($2 AND blur_data LIKE 'data:image/jpeg;base64,%'))
     ORDER BY id
     LIMIT $1
-  `, [limit]);
-  console.log(JSON.stringify({ selected: rows.length, concurrency, dryRun }));
+  `, [limit, upgradeJpeg]);
+  console.log(JSON.stringify({ selected: rows.length, concurrency, dryRun, upgradeJpeg }));
 
   const worker = async () => {
     while (nextIndex < rows.length) {
@@ -53,14 +55,28 @@ try {
         });
         if (!response.ok) { throw new Error(`poster HTTP ${response.status}`); }
         const source = Buffer.from(await response.arrayBuffer());
-        const tiny = await sharp(source)
+        let inlinePoster = await sharp(source)
           .rotate()
-          .resize({ width: 160, withoutEnlargement: true })
-          .jpeg({ quality: 60, mozjpeg: true })
+          .resize({ width: 640, withoutEnlargement: true })
+          .webp({ quality: 55, effort: 4 })
           .toBuffer();
-        const dataUrl = `data:image/jpeg;base64,${tiny.toString('base64')}`;
-        if (dataUrl.length > 12_000) {
-          throw new Error('inline preview exceeds 12 KB');
+        if (inlinePoster.length > 36_000) {
+          inlinePoster = await sharp(source)
+            .rotate()
+            .resize({ width: 480, withoutEnlargement: true })
+            .webp({ quality: 45, effort: 4 })
+            .toBuffer();
+        }
+        if (inlinePoster.length > 36_000) {
+          inlinePoster = await sharp(source)
+            .rotate()
+            .resize({ width: 320, withoutEnlargement: true })
+            .webp({ quality: 40, effort: 4 })
+            .toBuffer();
+        }
+        const dataUrl = `data:image/webp;base64,${inlinePoster.toString('base64')}`;
+        if (dataUrl.length > 48_000) {
+          throw new Error('inline preview exceeds 48 KB');
         }
         if (dryRun) {
           skipped++;
@@ -68,8 +84,8 @@ try {
           const result = await pool.query(`
             UPDATE media SET blur_data = $1
             WHERE id = $2 AND poster_url = $3
-              AND (blur_data IS NULL OR blur_data = '')
-          `, [dataUrl, row.id, row.poster_url]);
+              AND blur_data IS NOT DISTINCT FROM $4
+          `, [dataUrl, row.id, row.poster_url, row.blur_data]);
           if (result.rowCount === 1) { updated++; }
           else { skipped++; }
         }
