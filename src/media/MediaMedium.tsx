@@ -183,7 +183,11 @@ export default function MediaMedium({
                   classNameImage="w-full h-full object-cover"
                   loading={eagerPreviewImage ? 'eager' : 'lazy'}
                   fetchPriority={priority ? 'high' : 'auto'}
-                  onError={() => setPosterFailedMediaId(photo.id)}
+                  onError={() => {
+                    if (!photo.blurData) {
+                      setPosterFailedMediaId(photo.id);
+                    }
+                  }}
                   showLoadingIndicator
                 />
                 : <div className="absolute inset-0 bg-dim" />}

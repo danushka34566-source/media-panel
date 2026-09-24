@@ -5,18 +5,21 @@ jest.mock('next/image', () => ({
   __esModule: true,
   default: ({
     alt,
+    className,
     onError,
     onLoad,
     src,
     unoptimized,
   }: {
     alt: string
+    className?: string
     onError?: React.ReactEventHandler<HTMLImageElement>
     onLoad?: React.ReactEventHandler<HTMLImageElement>
     src: string
     unoptimized?: boolean
   }) => <img
     alt={alt}
+    className={className}
     src={unoptimized
       ? src
       : `/_next/image?url=${encodeURIComponent(src)}&w=640&q=75`}
@@ -26,6 +29,30 @@ jest.mock('next/image', () => ({
 }));
 
 describe('optimized image fallback', () => {
+  it('keeps the inline poster visible when both image routes fail', () => {
+    const tiny = 'data:image/jpeg;base64,dGlueQ==';
+    const src = 'https://storage.example/broken-poster.jpg';
+    const { container } = render(<ImageWithFallback
+      src={src}
+      width={300}
+      height={200}
+      alt="Poster"
+      blurDataURL={tiny}
+      fallbackToUnoptimized
+      revealBeforeHydration
+      showLoadingIndicator
+    />);
+    const [image, placeholder] = container.querySelectorAll('img');
+    expect(placeholder.src).toBe(tiny);
+    expect(placeholder.parentElement?.className).toContain('opacity-100');
+
+    fireEvent.error(image);
+    expect(image.src).toBe(src);
+    fireEvent.error(image);
+    expect(image.className).toContain('opacity-0');
+    expect(placeholder.parentElement?.className).toContain('opacity-100');
+  });
+
   it('keeps a transformed image until it really errors', () => {
     jest.useFakeTimers();
     const { container } = render(<ImageWithFallback

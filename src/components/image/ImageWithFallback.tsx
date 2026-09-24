@@ -281,6 +281,7 @@ export default function ImageWithFallback({
         // over its placeholder immediately instead of waiting for onLoad.
         className: clsx(
           revealBeforeHydration && 'relative z-[1]',
+          didError && 'opacity-0',
           classNameImage,
         ),
         onLoad,
@@ -303,6 +304,7 @@ export default function ImageWithFallback({
           ? <img {...{
             ...props,
             src: blurDataURL,
+            loading: 'eager',
             className: clsx(
               getBlurClass(),
               classNameImage,
@@ -314,6 +316,7 @@ export default function ImageWithFallback({
           )} />}
       </div>
       {showLoadingIndicator && isLoading && !didError &&
+        !(BLUR_ENABLED && blurDataURL) &&
         <span className={clsx(
           'absolute inset-0 flex items-center justify-center',
           revealBeforeHydration ? 'z-0' : 'z-10',

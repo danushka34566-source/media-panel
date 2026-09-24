@@ -115,7 +115,11 @@ export default function MediaSmall({
               classNameImage="w-full h-full object-cover"
               loading={eagerMediaImage}
               fetchPriority={shouldLoadMediaImage ? 'auto' : 'low'}
-              onError={() => setPosterFailedMediaId(photo.id)}
+              onError={() => {
+                if (!photo.blurData) {
+                  setPosterFailedMediaId(photo.id);
+                }
+              }}
               showLoadingIndicator
             />
             : <div className="absolute inset-0 bg-black" />}

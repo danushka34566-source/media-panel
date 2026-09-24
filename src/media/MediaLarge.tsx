@@ -1360,7 +1360,7 @@ export default function MediaLarge({
                         classNameImage={clsx(
                           'h-full w-full',
                           areMediaMatted ? 'object-contain' : 'object-cover',
-                          'rounded-md bg-black',
+                          'rounded-md',
                         )}
                         src={posterSrc}
                         // Use the optimized poster when available, then fall
@@ -1376,7 +1376,11 @@ export default function MediaLarge({
                         onLoad={priority || isInPreloadRange
                           ? warmPreferredFullVideoDownload
                           : undefined}
-                        onError={() => setPosterFailedMediaId(photo.id)}
+                        onError={() => {
+                          if (!photo.blurData) {
+                            setPosterFailedMediaId(photo.id);
+                          }
+                        }}
                         showLoadingIndicator
                       />
                     </div>
