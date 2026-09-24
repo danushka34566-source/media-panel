@@ -549,6 +549,43 @@ export default function MediaLarge({
     ? getFullVideoBridgeUrl(compatibilityPlaybackUrl)
     : undefined;
 
+  const recoverFullVideoStartup = useCallback((video: HTMLVideoElement) => {
+    if (video.dataset.fullVideoHlsInitializing === 'true') { return; }
+    setIsFullVideoFrameReady(false);
+    const fallbackUrl = fullVideoCompatibilityUrl;
+    if (fallbackUrl && !didRetryFullVideoSourceRef.current) {
+      didRetryFullVideoSourceRef.current = true;
+      setShouldUseCompatibilityPlayback(true);
+      // React and the media element must agree on the retry source. Leaving
+      // the old delivery URL in state reinstates it on the next render.
+      setFullVideoDeliveryUrl(fallbackUrl);
+      setFullVideoDeliveryExpiresAt(Date.now() + FULL_VIDEO_URL_TTL_MS);
+      video.src = fallbackUrl;
+      video.load();
+      void video.play().catch(() => undefined);
+      return;
+    }
+    setIsFullVideoBuffering(false);
+    setIsFullVideoPlaying(false);
+    setHasFullVideoPlaybackError(true);
+  }, [fullVideoCompatibilityUrl]);
+
+  useEffect(() => {
+    if (!isFullVideoPlaying || isFullVideoFrameReady) { return; }
+    // Some failed range requests never produce a media error event. Bound the
+    // initial wait and use the same one-time source recovery as onError.
+    const timer = window.setTimeout(() => {
+      const video = fullVideoRef.current;
+      if (video) { recoverFullVideoStartup(video); }
+    }, 10_000);
+    return () => window.clearTimeout(timer);
+  }, [
+    fullVideoSourceUrl,
+    isFullVideoFrameReady,
+    isFullVideoPlaying,
+    recoverFullVideoStartup,
+  ]);
+
   const renewFullVideoPlayback = useCallback(async () => {
     if (!isVideo || !isFullVideoPlaying || fullVideoRenewalRef.current) {
       return fullVideoRenewalRef.current ?? Promise.resolve(false);
@@ -1534,32 +1571,7 @@ export default function MediaLarge({
                     }}
                     onError={event => {
                       if (isFullVideoElement) {
-                        if (event.currentTarget.dataset.fullVideoHlsInitializing === 'true') {
-                          return;
-                        }
-                        setIsFullVideoFrameReady(false);
-                        const fallbackUrl = fullVideoCompatibilityUrl;
-                        if (fallbackUrl && !didRetryFullVideoSourceRef.current) {
-                          didRetryFullVideoSourceRef.current = true;
-                          setShouldUseCompatibilityPlayback(true);
-                          // Keep React's source in sync with the imperative
-                          // retry. Otherwise its next render reinstates the
-                          // failed original URL and the player loops forever.
-                          setFullVideoDeliveryUrl(fallbackUrl);
-                          setFullVideoDeliveryExpiresAt(
-                            Date.now() + FULL_VIDEO_URL_TTL_MS,
-                          );
-                          const video = event.currentTarget;
-                          if (video.src !== fallbackUrl) {
-                            video.src = fallbackUrl;
-                            video.load();
-                            void video.play().catch(() => undefined);
-                          }
-                        } else {
-                          setIsFullVideoBuffering(false);
-                          setIsFullVideoPlaying(false);
-                          setHasFullVideoPlaybackError(true);
-                        }
+                        recoverFullVideoStartup(event.currentTarget);
                       } else {
                         setHasDecodedPreviewFrame(false);
                         setReadyPreviewSrc(undefined);
