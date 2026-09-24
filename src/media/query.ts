@@ -1231,20 +1231,24 @@ export const getMediaNearId = async (
     return query(
       `
         WITH deduped AS (
-          SELECT DISTINCT ON (LOWER(p.url)) p.*
+          SELECT DISTINCT ON (LOWER(p.url))
+            p.id, p.url, p.created_at, p.updated_at,
+            p.taken_at, p.priority_order, p.color_sort
           FROM media p
           ${joins ? `${joins}` : ''}
           ${wheres}
           ORDER BY LOWER(p.url), p.created_at ASC, p.updated_at ASC, p.id ASC
         ),
         twi AS (
-          SELECT deduped.*, row_number()
+          SELECT deduped.id, row_number()
           OVER (${getOrderByFromOptions(options)}) as row_number
           FROM deduped
         ),
         current AS (SELECT row_number FROM twi WHERE id = $${valuesIndex++})
-        SELECT twi.*
-        FROM twi, current
+        SELECT p.*, twi.row_number
+        FROM twi
+        CROSS JOIN current
+        JOIN media p ON p.id = twi.id
         WHERE twi.row_number BETWEEN GREATEST(current.row_number - $${valuesIndex++}, 1)
                                  AND (current.row_number + $${valuesIndex++})
         ORDER BY twi.row_number

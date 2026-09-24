@@ -37,7 +37,7 @@ export default function MediaListLarge({
           // Keep the first posters immediate. Remaining rows are promoted
           // when they approach the viewport in MediaLarge.
           initiallyLoadPreviewImage={index < 2}
-          preloadFullVideoDownload={false}
+          preloadFullVideoDownload
           prefetch={index < 3}
           prefetchRelatedLinks={prefetchFirstMediaLinks && index === 0}
           revalidateMedia={revalidateMedia}

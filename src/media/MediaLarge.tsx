@@ -57,6 +57,7 @@ import MediaDate from './MediaDate';
 import { useAppState } from '@/app/AppState';
 import { LuExpand, LuPictureInPicture, LuCaptions, LuCaptionsOff, LuChevronDown, LuChevronUp } from 'react-icons/lu';
 import LoaderButton from '@/components/primitives/LoaderButton';
+import Spinner from '@/components/Spinner';
 import Tooltip from '@/components/Tooltip';
 import ZoomControls, { ZoomControlsRef } from '@/components/image/ZoomControls';
 import { AnimatePresence } from 'framer-motion';
@@ -286,13 +287,21 @@ export default function MediaLarge({
   } | undefined>(undefined);
   const [isVideoZoomOpen, setIsVideoZoomOpen] = useState(false);
   const videoRef = useRef<HTMLVideoElement>(null);
-  const lastVideoElementRef = useRef<HTMLVideoElement | null>(null);
-  const setVideoElementRef = useCallback((video: HTMLVideoElement | null) => {
-    if (!video && lastVideoElementRef.current) {
-      releaseVideoElement(lastVideoElementRef.current);
+  const previewVideoRef = useRef<HTMLVideoElement>(null);
+  const fullVideoRef = useRef<HTMLVideoElement>(null);
+  const setPreviewVideoElementRef = useCallback((video: HTMLVideoElement | null) => {
+    if (!video && previewVideoRef.current) {
+      releaseVideoElement(previewVideoRef.current);
     }
-    videoRef.current = video;
-    lastVideoElementRef.current = video;
+    previewVideoRef.current = video;
+    if (!fullVideoRef.current) { videoRef.current = video; }
+  }, []);
+  const setFullVideoElementRef = useCallback((video: HTMLVideoElement | null) => {
+    if (!video && fullVideoRef.current) {
+      releaseVideoElement(fullVideoRef.current);
+    }
+    fullVideoRef.current = video;
+    videoRef.current = video ?? previewVideoRef.current;
   }, []);
   const { videoPreviewMode = 'smart' } = useAppState();
   const [isPageResuming, setIsPageResuming] = useState(false);
@@ -310,6 +319,8 @@ export default function MediaLarge({
   const [isMainVideoActuallyPlaying, setIsMainVideoActuallyPlaying] =
     useState(false);
   const [isFullVideoFrameReady, setIsFullVideoFrameReady] = useState(false);
+  const [isFullVideoBuffering, setIsFullVideoBuffering] = useState(false);
+  const [hasDecodedPreviewFrame, setHasDecodedPreviewFrame] = useState(false);
   const [hasStartedMainVideoPlayback, setHasStartedMainVideoPlayback] =
     useState(false);
   const [isVideoFullscreen, setIsVideoFullscreen] = useState(false);
@@ -374,6 +385,8 @@ export default function MediaLarge({
     setPreparedFullVideoDownloads({});
     setIsMainVideoActuallyPlaying(false);
     setIsFullVideoFrameReady(false);
+    setIsFullVideoBuffering(false);
+    setHasDecodedPreviewFrame(false);
     setHasStartedMainVideoPlayback(false);
     setFailedGeneratedPreviewSrc(undefined);
     setReadyPreviewSrc(undefined);
@@ -399,6 +412,8 @@ export default function MediaLarge({
     return () => setFullVideoPlaybackActive(false);
   }, [isMainVideoActuallyPlaying, isVideoFullscreen]);
 
+  const shouldSuspendRelatedPreviews =
+    isFullVideoPlaying || isMainVideoActuallyPlaying;
   useEffect(() => {
     if (!broadcastDetailVideoPlayback || !isVideo) { return; }
     const dispatch = (playing: boolean) => window.dispatchEvent(
@@ -407,15 +422,17 @@ export default function MediaLarge({
         { detail: { mediaId: photo.id, playing } },
       ),
     );
-    dispatch(isMainVideoActuallyPlaying);
+    // Stop related-card preview downloads as soon as full playback starts
+    // buffering, so the main video gets the available media connection.
+    dispatch(shouldSuspendRelatedPreviews);
     return () => {
-      if (isMainVideoActuallyPlaying) { dispatch(false); }
+      if (shouldSuspendRelatedPreviews) { dispatch(false); }
     };
   }, [
     broadcastDetailVideoPlayback,
-    isMainVideoActuallyPlaying,
     isVideo,
     photo.id,
+    shouldSuspendRelatedPreviews,
   ]);
 
   // Inline full-video playback should not pause previews elsewhere on the
@@ -619,7 +636,7 @@ export default function MediaLarge({
       pendingFullVideoWarmups.current.delete(sourceUrl);
     });
   }, [isVideo, photo.url, preparedFullVideoDownloads]);
-  const getPreferredFullVideoUrl = () => {
+  const getPreferredFullVideoUrl = useCallback(() => {
     const capabilityVideo = videoRef.current ?? document.createElement('video');
     const isMobile = window.matchMedia('(pointer: coarse)').matches ||
       window.innerWidth < 768;
@@ -629,9 +646,12 @@ export default function MediaLarge({
       isMobile,
       nativeMatroskaSupport: capabilityVideo.canPlayType('video/x-matroska'),
     });
-  };
-  const warmPreferredFullVideoDownload = () =>
-    warmFullVideoDownload(getPreferredFullVideoUrl());
+  }, [compatibilityPlaybackUrl, photo.url]);
+  const warmPreferredFullVideoDownload = useCallback(() =>
+    warmFullVideoDownload(getPreferredFullVideoUrl()), [
+    getPreferredFullVideoUrl,
+    warmFullVideoDownload,
+  ]);
   useAdaptiveFullVideoPlayback({
     // Zoom owns the active full-video session while open; keeping the inline
     // controller detached prevents two HLS pipelines from downloading at once.
@@ -692,6 +712,12 @@ export default function MediaLarge({
     shouldStartPriorityPreview;
   const isAutomaticPreviewActive = isPreviewActive ||
     shouldStartPriorityPreview;
+  const shouldKeepPreviewVideo = Boolean(
+    automaticPreviewSrc &&
+    videoPreviewMode !== 'off' &&
+    (shouldRenderAutomaticPreview ||
+      (isFullVideoPlaying && !isFullVideoFrameReady)),
+  );
   const isAutomaticPreviewReady =
     readyPreviewSrc === automaticPreviewSrc &&
     readyPreviewActivationId === previewActivationId;
@@ -745,8 +771,11 @@ export default function MediaLarge({
   }, [isFullVideoPlaying, isMainVideoActuallyPlaying, isPreviewActive, isVideo]);
 
   const previewRecovery = useVideoPreviewRecovery({
-    videoRef,
-    active: Boolean(isVideo && !isFullVideoPlaying && isAutomaticPreviewActive),
+    videoRef: previewVideoRef,
+    active: Boolean(isVideo && (
+      isAutomaticPreviewActive ||
+      (isFullVideoPlaying && !isFullVideoFrameReady)
+    )),
     src: automaticPreviewSrc,
     onFatalError: () => {
       if (automaticPreviewSrc) {
@@ -782,12 +811,12 @@ export default function MediaLarge({
   // pointer-hover and explicit play still warm immediately on demand.
   useEffect(() => {
     if (!preloadFullVideoDownload || !isVideo || !isInPreloadRange) { return; }
-    warmFullVideoDownload();
+    warmPreferredFullVideoDownload();
   }, [
     isInPreloadRange,
     isVideo,
     preloadFullVideoDownload,
-    warmFullVideoDownload,
+    warmPreferredFullVideoDownload,
   ]);
   const shouldLoadVideoPoster = shouldLoadPreviewImage &&
     Boolean(posterSrc && !hasPosterFailed);
@@ -1283,11 +1312,11 @@ export default function MediaLarge({
     if (deltaX < 0 && swipeNextPath) {
       setNextMediaAnimation?.(SWIPE_ANIMATION_LEFT);
       announceDetailNavigationStart('next');
-      router.push(swipeNextPath, { scroll: false });
+      router.replace(swipeNextPath, { scroll: false });
     } else if (deltaX > 0 && swipePreviousPath) {
       setNextMediaAnimation?.(SWIPE_ANIMATION_RIGHT);
       announceDetailNavigationStart('previous');
-      router.push(swipePreviousPath, { scroll: false });
+      router.replace(swipePreviousPath, { scroll: false });
     }
   }, [
     router,
@@ -1389,53 +1418,55 @@ export default function MediaLarge({
                       className="absolute inset-0 z-0 max-h-full w-full rounded-md bg-black"
                     />
                 )}
-                {(isFullVideoPlaying || shouldRenderAutomaticPreview) &&
-                  <video
-                    ref={setVideoElementRef}
+                {(shouldKeepPreviewVideo || isFullVideoPlaying) &&
+                  ([
+                    ...(shouldKeepPreviewVideo ? ['preview'] : []),
+                    ...(isFullVideoPlaying ? ['full'] : []),
+                  ] as const).map(mode => {
+                    const isFullVideoElement = mode === 'full';
+                    return <video
+                    ref={isFullVideoElement
+                      ? setFullVideoElementRef
+                      : setPreviewVideoElementRef}
                     className={clsx(
-                      'relative z-10 max-h-full w-full',
+                      isFullVideoElement
+                        ? 'absolute inset-0 z-20 w-full h-full'
+                        : 'relative z-10 max-h-full w-full',
                       areMediaMatted ? 'object-contain' : 'object-cover',
                       'rounded-md bg-black',
-                      !isFullVideoPlaying &&
+                      !isFullVideoElement &&
                         'transition-opacity duration-150',
-                      !isFullVideoPlaying &&
-                        !isAutomaticPreviewReady &&
+                      !isFullVideoElement &&
+                        !(isAutomaticPreviewReady ||
+                          (isFullVideoPlaying && hasDecodedPreviewFrame)) &&
                         'opacity-0',
-                      isFullVideoPlaying && !isFullVideoFrameReady &&
+                      isFullVideoElement && !isFullVideoFrameReady &&
                         'opacity-0',
+                      isFullVideoElement && !isFullVideoFrameReady &&
+                        'pointer-events-none',
                     )}
                     key={[
                       'video',
                       photo.id,
-                      isFullVideoPlaying ? 'full' : 'preview',
+                      mode,
                     ].join('-')}
-                    src={(() => {
-                      const actualUrl = isPiPLocked
-                        ? (pipLockedSrc ?? currentVideoUrl)
-                        : currentVideoUrl;
-                      return isFullVideoPlaying
-                        ? fullVideoSourceUrl
-                        : actualUrl;
-                    })()}
+                    src={isFullVideoElement
+                      ? fullVideoSourceUrl
+                      : isPiPLocked
+                        ? (pipLockedSrc ?? automaticPreviewSrc)
+                        : automaticPreviewSrc}
                     style={{ aspectRatio: mediaAspectRatio }}
-                    poster={isFullVideoPlaying && shouldLoadVideoPoster
-                      ? posterSrc
-                      : undefined}
                     playsInline
-                    autoPlay={!isFullVideoPlaying && isAutomaticPreviewActive}
-                    muted={!isFullVideoPlaying}
-                    loop={!isFullVideoPlaying}
-                    controls={isFullVideoPlaying}
+                    autoPlay={!isFullVideoElement && (
+                      isAutomaticPreviewActive || isFullVideoPlaying
+                    )}
+                    muted={!isFullVideoElement}
+                    loop={!isFullVideoElement}
+                    controls={isFullVideoElement}
                     controlsList="nodownload noplaybackrate"
                     onContextMenu={(e) => e.preventDefault()}
-                    onPlay={() => {
-                      if (isFullVideoPlaying) {
-                        setHasStartedMainVideoPlayback(true);
-                        setIsMainVideoActuallyPlaying(true);
-                      }
-                    }}
                     onPause={() => {
-                      if (isFullVideoPlaying) {
+                      if (isFullVideoElement) {
                         setIsMainVideoActuallyPlaying(false);
                       }
                     }}
@@ -1444,53 +1475,62 @@ export default function MediaLarge({
                     }}
                     preload="auto"
                     onLoadStart={() => {
-                      if (isFullVideoPlaying) {
+                      if (isFullVideoElement) {
                         setIsFullVideoFrameReady(false);
+                        setIsFullVideoBuffering(true);
                       }
-                      if (!isFullVideoPlaying && isAutomaticPreviewActive) {
+                      if (!isFullVideoElement && (
+                        isAutomaticPreviewActive || isFullVideoPlaying
+                      )) {
+                        setHasDecodedPreviewFrame(false);
                         setReadyPreviewSrc(undefined);
                         setReadyPreviewActivationId(undefined);
                       }
                     }}
                     onLoadedData={() => {
-                      if (isFullVideoPlaying) {
-                        setIsFullVideoFrameReady(true);
-                      }
-                      if (!isFullVideoPlaying && automaticPreviewSrc) {
+                      if (!isFullVideoElement && automaticPreviewSrc) {
                         if (broadcastDetailVideoPlayback) {
                           completeDetailPreviewStartup(photo.id);
                         }
+                        setHasDecodedPreviewFrame(true);
                         setReadyPreviewSrc(automaticPreviewSrc);
                         setReadyPreviewActivationId(previewActivationId);
                         previewRecovery.onLoadedData();
                       }
                     }}
                     onCanPlay={() => {
-                      if (!isFullVideoPlaying && isAutomaticPreviewActive) {
+                      if (!isFullVideoElement && isAutomaticPreviewActive) {
                         previewRecovery.onCanPlay();
                       }
                     }}
                     onPlaying={() => {
-                      if (isFullVideoPlaying) {
+                      if (isFullVideoElement) {
                         setIsFullVideoFrameReady(true);
+                        setIsFullVideoBuffering(false);
+                        setHasStartedMainVideoPlayback(true);
+                        setIsMainVideoActuallyPlaying(true);
                       }
-                      if (!isFullVideoPlaying && automaticPreviewSrc) {
+                      if (!isFullVideoElement && automaticPreviewSrc) {
+                        setHasDecodedPreviewFrame(true);
                         setReadyPreviewSrc(automaticPreviewSrc);
                         setReadyPreviewActivationId(previewActivationId);
                         previewRecovery.onPlaying();
                       }
                     }}
                     onWaiting={() => {
-                      // Preserve the last decoded preview frame while the
-                      // browser buffers instead of revealing a blank poster.
+                      if (isFullVideoElement) {
+                        setIsFullVideoBuffering(true);
+                      }
                     }}
                     onStalled={() => {
-                      if (!isFullVideoPlaying) {
+                      if (isFullVideoElement) {
+                        setIsFullVideoBuffering(true);
+                      } else {
                         previewRecovery.onStalled();
                       }
                     }}
                     onError={event => {
-                      if (isFullVideoPlaying) {
+                      if (isFullVideoElement) {
                         if (event.currentTarget.dataset.fullVideoHlsInitializing === 'true') {
                           return;
                         }
@@ -1506,6 +1546,7 @@ export default function MediaLarge({
                           }
                         }
                       } else {
+                        setHasDecodedPreviewFrame(false);
                         setReadyPreviewSrc(undefined);
                         setReadyPreviewActivationId(undefined);
                         previewRecovery.onError();
@@ -1522,7 +1563,7 @@ export default function MediaLarge({
                         if (tracks && tracks.length > 0) {
                           for (let i = 0; i < tracks.length; i++) {
                             // Previews never need text tracks.
-                            if (!isFullVideoPlaying) {
+                            if (!isFullVideoElement) {
                               (tracks[i] as any).mode = 'disabled';
                               continue;
                             }
@@ -1535,7 +1576,7 @@ export default function MediaLarge({
                       } catch {}
                     }}
                   >
-                    {isFullVideoPlaying && subtitleTracks && (() => {
+                    {isFullVideoElement && subtitleTracks && (() => {
                     // Attach only manifest-backed tracks. A fabricated fallback
                     // makes native players expose a captions menu whose file
                     // does not exist for multi-track media.
@@ -1556,7 +1597,18 @@ export default function MediaLarge({
                     </>;
                   })()}
                   Sorry, your browser does not support embedded videos.
-                  </video>}
+                  </video>;
+                  })}
+                {isFullVideoPlaying && (
+                  isFullVideoBuffering || !isFullVideoFrameReady
+                ) && <div
+                  className="absolute inset-0 z-30 grid place-items-center pointer-events-none"
+                  aria-label="Buffering video"
+                >
+                  <span className="flex items-center justify-center rounded-full bg-black/70 p-4 text-white">
+                    <Spinner size={32} color="text" />
+                  </span>
+                </div>}
                 </>
             : shouldLoadPreviewImage
               ? <ImageLarge
@@ -1627,6 +1679,7 @@ export default function MediaLarge({
                     : getFullVideoBridgeUrl(selectedPlaybackUrl);
                   flushSync(() => {
                     setIsFullVideoFrameReady(false);
+                    setIsFullVideoBuffering(true);
                     setShouldUseCompatibilityPlayback(preferCompatibility);
                     setFullVideoDeliveryUrl(selectedDeliveryUrl);
                     setFullVideoDeliveryExpiresAt(

@@ -224,7 +224,7 @@ export default function MediaDetailPage({
             broadcastDetailVideoPlayback
             mountPreviewOnlyWhenVisible={false}
             prefetchRelatedLinks={false}
-            preloadFullVideoDownload={false}
+            preloadFullVideoDownload
             recent={recent}
             year={year}
             showTitle={Boolean(customHeader)}

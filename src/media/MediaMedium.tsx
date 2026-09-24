@@ -13,7 +13,7 @@ import { MediaSetCategory } from '../category';
 import ImageMedium from '@/components/image/ImageMedium';
 import { clsx } from 'clsx/lite';
 import { pathForMedia } from '@/app/path';
-import { usePathname } from 'next/navigation';
+import { usePathname, useRouter } from 'next/navigation';
 import { getFeedSortByFromPath } from './sort/path';
 import { useRef, useState } from 'react';
 import useVisibility from '@/utility/useVisibility';
@@ -64,8 +64,10 @@ export default function MediaMedium({
   hoverPreviewEnabled?: boolean
 } & MediaSetCategory) {
   const ref = useRef<HTMLAnchorElement>(null);
+  const router = useRouter();
   const pathname = usePathname();
   const sortBy = sortByProp ?? getFeedSortByFromPath(pathname);
+  const href = pathForMedia({ photo, sortBy, ...categories });
   const [isHovered, setIsHovered] = useState(false);
   const [videoFailedMediaId, setVideoFailedMediaId] = useState<string>();
   const [posterFailedMediaId, setPosterFailedMediaId] = useState<string>();
@@ -125,7 +127,7 @@ export default function MediaMedium({
   return (
     <LinkWithStatus
       ref={ref}
-      href={pathForMedia({ photo, sortBy, ...categories })}
+      href={href}
       data-media-id={photo.id}
       className={clsx(
         'group',
@@ -134,9 +136,17 @@ export default function MediaMedium({
         className,
       )}
       prefetch={prefetch}
+      scroll={false}
       flickerThreshold={0}
       onClick={event => rememberMediaScrollPosition(photo.id, event.currentTarget)}
-      onPointerEnter={event => event.pointerType === 'mouse' && setIsHovered(true)}
+      onPointerEnter={event => {
+        if (event.pointerType === 'mouse') {
+          setIsHovered(true);
+          router.prefetch(href);
+        }
+      }}
+      onPointerDown={() => router.prefetch(href)}
+      onFocus={() => router.prefetch(href)}
       onPointerLeave={() => setIsHovered(false)}
     >
       {({ isLoading }) =>
