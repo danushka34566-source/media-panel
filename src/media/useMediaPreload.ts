@@ -7,7 +7,7 @@ import { RefObject, useEffect, useId, useState } from 'react';
 // visibly remove and recreate the poster. Native lazy loading and the browser
 // cache still control when bytes are fetched and decoded.
 // One shared observer keeps initial large-grid activation inexpensive.
-const PRELOAD_AHEAD_PX = 1200;
+const PRELOAD_AHEAD_PX = 2000;
 const RELEASE_BEHIND_PX = 500;
 
 type Entry = {

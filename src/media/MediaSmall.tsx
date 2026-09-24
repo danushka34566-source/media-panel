@@ -109,10 +109,11 @@ export default function MediaSmall({
               height={Math.round(IMAGE_WIDTH_SMALL / aspectRatio)}
               alt={altTextForMedia(photo)}
               fallbackToUnoptimized
+              revealBeforeHydration
               className="absolute inset-0 w-full h-full"
               classNameImage="w-full h-full object-cover"
               loading={eagerMediaImage}
-              fetchPriority="low"
+              fetchPriority={shouldLoadMediaImage ? 'auto' : 'low'}
               onError={() => setPosterFailedMediaId(photo.id)}
               showLoadingIndicator
             />
@@ -162,6 +163,7 @@ export default function MediaSmall({
               height={Math.round(IMAGE_WIDTH_SMALL / aspectRatio)}
               blurDataURL={photo.blurData}
               fallbackToUnoptimized
+              revealBeforeHydration
               blurCompatibilityLevel={
                 doesMediaNeedBlurCompatibility(photo) ? 'high' : 'none'
               }
@@ -169,7 +171,7 @@ export default function MediaSmall({
               classNameImage="object-cover w-full h-full"
               alt={altTextForMedia(photo)}
               loading={eagerMediaImage}
-              fetchPriority="low"
+              fetchPriority={shouldLoadMediaImage ? 'auto' : 'low'}
               showLoadingIndicator
             />
           </div>
@@ -178,9 +180,10 @@ export default function MediaSmall({
             aspectRatio={photo.aspectRatio}
             blurDataURL={photo.blurData}
             blurCompatibilityMode={doesMediaNeedBlurCompatibility(photo)}
+            revealBeforeHydration
             alt={altTextForMedia(photo)}
             loading={eagerMediaImage}
-            fetchPriority="low"
+            fetchPriority={shouldLoadMediaImage ? 'auto' : 'low'}
             showLoadingIndicator
           />
       }

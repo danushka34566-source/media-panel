@@ -24,7 +24,6 @@ export default function MediaFullPage({
     <div className="space-y-1">
       <MediaListLarge
         photos={photos}
-        optimizeLongList
         animateOnFirstLoadOnly
       />
       {photosCount > photos.length &&

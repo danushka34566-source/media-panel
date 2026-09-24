@@ -27,6 +27,7 @@ import type { SortBy } from './sort';
 
 const WIDE_GRID_ASPECT_RATIO = 16 / 9;
 const INITIAL_GRID_IMAGE_COUNT = 8;
+const INITIAL_FEED_IMAGE_COUNT = 12;
 const SMART_PREVIEW_ACTIVATION_EVENT = 'media-grid-smart-preview-activation';
 
 type SmartPreviewActivationDetail = {
@@ -251,6 +252,7 @@ export default function MediaGrid({
           'items-center',
         )}
         type={animate === false ? 'none' : undefined}
+        fade={false}
         canStart={canStart}
         duration={0.45}
         staggerDelay={0.04}
@@ -269,12 +271,6 @@ export default function MediaGrid({
             className={clsx(
               'flex relative overflow-hidden',
               'group',
-              // Keep long mobile grids scrollable without painting every
-              // offscreen card subtree on each compositor frame. The aspect
-              // ratio below supplies stable geometry while skipped cards are
-              // outside the viewport.
-              index >= INITIAL_GRID_IMAGE_COUNT &&
-                '[content-visibility:auto] [contain-intrinsic-size:240px]',
             )}
             style={{
               ...(
@@ -284,10 +280,6 @@ export default function MediaGrid({
                   ? WIDE_GRID_ASPECT_RATIO
                   : GRID_ASPECT_RATIO,
                 },
-              // Keep the card renderable ahead of the viewport. Mobile
-              // browsers can defer image painting behind content-visibility,
-              // which makes an already-mounted image appear to mount only
-              // when it reaches the screen.
             }}
           >
             <MediaMedium
@@ -312,7 +304,9 @@ export default function MediaGrid({
                 // hero poster or the first frame during navigation.
                 priority: undefined,
                 initiallyLoadPreviewImage:
-                  prioritizeInitialMedia && index < INITIAL_GRID_IMAGE_COUNT,
+                  index < (prioritizeInitialMedia
+                    ? INITIAL_FEED_IMAGE_COUNT
+                    : INITIAL_GRID_IMAGE_COUNT),
                 preloadVideoPreview: !areSmartPreviewsSuspended &&
                   !mountPreviewsOnlyWhenVisible &&
                   shouldPreloadGridPreview(

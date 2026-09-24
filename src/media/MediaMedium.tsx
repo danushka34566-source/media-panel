@@ -105,9 +105,9 @@ export default function MediaMedium({
   const { shouldLoad: shouldLoadMediaImage } = useMediaPreload({
     ref,
     // The image element is mounted immediately; promote it out of native lazy
-    // loading shortly before the card is reached. A bounded window prevents a
-    // long grid from decoding thousands of posters at once on mobile.
-    preloadAheadPx: 1600,
+    // loading several rows before the card is reached. The bounded window
+    // prevents a long grid from decoding every poster at once on mobile.
+    preloadAheadPx: 2400,
     releaseBehindPx: 800,
   });
   // Keep image/poster elements mounted from the first render. Native lazy
@@ -175,6 +175,7 @@ export default function MediaMedium({
                   // Use the optimized poster when available, then fall back
                   // to the stable Drive/R2 URL if the optimizer rejects it.
                   fallbackToUnoptimized
+                  revealBeforeHydration
                   aspectRatio={getMediaAspectRatio(photo)}
                   alt={altTextForMedia(photo)}
                   className="absolute inset-0 w-full h-full"
@@ -209,6 +210,7 @@ export default function MediaMedium({
                 aspectRatio={photo.aspectRatio}
                 blurDataURL={photo.blurData}
                 blurCompatibilityMode={doesMediaNeedBlurCompatibility(photo)}
+                revealBeforeHydration
                 className="flex object-cover w-full h-full"
                 classNameImage="object-cover w-full h-full"
                 alt={altTextForMedia(photo)}

@@ -36,7 +36,6 @@ export default function MediaListLargeInfinite({
           key={key}
           photos={photos}
           animate={false}
-          optimizeLongList
           onLastMediaVisible={onLastMediaVisible}
           revalidateMedia={revalidateMedia}
         />}

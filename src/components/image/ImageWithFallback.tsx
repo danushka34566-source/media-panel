@@ -7,7 +7,6 @@ import { clsx}  from 'clsx/lite';
 import Image, { ImageProps } from 'next/image';
 import {
   RefObject,
-  startTransition,
   SyntheticEvent,
   useCallback,
   useEffect,
@@ -127,6 +126,7 @@ export default function ImageWithFallback({
   priority,
   unoptimized = false,
   fallbackToUnoptimized = false,
+  revealBeforeHydration = false,
   onLoad: onImageLoad,
   onError: onImageError,
   showLoadingIndicator = false,
@@ -137,12 +137,13 @@ export default function ImageWithFallback({
   classNameImage?: string
   classNameFallback?: string
   fallbackToUnoptimized?: boolean
+  revealBeforeHydration?: boolean
   showLoadingIndicator?: boolean
 }) {
   const ref = useRef<HTMLImageElement>(null);
   const hasLoadedRef = useRef(false);
 
-  const { hasLoadedWithAnimations, shouldDebugImageFallbacks } = useAppState();
+  const { shouldDebugImageFallbacks } = useAppState();
 
   const [isLoading, setIsLoading] = useState(true);
   const [didError, setDidError] = useState(false);
@@ -151,8 +152,6 @@ export default function ImageWithFallback({
       directFallbackSources.has(props.src)
     ),
   );
-  const [fadeFallbackTransition, setFadeFallbackTransition] =
-    useState(!hasLoadedWithAnimations);
   const directFallbackSrc = fallbackToUnoptimized &&
     typeof props.src === 'string'
     ? props.src
@@ -161,14 +160,8 @@ export default function ImageWithFallback({
   const onLoad = useCallback(
     (event: SyntheticEvent<HTMLImageElement, Event>) => {
       hasLoadedRef.current = true;
-      // Image completion is a visual refinement, not an input-blocking
-      // update. Large grids can finish many cached/direct images in the same
-      // task; keep those commits interruptible so navigation and filter taps
-      // remain responsive while the grid settles.
-      startTransition(() => {
-        setIsLoading(false);
-        setDidError(false);
-      });
+      setIsLoading(false);
+      setDidError(false);
       if (isDirectFallback && directFallbackSrc) {
         // A successful direct retry proves storage is healthy and the failed
         // transformed request was the delivery layer. New cards in this
@@ -245,15 +238,13 @@ export default function ImageWithFallback({
     const image = refProp?.current ?? ref.current;
     const syncLoadedState = () => {
       if (isImageLoaded(image)) {
-        startTransition(() => setIsLoading(false));
+        setIsLoading(false);
       }
     };
     if (isImageLoaded(image)) {
       // Eager offscreen images can finish before React attaches onLoad. Sync
       // from the DOM so their fallback cannot remain over a decoded image.
-      startTransition(() => setIsLoading(false));
-    } else {
-      setFadeFallbackTransition(true);
+      setIsLoading(false);
     }
 
     // Grid-mode changes resize already-mounted lazy images. Some mobile
@@ -278,6 +269,7 @@ export default function ImageWithFallback({
     <div
       className={clsx(
         'flex relative',
+        revealBeforeHydration && 'z-0',
         className,
       )}
     >
@@ -285,7 +277,12 @@ export default function ImageWithFallback({
         ...props,
         priority,
         unoptimized: unoptimized || isDirectFallback,
-        className: classNameImage,
+        // Grid images can finish before hydration. Paint the decoded bitmap
+        // over its placeholder immediately instead of waiting for onLoad.
+        className: clsx(
+          revealBeforeHydration && 'relative z-[1]',
+          classNameImage,
+        ),
         onLoad,
         onError,
       }} />
@@ -294,8 +291,7 @@ export default function ImageWithFallback({
           '@container',
           'absolute inset-0 pointer-events-none',
           'overflow-hidden',
-          fadeFallbackTransition &&
-            'transition-opacity duration-300 ease-in',
+          revealBeforeHydration && 'z-0',
           !(BLUR_ENABLED && blurDataURL) &&
             (classNameFallback ?? 'bg-main'),
           (isLoading || didError || shouldDebugImageFallbacks)
@@ -319,7 +315,8 @@ export default function ImageWithFallback({
       </div>
       {showLoadingIndicator && isLoading && !didError &&
         <span className={clsx(
-          'absolute inset-0 z-10 flex items-center justify-center',
+          'absolute inset-0 flex items-center justify-center',
+          revealBeforeHydration ? 'z-0' : 'z-10',
           'pointer-events-none',
         )}>
           <Spinner size={16} color="semi-transparent" />
