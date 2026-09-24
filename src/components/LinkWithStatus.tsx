@@ -40,6 +40,7 @@ const LinkWithStatus = forwardRef<HTMLAnchorElement, LinkWithStatusProps>(functi
       props.onPointerDown?.(event);
       if (
         event.pointerType === 'touch' &&
+        props.prefetch !== false &&
         typeof props.href === 'string'
       ) {
         router.prefetch(props.href);

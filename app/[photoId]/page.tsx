@@ -12,6 +12,7 @@ import {
 } from '@/app/path';
 import MediaDetailPage from '@/media/MediaDetailPage';
 import { getMediaCached, getMediaNearIdCached } from '@/media/cache';
+import { getMedia } from '@/media/query';
 import { getEffectiveMediaSortOptions } from '@/media/sort/preference';
 import { SORT_BY_OPTIONS, type SortBy } from '@/media/sort';
 import { cache } from 'react';
@@ -57,7 +58,11 @@ const getMediaNearIdCachedCached = cache(async (
     });
   }
 
-  const photo = await getMediaCached(photoId);
+  // A stale cached "missing" result must not bounce an existing item back
+  // to the grid after its card was already shown there. Check the primary
+  // row directly before treating this detail route as unavailable.
+  const photo = await getMedia(photoId).catch(() => undefined) ??
+    await getMediaCached(photoId);
   return {
     photo,
     photos: [],

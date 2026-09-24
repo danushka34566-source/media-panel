@@ -2,7 +2,7 @@ import {
   getCompatibilityPlaybackUrl,
   isMatroskaPlaybackUrl,
   selectInitialVideoPlaybackUrl,
-  shouldPreferMobileCompatibilityPlayback,
+  shouldPreferCompatibilityPlayback,
 } from '@/media/compatibility-playback';
 
 describe('getCompatibilityPlaybackUrl', () => {
@@ -35,29 +35,25 @@ describe('getCompatibilityPlaybackUrl', () => {
     expect(isMatroskaPlaybackUrl('/media/video.mp4')).toBe(false);
   });
 
-  it('starts with compatibility only for unsupported mobile Matroska', () => {
-    expect(shouldPreferMobileCompatibilityPlayback({
+  it('starts with compatibility for unsupported Matroska', () => {
+    expect(shouldPreferCompatibilityPlayback({
       sourceUrl: '/media/video.mkv',
-      isMobile: true,
       nativeMatroskaSupport: '',
     })).toBe(true);
-    expect(shouldPreferMobileCompatibilityPlayback({
+    expect(shouldPreferCompatibilityPlayback({
       sourceUrl: '/media/video.mkv',
-      isMobile: true,
       nativeMatroskaSupport: 'maybe',
     })).toBe(false);
-    expect(shouldPreferMobileCompatibilityPlayback({
+    expect(shouldPreferCompatibilityPlayback({
       sourceUrl: '/media/video.mkv',
-      isMobile: false,
       nativeMatroskaSupport: '',
-    })).toBe(false);
+    })).toBe(true);
   });
 
   it('selects the generated MP4 without an availability fetch', () => {
     expect(selectInitialVideoPlaybackUrl({
       sourceUrl: '/media/video.mkv',
       compatibilityUrl: '/media/video-stream.mp4',
-      isMobile: true,
       nativeMatroskaSupport: '',
     })).toBe('/media/video-stream.mp4');
   });

@@ -3,6 +3,7 @@
 
 export type PlayOptions = {
   preferPiP?: boolean;
+  preservePreviousUntilPlaying?: boolean;
 };
 
 class VideoPlaybackManagerImpl {
@@ -216,7 +217,9 @@ class VideoPlaybackManagerImpl {
     if (this.currentVideo && this.currentVideo !== video) {
       // Stop previously managed video and exit PiP if it had it
       await this.exitPiP();
-      this.pauseVideo(this.currentVideo);
+      if (!opts.preservePreviousUntilPlaying || wasPiPActive) {
+        this.pauseVideo(this.currentVideo);
+      }
     }
     this.currentVideo = video;
     // The adaptive full-video controller may temporarily detach the

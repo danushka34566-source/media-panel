@@ -36,31 +36,25 @@ export const isMatroskaPlaybackUrl = (sourceUrl: string) => {
   return withoutQuery.toLocaleLowerCase().endsWith('.mkv');
 };
 
-export const shouldPreferMobileCompatibilityPlayback = ({
+export const shouldPreferCompatibilityPlayback = ({
   sourceUrl,
-  isMobile,
   nativeMatroskaSupport,
 }: {
   sourceUrl: string
-  isMobile: boolean
   nativeMatroskaSupport: CanPlayTypeResult
-}) => isMobile &&
-  isMatroskaPlaybackUrl(sourceUrl) &&
+}) => isMatroskaPlaybackUrl(sourceUrl) &&
   nativeMatroskaSupport === '';
 
 export const selectInitialVideoPlaybackUrl = ({
   sourceUrl,
   compatibilityUrl,
-  isMobile,
   nativeMatroskaSupport,
 }: {
   sourceUrl: string
   compatibilityUrl?: string
-  isMobile: boolean
   nativeMatroskaSupport: CanPlayTypeResult
-}) => compatibilityUrl && shouldPreferMobileCompatibilityPlayback({
+}) => compatibilityUrl && shouldPreferCompatibilityPlayback({
   sourceUrl,
-  isMobile,
   nativeMatroskaSupport,
 })
   ? compatibilityUrl

@@ -152,8 +152,11 @@ export default function MediaMedium({
           router.prefetch(href);
         }
       }}
-      onPointerDown={() => router.prefetch(href)}
-      onFocus={() => router.prefetch(href)}
+      onFocus={event => {
+        if (event.currentTarget.matches(':focus-visible')) {
+          router.prefetch(href);
+        }
+      }}
       onPointerLeave={() => setIsHovered(false)}
     >
       {({ isLoading }) =>
