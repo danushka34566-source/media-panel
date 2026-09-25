@@ -2,9 +2,8 @@
 
 import Container from '@/components/Container';
 import ErrorNote from '@/components/ErrorNote';
-import FieldsetWithStatus from '@/components/FieldsetWithStatus';
 import SubmitButtonWithStatus from '@/components/SubmitButtonWithStatus';
-import { useActionState, useState } from 'react';
+import { useActionState, useEffect, useState } from 'react';
 import {
   completePendingSignInVerificationAction,
   signOutAction,
@@ -16,10 +15,8 @@ import {
   type TwoFactorMethod,
 } from '.';
 import { clsx } from 'clsx/lite';
-import Note from '@/components/Note';
-import { FiShield } from 'react-icons/fi';
-import AuthHeading from './AuthHeading';
 import AuthCodeField from './AuthCodeField';
+import AuthVerificationMethodPicker from './AuthVerificationMethodPicker';
 
 export default function CompleteSignInVerificationForm({
   defaultMethod,
@@ -31,23 +28,28 @@ export default function CompleteSignInVerificationForm({
   const [twoFactorCode, setTwoFactorCode] = useState('');
   const [selectedTwoFactorMethod, setSelectedTwoFactorMethod] =
     useState<TwoFactorMethod>();
+  const [sentMethod, setSentMethod] = useState<TwoFactorMethod>();
   const [response, action] = useActionState(
     completePendingSignInVerificationAction,
     undefined,
   );
 
   const twoFactorState = parseTwoFactorResponse(response);
+  useEffect(() => {
+    if (twoFactorState?.state === KEY_2FA_CODE_SENT) {
+      // Keep the entry field visible if verification returns an error.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setSentMethod(twoFactorState.preferred);
+    }
+  }, [twoFactorState?.state, twoFactorState?.preferred]);
   const twoFactorMethod = selectedTwoFactorMethod ??
     twoFactorState?.preferred ??
     defaultMethod;
-  const methodOptions = (
-    twoFactorState?.available ?? availableMethods
-  ).map(method => ({
-    value: method,
-    label: method === 'authenticator'
-      ? 'Authenticator app'
-      : method === 'sms' ? 'Mobile (SMS)' : 'Email',
-  }));
+  const methods = twoFactorState?.available ?? availableMethods;
+  const codeSent = (twoFactorState?.state === KEY_2FA_CODE_SENT &&
+    twoFactorState.preferred === twoFactorMethod) ||
+    sentMethod === twoFactorMethod;
+  const showCode = twoFactorMethod === 'authenticator' || codeSent;
 
   return (
     <Container
@@ -57,45 +59,39 @@ export default function CompleteSignInVerificationForm({
         'auth-flow-card rounded-3xl px-5 py-6 sm:px-8 sm:py-7',
       )}
     >
-      <AuthHeading
-        icon={<FiShield size={21} />}
-        title="Verify it's you"
-        description="Choose an available method, then enter its six-digit code."
-      />
       <form action={action} className="w-full space-y-4">
         {response && response !== KEY_CREDENTIALS_SUCCESS && !twoFactorState &&
           <ErrorNote>{response}</ErrorNote>}
-        {twoFactorState &&
-          <Note>
-            {twoFactorState.state === KEY_2FA_CODE_SENT
-              ? 'Enter the verification code that was sent to you.'
-              : 'Choose a verification method to continue.'}
-          </Note>}
-        <FieldsetWithStatus
-          id="twoFactorMethod"
-          label="Verification method"
-          note="Email is always available; SMS requires a verified mobile number."
-          value={twoFactorMethod}
-          onChange={value => {
-            setSelectedTwoFactorMethod(value as TwoFactorMethod);
+        <AuthVerificationMethodPicker
+          method={twoFactorMethod}
+          availableMethods={methods}
+          onChange={method => {
+            setSelectedTwoFactorMethod(method);
             setTwoFactorCode('');
           }}
-          selectOptions={methodOptions}
-        />
-        <AuthCodeField
-          id="twoFactorCode"
-          label="Verification code"
-          value={twoFactorCode}
-          onChange={setTwoFactorCode}
-        />
-        <SubmitButtonWithStatus
-          disabled={twoFactorMethod === 'authenticator' && twoFactorCode.length < 6}
-          className="auth-flow-button w-full justify-center"
         >
-          {twoFactorCode.length < 6 && twoFactorMethod !== 'authenticator'
-            ? twoFactorMethod === 'sms' ? 'Send SMS code' : 'Send email code'
-            : 'Verify and continue'}
-        </SubmitButtonWithStatus>
+          <div className="space-y-4">
+            {showCode && <>
+              <AuthCodeField
+                id="twoFactorCode"
+                label="Verification code"
+                description={twoFactorMethod === 'authenticator'
+                  ? 'Enter the code from your authenticator app.'
+                  : `Enter the code sent to your ${twoFactorMethod === 'sms' ? 'phone' : 'email'}.`}
+                value={twoFactorCode}
+                onChange={setTwoFactorCode}
+              />
+            </>}
+            <SubmitButtonWithStatus
+              disabled={showCode && twoFactorCode.length < 6}
+              className="auth-flow-button w-full justify-center"
+            >
+              {showCode
+                ? 'Verify and continue'
+                : twoFactorMethod === 'sms' ? 'Send SMS code' : 'Send email code'}
+            </SubmitButtonWithStatus>
+          </div>
+        </AuthVerificationMethodPicker>
       </form>
       <form action={signOutAction} className="w-full">
         <SubmitButtonWithStatus styleAs="link" className="w-full justify-center">

@@ -64,7 +64,7 @@ export default function NavClient({
   const isSigningOut = activeAvatarAction === 'sign-out';
 
   const pathname = usePathname();
-  const showNav = !isPathSignIn(pathname);
+  const showNav = !isPathSignIn(pathname) && pathname !== '/verify-login';
 
   const {
     hasLoadedWithAnimations,

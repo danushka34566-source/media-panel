@@ -32,6 +32,7 @@ import { PATH_ROOT } from '@/app/path';
 import IconMedia from '@/components/icons/IconMedia';
 import AuthHeading from './AuthHeading';
 import AuthCodeField from './AuthCodeField';
+import AuthVerificationMethodPicker from './AuthVerificationMethodPicker';
 import { useAppText } from '@/i18n/state/client';
 import LinkWithStatus from '@/components/LinkWithStatus';
 import { FiRefreshCw, FiShield } from 'react-icons/fi';
@@ -86,12 +87,6 @@ export default function SignInForm({
   const twoFactorMethod: TwoFactorMethod =
     selectedTwoFactorMethod ?? twoFactorState?.preferred ?? 'email';
   const twoFactorMethods = twoFactorState?.available ?? [];
-  const twoFactorMethodOptions = twoFactorMethods.map(method => ({
-    value: method,
-    label: method === 'authenticator'
-      ? 'Authenticator app'
-      : method === 'sms' ? 'Mobile (SMS)' : 'Email',
-  }));
 
   useEffect(() => {
     if (latestTwoFactorChallenge) {
@@ -113,6 +108,9 @@ export default function SignInForm({
     email.length > 0 && password.length > 0 &&
     (!twoFactorState || twoFactorCode.length === 6);
   const needsTwoFactor = Boolean(twoFactorState);
+  const codeSent = twoFactorState?.state === KEY_2FA_CODE_SENT &&
+    twoFactorState.preferred === twoFactorMethod;
+  const showCode = twoFactorMethod === 'authenticator' || codeSent;
   const verificationInstruction = twoFactorMethod === 'sms'
     ? appText.auth.enterSmsCode
     : twoFactorMethod === 'email'
@@ -172,7 +170,7 @@ export default function SignInForm({
             </ErrorNote>}
           {needsTwoFactor &&
             <Note>
-              {twoFactorState?.state === KEY_2FA_CODE_SENT
+              {codeSent
                 ? codeSentMessage
                 : appText.auth.enterCurrentCode}
             </Note>}
@@ -181,24 +179,6 @@ export default function SignInForm({
               ? <>
                 <input type="hidden" name="email" value={email} />
                 <input type="hidden" name="password" value={password} />
-                <FieldsetWithStatus
-                  id="twoFactorMethod"
-                  label="Verification method"
-                  note="Email is always available; SMS requires a verified mobile number."
-                  value={twoFactorMethod}
-                  onChange={value => {
-                    setSelectedTwoFactorMethod(value as TwoFactorMethod);
-                    setTwoFactorCode('');
-                  }}
-                  selectOptions={twoFactorMethodOptions}
-                />
-                <AuthCodeField
-                  id="twoFactorCode"
-                  label={appText.auth.verificationCode}
-                  inputRef={twoFactorCodeRef}
-                  value={twoFactorCode}
-                  onChange={setTwoFactorCode}
-                />
               </>
               : <>
                 <FieldsetWithStatus
@@ -238,26 +218,46 @@ export default function SignInForm({
               />}
           </div>
           {needsTwoFactor
-            ? <div className="grid w-full grid-cols-1 gap-2 sm:grid-cols-2">
-              <SubmitButtonWithStatus
-                disabled={!isFormValid}
-                primary={!includeTitle}
-                className={includeTitle ? 'auth-flow-button w-full justify-center' : 'w-full justify-center rounded-lg'}
-              >
-                {appText.auth.verifyCode}
-              </SubmitButtonWithStatus>
-              {twoFactorMethod !== 'authenticator' &&
-                <SubmitButtonWithStatus
-                  name="intent"
-                  value="resend-2fa"
-                  icon={<FiRefreshCw size={15} />}
-                  hideText="never"
-                  onClick={() => setTwoFactorCode('')}
-                  className="auth-flow-button w-full justify-center"
-                >
-                  {appText.auth.resendCode}
-                </SubmitButtonWithStatus>}
-            </div>
+            ? <AuthVerificationMethodPicker
+              method={twoFactorMethod}
+              availableMethods={twoFactorMethods}
+              onChange={method => {
+                setSelectedTwoFactorMethod(method);
+                setTwoFactorCode('');
+              }}
+            >
+              <div className="space-y-4">
+                {showCode && <AuthCodeField
+                  id="twoFactorCode"
+                  label={appText.auth.verificationCode}
+                  inputRef={twoFactorCodeRef}
+                  value={twoFactorCode}
+                  onChange={setTwoFactorCode}
+                />}
+                <div className="grid w-full grid-cols-1 gap-2 sm:grid-cols-2">
+                  <SubmitButtonWithStatus
+                    disabled={showCode && !isFormValid}
+                    primary={!includeTitle}
+                    className={includeTitle ? 'auth-flow-button w-full justify-center' : 'w-full justify-center rounded-lg'}
+                  >
+                    {showCode
+                      ? appText.auth.verifyCode
+                      : twoFactorMethod === 'sms' ? 'Send SMS code' : 'Send email code'}
+                  </SubmitButtonWithStatus>
+                  {showCode && twoFactorMethod !== 'authenticator' &&
+                    <SubmitButtonWithStatus
+                      name="intent"
+                      value="resend-2fa"
+                      icon={<FiRefreshCw size={15} />}
+                      hideText="never"
+                      onClick={() => setTwoFactorCode('')}
+                      className="auth-flow-button w-full justify-center"
+                    >
+                      {appText.auth.resendCode}
+                    </SubmitButtonWithStatus>}
+                </div>
+              </div>
+            </AuthVerificationMethodPicker>
             : <SubmitButtonWithStatus
               disabled={!isFormValid}
               primary={!includeTitle}

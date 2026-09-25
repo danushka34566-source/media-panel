@@ -383,41 +383,10 @@ html {
     @apply
       text-black bg-neutral-200/95 rounded-lg
   }
-  .auth-flow-ambient {
-    position: fixed;
-    inset: 0;
-    z-index: 0;
-    pointer-events: none;
-    background:
-      radial-gradient(ellipse at 11% 14%, rgb(70 70 70 / 0.12), transparent 34%),
-      radial-gradient(ellipse at 78% 45%, rgb(70 70 70 / 0.10), transparent 38%),
-      linear-gradient(180deg, #fafafa, #f2f2f2);
-  }
-  .auth-flow-ambient::before {
-    content: '';
-    position: absolute;
-    inset: 0;
-    background-image:
-      linear-gradient(to right, rgb(90 90 90 / 0.07) 1px, transparent 1px),
-      linear-gradient(to bottom, rgb(90 90 90 / 0.07) 1px, transparent 1px);
-    background-size: 72px 72px;
-    mask-image: linear-gradient(to bottom, black, transparent 90%);
-  }
-  .dark .auth-flow-ambient {
-    background:
-      radial-gradient(ellipse at 10% 10%, rgb(255 255 255 / 0.14), transparent 33%),
-      radial-gradient(ellipse at 79% 42%, rgb(255 255 255 / 0.11), transparent 38%),
-      linear-gradient(180deg, #1b1919, #141212);
-  }
-  .dark .auth-flow-ambient::before {
-    background-image:
-      linear-gradient(to right, rgb(255 255 255 / 0.045) 1px, transparent 1px),
-      linear-gradient(to bottom, rgb(255 255 255 / 0.045) 1px, transparent 1px);
-  }
   .auth-flow-card {
     --auth-field-fill: color-mix(in oklch, var(--card) 82%, var(--background));
     --auth-field-border: color-mix(in oklch, var(--foreground) 18%, transparent);
-    @apply font-sans;
+    font-family: var(--font-auth-sans), Arial, sans-serif;
     border-radius: 1.5rem;
     background:
       linear-gradient(180deg, rgb(255 255 255 / 0.24), rgb(255 255 255 / 0.05)),
@@ -440,6 +409,9 @@ html {
     letter-spacing: 0;
     text-transform: none;
   }
+  .auth-flow-card :is(h1, p, a, span, label, input, button) {
+    font-family: var(--font-auth-sans), Arial, sans-serif;
+  }
   .auth-flow-card input[type=text],
   .auth-flow-card input[type=email],
   .auth-flow-card input[type=password] {
@@ -447,7 +419,7 @@ html {
     min-height: 2.25rem;
     background: var(--auth-field-fill);
     border-color: var(--auth-field-border);
-    font-family: var(--font-sans);
+    font-family: var(--font-auth-sans), Arial, sans-serif;
     font-size: 0.875rem;
   }
   .auth-flow-card .auth-code-slot {
@@ -460,7 +432,7 @@ html {
     background: var(--auth-field-fill);
     border-color: var(--auth-field-border);
     color: var(--foreground);
-    font-family: var(--font-sans);
+    font-family: var(--font-auth-sans), Arial, sans-serif;
     font-size: 0.875rem;
     font-weight: 600;
     box-shadow: 0 3px 8px rgb(0 0 0 / 0.08);
@@ -468,6 +440,14 @@ html {
   .auth-flow-card button.auth-flow-button:disabled {
     color: var(--foreground);
     opacity: 0.58;
+  }
+  .auth-flow-card button.auth-method-link {
+    padding: 0;
+    height: auto;
+    border: 0;
+    background: transparent;
+    box-shadow: none;
+    color: var(--foreground);
   }
 }
 

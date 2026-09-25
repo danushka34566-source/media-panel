@@ -16,15 +16,15 @@ export default function AuthHeading({
       <span className="flex size-8 items-center justify-center text-main">
         {icon}
       </span>
-      <h1 className="font-sans text-2xl font-semibold tracking-tight text-main">
+      <h1 className="text-2xl font-semibold tracking-tight text-main">
         {title}
       </h1>
       {description &&
-        <p className="max-w-xs font-sans text-sm leading-relaxed text-medium">
+        <p className="max-w-xs text-sm leading-relaxed text-medium">
           {description}
         </p>}
       {action &&
-        <p className="font-sans text-sm leading-relaxed text-medium">
+        <p className="text-sm leading-relaxed text-medium">
           {action}
         </p>}
     </div>
