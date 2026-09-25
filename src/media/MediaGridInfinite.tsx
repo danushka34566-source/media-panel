@@ -24,7 +24,6 @@ export default function MediaGridInfinite({
   excludeFromFeeds,
   query,
   canStart,
-  animateOnFirstLoadOnly,
   ...categories
 }: {
   cacheKey: string
@@ -45,9 +44,6 @@ export default function MediaGridInfinite({
       // client dedupe leaves the appended bottom row short.
       initialOffset={initialPhotos?.length ? 0 : initialOffset}
       excludeIds={initialPhotos?.map(photo => photo.id)}
-      // Appended pages must reflect the same live set used by exclusion.
-      // Browser SWR still caches each fetched page for instant Back restore.
-      useCachedMedia={false}
       itemsPerPage={INFINITE_SCROLL_GRID_MULTIPLE}
       coalescePages
       startImmediately
@@ -69,7 +65,6 @@ export default function MediaGridInfinite({
           ...categories,
           canStart,
           onLastMediaVisible,
-          animateOnFirstLoadOnly,
         }} />}
     </InfiniteMediaScroll>
   );

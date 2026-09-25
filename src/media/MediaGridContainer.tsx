@@ -18,7 +18,6 @@ export default function MediaGridContainer({
   sortWithPriority,
   excludeFromFeeds,
   query,
-  animateOnFirstLoadOnly,
   header,
   sidebar,
   className,
@@ -67,13 +66,11 @@ export default function MediaGridContainer({
               query,
               ...categories,
               canStart: shouldAnimateDynamicItems,
-              animateOnFirstLoadOnly,
               onAnimationComplete,
             }} />
             : <MediaGrid {...{
               photos,
               ...categories,
-              animateOnFirstLoadOnly,
               onAnimationComplete,
             }} />}
         </div>

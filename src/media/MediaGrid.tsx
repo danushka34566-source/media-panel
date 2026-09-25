@@ -24,6 +24,7 @@ import {
 } from './detail-video-playback';
 import PersonalFavoriteButton from './PersonalFavoriteButton';
 import type { SortBy } from './sort';
+import { MEDIA_ENTRANCE_STAGGER_DELAY } from './media-entrance-animation';
 
 const WIDE_GRID_ASPECT_RATIO = 16 / 9;
 const INITIAL_GRID_IMAGE_COUNT = 8;
@@ -53,8 +54,6 @@ export default function MediaGrid({
   classNameMedia,
   animate = true,
   canStart,
-  animateOnFirstLoadOnly,
-  staggerOnFirstLoadOnly = true,
   additionalTile,
   small,
   selectable = true,
@@ -77,8 +76,6 @@ export default function MediaGrid({
   classNameMedia?: string
   animate?: boolean
   canStart?: boolean
-  animateOnFirstLoadOnly?: boolean
-  staggerOnFirstLoadOnly?: boolean
   additionalTile?: ReactNode
   small?: boolean
   selectable?: boolean
@@ -256,13 +253,11 @@ export default function MediaGrid({
         type={animate === false ? 'none' : undefined}
         fade={false}
         canStart={canStart}
-        duration={0.45}
-        staggerDelay={0.04}
-        animationItemLimit={INITIAL_GRID_IMAGE_COUNT}
-        distanceOffset={40}
+        duration={0.7}
+        staggerDelay={MEDIA_ENTRANCE_STAGGER_DELAY}
+        distanceOffset={0}
         removeTransformAfterAnimation
-        animateOnFirstLoadOnly={animateOnFirstLoadOnly}
-        staggerOnFirstLoadOnly={staggerOnFirstLoadOnly}
+        staggerOnFirstLoadOnly={false}
         onAnimationComplete={onAnimationComplete}
         items={photos.map((photo, index) => {
           const isSelected = selectedMediaIds?.includes(photo.id) ?? false;
@@ -317,7 +312,7 @@ export default function MediaGrid({
                     autoplaySmartPreviews,
                     supportsHover,
                   ),
-                onVisible: index === Math.max(0, photos.length - 24)
+                onVisible: index === Math.max(0, photos.length - 48)
                   ? onLastMediaVisible
                   : undefined,
                 autoPreviewEnabled: !areSmartPreviewsSuspended &&

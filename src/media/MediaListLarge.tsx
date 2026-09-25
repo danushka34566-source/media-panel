@@ -2,6 +2,7 @@ import AnimateItems from '@/components/AnimateItems';
 import { Media } from '.';
 import MediaLarge from './MediaLarge';
 import { RevalidateMedia } from './InfiniteMediaScroll';
+import { MEDIA_ENTRANCE_STAGGER_DELAY } from './media-entrance-animation';
 
 export default function MediaListLarge({
   photos,
@@ -9,14 +10,12 @@ export default function MediaListLarge({
   prefetchFirstMediaLinks,
   onLastMediaVisible,
   revalidateMedia,
-  animateOnFirstLoadOnly = false,
 }: {
   photos: Media[]
   animate?: boolean
   prefetchFirstMediaLinks?: boolean
   onLastMediaVisible?: () => void
   revalidateMedia?: RevalidateMedia
-  animateOnFirstLoadOnly?: boolean
 }) {
   return (
     <AnimateItems
@@ -24,10 +23,9 @@ export default function MediaListLarge({
       type={animate ? 'scale' : 'none'}
       fade={false}
       duration={0.7}
-      staggerDelay={0.15}
+      staggerDelay={MEDIA_ENTRANCE_STAGGER_DELAY}
       distanceOffset={0}
-      staggerOnFirstLoadOnly
-      animateOnFirstLoadOnly={animateOnFirstLoadOnly}
+      staggerOnFirstLoadOnly={false}
       removeTransformAfterAnimation
       items={photos.map((photo, index) =>
         <MediaLarge
@@ -42,7 +40,7 @@ export default function MediaListLarge({
           prefetchRelatedLinks={prefetchFirstMediaLinks && index === 0}
           revalidateMedia={revalidateMedia}
           shouldZoomOnFKeydown={false}
-          onVisible={index === photos.length - 1
+          onVisible={index === Math.max(0, photos.length - 8)
             ? onLastMediaVisible
             : undefined}
         />)}

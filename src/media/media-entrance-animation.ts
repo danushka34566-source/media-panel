@@ -1,0 +1,1 @@
+export const MEDIA_ENTRANCE_STAGGER_DELAY = 0.04;
