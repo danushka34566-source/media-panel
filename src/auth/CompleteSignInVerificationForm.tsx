@@ -17,6 +17,7 @@ import {
 import { clsx } from 'clsx/lite';
 import AuthCodeField from './AuthCodeField';
 import AuthVerificationMethodPicker from './AuthVerificationMethodPicker';
+import { PATH_SIGN_IN } from '@/app/path';
 
 export default function CompleteSignInVerificationForm({
   defaultMethod,
@@ -29,6 +30,7 @@ export default function CompleteSignInVerificationForm({
   const [selectedTwoFactorMethod, setSelectedTwoFactorMethod] =
     useState<TwoFactorMethod>();
   const [sentMethod, setSentMethod] = useState<TwoFactorMethod>();
+  const [signOutError, setSignOutError] = useState('');
   const [response, action] = useActionState(
     completePendingSignInVerificationAction,
     undefined,
@@ -92,7 +94,16 @@ export default function CompleteSignInVerificationForm({
           </div>
         </AuthVerificationMethodPicker>
       </form>
-      <form action={signOutAction} className="w-full">
+      {signOutError && <ErrorNote>{signOutError}</ErrorNote>}
+      <form action={async () => {
+        setSignOutError('');
+        try {
+          await signOutAction();
+          window.location.replace(PATH_SIGN_IN);
+        } catch {
+          setSignOutError('Could not sign out. Please try again.');
+        }
+      }} className="w-full">
         <SubmitButtonWithStatus styleAs="link" className="w-full justify-center">
           Sign out
         </SubmitButtonWithStatus>

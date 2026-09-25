@@ -32,6 +32,7 @@ export default function Footer() {
     '/verify-email',
     '/verify-login',
     '/password-reset',
+    '/setup',
   ].some(path => pathname.startsWith(path));
 
   const shouldAnimate = !isPathAdmin(pathname);

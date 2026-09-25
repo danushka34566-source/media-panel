@@ -367,13 +367,19 @@ html {
 }
 
 @layer components {
+  body:has(.auth-flow-page) [data-site-layout],
   body:has(.auth-flow-page) [data-page-content] {
-    min-height: 0;
-    margin-bottom: 0;
+    margin-bottom: 0 !important;
+  }
+  body:has(.auth-flow-page) [data-page-content] {
+    min-height: 0 !important;
   }
   .auth-flow-page,
   .auth-flow-page * {
     font-family: var(--font-mono) !important;
+  }
+  .auth-flow-card h1 {
+    font-family: var(--font-sans), Arial, sans-serif !important;
   }
   .component-surface {
     @apply

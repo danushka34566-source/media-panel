@@ -118,7 +118,7 @@ export default async function RootLayout({
                       }}
                     />
                     <IdleSessionLogout />
-                    <div className={clsx(
+                    <div data-site-layout className={clsx(
                       'mx-3 mb-3',
                       'lg:mx-6 lg:mb-6',
                     )}>
