@@ -191,8 +191,13 @@ export default function ProfileClient({
   const showTotpSetup = !isTotpEnabled || Boolean(totpSetup);
 
   return (
-    <div className="mx-auto max-w-5xl space-y-4">
-      <Container centered={false} className="items-stretch">
+    <div className="mx-auto max-w-5xl space-y-5">
+      <div className="space-y-1 px-1">
+        <p className="text-xs font-semibold uppercase tracking-[0.18em] text-dim">Account &amp; security</p>
+        <h1 className="text-2xl font-semibold tracking-tight text-main sm:text-3xl">Profile settings</h1>
+        <p className="text-sm text-dim">Manage your account details, sign-in options, and protection.</p>
+      </div>
+      <Container centered={false} className="items-stretch rounded-2xl bg-content shadow-sm">
         <div className="flex flex-col gap-4 sm:flex-row sm:items-center">
           <button
             type="button"
@@ -256,7 +261,7 @@ export default function ProfileClient({
       <div className="grid items-start gap-4 lg:grid-cols-2">
         <div className="space-y-4">
           {(user.googleLinked || googleSignInEnabled) &&
-          <Container centered={false} className="items-stretch">
+          <Container centered={false} className="items-stretch rounded-2xl bg-content shadow-sm">
             <SectionTitle
               icon={<FiPlay size={16} />}
               title="Video previews"
@@ -280,7 +285,7 @@ export default function ProfileClient({
                 </label>)}
             </div>
           </Container>}
-          <Container centered={false} className="items-stretch">
+          <Container centered={false} className="items-stretch rounded-2xl bg-content shadow-sm">
             <SectionTitle
               icon={<FiKey size={16} />}
               title="Account details"
@@ -328,7 +333,7 @@ export default function ProfileClient({
             </form>
           </Container>
 
-          <Container centered={false} className="items-stretch">
+          <Container centered={false} className="items-stretch rounded-2xl bg-content shadow-sm">
             <SectionTitle
               icon={<FiLink size={16} />}
               title="Sign-in methods"
@@ -404,7 +409,7 @@ export default function ProfileClient({
         </div>
 
         <div className="space-y-4">
-          <Container centered={false} className="items-stretch">
+          <Container centered={false} className="items-stretch rounded-2xl bg-content shadow-sm">
             <SectionTitle
               icon={<FiShield size={16} />}
               title="Security overview"
@@ -430,7 +435,7 @@ export default function ProfileClient({
             </div>
           </Container>
 
-          <Container centered={false} className="items-stretch">
+          <Container centered={false} className="items-stretch rounded-2xl bg-content shadow-sm">
             <SectionTitle
               icon={<FiSmartphone size={16} />}
               title="Mobile verification"
@@ -501,7 +506,7 @@ export default function ProfileClient({
               </div>}
           </Container>
 
-          <Container centered={false} className="items-stretch">
+          <Container centered={false} className="items-stretch rounded-2xl bg-content shadow-sm">
             <SectionTitle
               icon={<FiLock size={16} />}
               title="Two-factor authentication"

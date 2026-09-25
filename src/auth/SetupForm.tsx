@@ -8,6 +8,7 @@ import SubmitButtonWithStatus from '@/components/SubmitButtonWithStatus';
 import LinkWithStatus from '@/components/LinkWithStatus';
 import { setupSuperAdminAction, setupWithGoogleAction } from './actions';
 import { PATH_SIGN_IN } from '@/app/path';
+import { FiShield } from 'react-icons/fi';
 
 export default function SetupForm({
   googleSignInEnabled = false,
@@ -21,9 +22,10 @@ export default function SetupForm({
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   return (
-    <Container className="w-[calc(100vw-1.5rem)] space-y-5 px-6 py-5 sm:w-[min(420px,90vw)]">
-      <div className="space-y-2 text-center">
-        <h1 className="text-2xl text-main">Set up Media Panel</h1>
+    <Container className="w-full max-w-[420px] space-y-5 rounded-2xl bg-content px-6 py-6 shadow-lg sm:px-8">
+      <div className="w-full space-y-2 text-left">
+        <span className="mb-2 inline-flex size-11 items-center justify-center rounded-2xl bg-dim text-main ring-1 ring-medium"><FiShield size={20} /></span>
+        <h1 className="text-2xl font-semibold tracking-tight text-main">Set up Media Panel</h1>
         <p className="text-sm text-dim">
           Create the first super admin. This account controls administrators,
           users, and destructive actions.

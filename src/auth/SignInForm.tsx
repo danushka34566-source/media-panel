@@ -133,22 +133,22 @@ export default function SignInForm({
   return (
     <Container
       className={clsx(
-        'w-[calc(100vw-1.5rem)] sm:w-[min(400px,90vw)]',
-        'px-6 py-6',
+        'w-full max-w-[400px]',
+        'rounded-2xl bg-content px-6 py-7 shadow-lg sm:px-8',
         className,
       )}
     >
       {includeTitle &&
         <div className="flex w-full flex-col items-center text-center">
           <span className={clsx(
-            'mb-3 inline-flex size-11 items-center justify-center rounded-full',
-            needsTwoFactor ? 'bg-dim text-main' : 'text-main',
+            'mb-4 inline-flex size-12 items-center justify-center rounded-2xl',
+            'bg-dim text-main ring-1 ring-medium',
           )}>
             {needsTwoFactor
               ? <FiShield size={21} />
               : <IconLock className="translate-y-[0.5px]" />}
           </span>
-          <h1 className="text-2xl font-semibold text-main">
+          <h1 className="text-2xl font-semibold tracking-tight text-main">
             {needsTwoFactor ? appText.auth.verifyTitle : appText.auth.signIn}
           </h1>
           {needsTwoFactor &&

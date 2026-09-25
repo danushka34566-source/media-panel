@@ -6,6 +6,7 @@ import FieldsetWithStatus from '@/components/FieldsetWithStatus';
 import SubmitButtonWithStatus from '@/components/SubmitButtonWithStatus';
 import LinkWithStatus from '@/components/LinkWithStatus';
 import { clsx } from 'clsx/lite';
+import { FiUserPlus, FiMail, FiKey } from 'react-icons/fi';
 import { useActionState, useState } from 'react';
 import {
   confirmPasswordResetAction,
@@ -21,7 +22,7 @@ export function SignUpForm() {
   const [password, setPassword] = useState('');
   const [response, action] = useActionState(signUpAction, undefined);
   return (
-    <AuthContainer title="Create account">
+    <AuthContainer title="Create account" icon={<FiUserPlus size={20} />}>
       <form action={action} className="w-full space-y-5">
         {response && <ErrorNote>{response}</ErrorNote>}
         <FieldsetWithStatus label="Name" value={name} onChange={setName} />
@@ -46,6 +47,7 @@ export function VerifyEmailForm({ initialEmail }: { initialEmail?: string }) {
   return (
     <AuthContainer
       title="Verify email"
+      icon={<FiMail size={20} />}
       description="Enter the six-digit code sent to your inbox."
     >
       <form action={action} className="w-full space-y-5">
@@ -91,6 +93,7 @@ export function PasswordResetForm({
   return (
     <AuthContainer
       title={codeSent ? 'Enter reset code' : 'Reset password'}
+      icon={<FiKey size={20} />}
       description={codeSent
         ? 'Enter the six-digit code from your email and choose a new password.'
         : 'We will email you a secure code to confirm this password change.'}
@@ -136,21 +139,24 @@ export function PasswordResetForm({
 function AuthContainer({
   title,
   description,
+  icon,
   children,
 }: {
   title: string
   description?: string
+  icon?: React.ReactNode
   children: React.ReactNode
 }) {
   return (
     <Container
       className={clsx(
-        'w-[calc(100vw-1.5rem)] sm:w-[min(400px,90vw)]',
-        'max-h-[calc(100dvh-2rem)] overflow-y-auto px-5 py-5 sm:px-6',
+        'w-full max-w-[400px]',
+        'max-h-[calc(100dvh-2rem)] overflow-y-auto rounded-2xl bg-content px-5 py-6 shadow-lg sm:px-8 sm:py-7',
       )}
     >
-      <div className="self-start">
-        <h1 className="text-xl font-semibold text-main sm:text-2xl">
+      <div className="w-full self-start">
+        {icon && <span className="mb-4 inline-flex size-11 items-center justify-center rounded-2xl bg-dim text-main ring-1 ring-medium">{icon}</span>}
+        <h1 className="text-2xl font-semibold tracking-tight text-main">
           {title}
         </h1>
         {description &&
