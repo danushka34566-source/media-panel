@@ -34,7 +34,7 @@ export default async function VerifyLoginPage() {
     : 'email';
 
   return (
-    <AuthPageShell className="min-h-dvh">
+    <AuthPageShell>
       <CompleteSignInVerificationForm
         defaultMethod={defaultMethod}
         availableMethods={availableMethods}

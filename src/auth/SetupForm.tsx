@@ -25,7 +25,7 @@ export default function SetupForm({
   return (
     <Container
       color="auth"
-      className="auth-flow-card w-[min(420px,calc(100vw-1.5rem))] space-y-5 rounded-3xl px-6 py-6 sm:px-8"
+      className="auth-flow-card w-full max-w-sm space-y-5 rounded-3xl p-5 sm:p-6"
     >
       <AuthHeading
         icon={<FiShield size={21} />}

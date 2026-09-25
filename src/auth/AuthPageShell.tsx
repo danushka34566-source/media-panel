@@ -9,8 +9,8 @@ export default function AuthPageShell({
 }) {
   return (
     <div className={clsx(
-      'mx-auto flex min-h-[calc(100dvh-4rem)] w-full',
-      'flex-col items-center justify-center gap-5 py-5 sm:py-8',
+      'page-under-header mx-auto flex w-full flex-col items-center justify-center gap-6',
+      'p-4 sm:p-6 md:p-10',
       className,
     )}>
       {children}

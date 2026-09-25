@@ -394,6 +394,8 @@ html {
     border: 1px solid color-mix(in oklch, var(--foreground) 13%, transparent);
     box-shadow: 0 12px 28px rgb(0 0 0 / 0.15);
     backdrop-filter: blur(32px) saturate(150%);
+    overflow: visible;
+    max-height: none;
   }
   .dark .auth-flow-card {
     --auth-field-fill: #282626;

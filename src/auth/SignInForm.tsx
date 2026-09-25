@@ -134,9 +134,9 @@ export default function SignInForm({
     <Container
       color={includeTitle ? 'auth' : 'gray-border'}
       className={clsx(
-        'w-[min(400px,calc(100vw-1.5rem))]',
+        'w-full max-w-sm',
         includeTitle
-          ? 'auth-flow-card rounded-3xl px-6 py-7 sm:px-8'
+          ? 'auth-flow-card rounded-3xl p-5 sm:p-6'
           : 'rounded-2xl bg-content px-6 py-7 shadow-lg sm:px-8',
         className,
       )}

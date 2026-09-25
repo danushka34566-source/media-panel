@@ -153,8 +153,7 @@ function AuthContainer({
     <Container
       color="auth"
       className={clsx(
-        'w-[min(400px,calc(100vw-1.5rem))]',
-        'auth-flow-card rounded-3xl px-5 py-6 sm:px-8 sm:py-7',
+        'auth-flow-card w-full max-w-sm rounded-3xl p-5 sm:p-6',
       )}
     >
       <AuthHeading icon={icon} title={title} description={description} action={action} />
