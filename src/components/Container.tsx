@@ -13,7 +13,7 @@ export default function Container({
   ref?: RefObject<HTMLDivElement | null>
   children: ReactNode
   className?: string
-  color?: 'gray' | 'gray-border' | 'blue' | 'red' | 'yellow'
+  color?: 'gray' | 'gray-border' | 'auth' | 'blue' | 'red' | 'yellow'
   padding?:
     'loose' |
     'normal' |
@@ -34,6 +34,7 @@ export default function Container({
         'bg-extra-dim',
         'border-medium',
       ];
+      case 'auth': return ['text-medium'];
       case 'blue': return [
         'text-blue-800 dark:text-blue-400',
         'bg-blue-50 dark:bg-blue-950/50',

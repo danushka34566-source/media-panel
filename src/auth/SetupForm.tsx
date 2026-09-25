@@ -9,6 +9,7 @@ import LinkWithStatus from '@/components/LinkWithStatus';
 import { setupSuperAdminAction, setupWithGoogleAction } from './actions';
 import { PATH_SIGN_IN } from '@/app/path';
 import { FiShield } from 'react-icons/fi';
+import AuthHeading from './AuthHeading';
 
 export default function SetupForm({
   googleSignInEnabled = false,
@@ -22,15 +23,18 @@ export default function SetupForm({
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   return (
-    <Container className="w-[calc(100vw-1.5rem)] space-y-5 rounded-2xl bg-content px-6 py-6 shadow-lg sm:w-[min(420px,90vw)] sm:px-8">
-      <div className="w-full space-y-2 text-center">
-        <span className="mb-2 inline-flex size-11 items-center justify-center rounded-2xl bg-dim text-main ring-1 ring-medium"><FiShield size={20} /></span>
-        <h1 className="text-2xl font-semibold tracking-tight text-main">Set up Media Panel</h1>
-        <p className="text-sm text-dim">
-          Create the first super admin. This account controls administrators,
-          users, and destructive actions.
-        </p>
-      </div>
+    <Container
+      color="auth"
+      className="auth-flow-card w-[calc(100vw-1.5rem)] space-y-5 rounded-3xl px-6 py-6 sm:w-[min(420px,90vw)] sm:px-8"
+    >
+      <AuthHeading
+        icon={<FiShield size={21} />}
+        title="Set up Media Panel"
+        description="Create the first super admin to manage users and access."
+        action={<>Already completed setup?{' '}
+          <LinkWithStatus href={PATH_SIGN_IN} className="font-medium text-main underline underline-offset-4">Sign in</LinkWithStatus>
+        </>}
+      />
       {response && <ErrorNote>{response}</ErrorNote>}
       <form action={action} className="space-y-4">
         <FieldsetWithStatus id="name" label="Name" value={name} onChange={setName} required />
@@ -46,7 +50,8 @@ export default function SetupForm({
           required
         />
         <SubmitButtonWithStatus
-          className="w-full justify-center"
+          primary
+          className="w-full justify-center rounded-xl"
           disabled={!name || !email || !password || !confirmPassword}
         >
           Create super admin
@@ -59,15 +64,11 @@ export default function SetupForm({
           <span className="h-px flex-1 bg-medium" />
         </div>
         <form action={setupWithGoogleAction}>
-          <SubmitButtonWithStatus className="w-full justify-center">
+          <SubmitButtonWithStatus className="w-full justify-center rounded-xl">
             Set up super admin with Google
           </SubmitButtonWithStatus>
         </form>
       </>}
-      <p className="text-center text-sm text-dim">
-        Already completed setup?{' '}
-        <LinkWithStatus href={PATH_SIGN_IN} className="link">Sign in</LinkWithStatus>
-      </p>
     </Container>
   );
 }

@@ -44,7 +44,7 @@ export default async function SignInPage() {
         href={PATH_ROOT}
         className={clsx(
           'flex items-center gap-2.5',
-          'text-lg',
+          'font-sans text-sm font-medium text-medium',
         )}
       >
         <IoArrowBack className="translate-y-[1px]" />

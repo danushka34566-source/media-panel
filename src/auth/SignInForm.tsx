@@ -29,7 +29,9 @@ import { useSearchParams } from 'next/navigation';
 import { useAppState } from '@/app/AppState';
 import { clsx } from 'clsx/lite';
 import { PATH_ROOT } from '@/app/path';
-import IconLock from '@/components/icons/IconLock';
+import IconMedia from '@/components/icons/IconMedia';
+import AuthHeading from './AuthHeading';
+import AuthCodeField from './AuthCodeField';
 import { useAppText } from '@/i18n/state/client';
 import LinkWithStatus from '@/components/LinkWithStatus';
 import { FiRefreshCw, FiShield } from 'react-icons/fi';
@@ -132,34 +134,35 @@ export default function SignInForm({
 
   return (
     <Container
+      color={includeTitle ? 'auth' : 'gray-border'}
       className={clsx(
         'w-[calc(100vw-1.5rem)] sm:w-[min(400px,90vw)]',
-        'rounded-2xl bg-content px-6 py-7 shadow-lg sm:px-8',
+        includeTitle
+          ? 'auth-flow-card rounded-3xl px-6 py-7 sm:px-8'
+          : 'rounded-2xl bg-content px-6 py-7 shadow-lg sm:px-8',
         className,
       )}
     >
       {includeTitle &&
-        <div className="flex w-full flex-col items-center text-center">
-          <span className={clsx(
-            'mb-4 inline-flex size-12 items-center justify-center rounded-2xl',
-            'bg-dim text-main ring-1 ring-medium',
-          )}>
-            {needsTwoFactor
-              ? <FiShield size={21} />
-              : <IconLock className="translate-y-[0.5px]" />}
-          </span>
-          <h1 className="text-2xl font-semibold tracking-tight text-main">
-            {needsTwoFactor ? appText.auth.verifyTitle : appText.auth.signIn}
-          </h1>
-          {needsTwoFactor &&
-            <p className="mt-2 max-w-xs text-sm leading-relaxed text-dim">
-              {verificationInstruction}
-            </p>}
-        </div>}
+        <AuthHeading
+          icon={needsTwoFactor
+            ? <FiShield size={21} />
+            : <IconMedia size={23} />}
+          title={needsTwoFactor ? appText.auth.verifyTitle : appText.auth.signIn}
+          description={needsTwoFactor ? verificationInstruction : undefined}
+          action={!needsTwoFactor && newRegistrationsEnabled
+            ? <LinkWithStatus
+              href="/sign-up"
+              className="font-medium text-main underline underline-offset-4"
+            >
+              {appText.auth.createAccount}
+            </LinkWithStatus>
+            : undefined}
+        />}
       <form action={action} className="w-full">
         <div className={clsx(
           'space-y-5 w-full',
-          includeTitle && 'mt-6',
+          includeTitle && 'mt-2',
         )}>
           {response === KEY_CREDENTIALS_SIGN_IN_ERROR &&
             <ErrorNote>
@@ -189,17 +192,12 @@ export default function SignInForm({
                   }}
                   selectOptions={twoFactorMethodOptions}
                 />
-                <FieldsetWithStatus
+                <AuthCodeField
                   id="twoFactorCode"
                   label={appText.auth.verificationCode}
                   inputRef={twoFactorCodeRef}
                   value={twoFactorCode}
-                  onChange={value => setTwoFactorCode(
-                    value.replace(/\D/g, '').slice(0, 6),
-                  )}
-                  inputMode="numeric"
-                  autoComplete="one-time-code"
-                  maxLength={6}
+                  onChange={setTwoFactorCode}
                 />
               </>
               : <>
@@ -210,13 +208,24 @@ export default function SignInForm({
                   value={email}
                   onChange={setEmail}
                 />
-                <FieldsetWithStatus
-                  id="password"
-                  label={appText.auth.password}
-                  type="password"
-                  value={password}
-                  onChange={setPassword}
-                />
+                <div>
+                  <FieldsetWithStatus
+                    id="password"
+                    label={appText.auth.password}
+                    type="password"
+                    value={password}
+                    onChange={setPassword}
+                  />
+                  {includeTitle &&
+                    <div className="mt-1.5 text-right font-sans text-xs">
+                      <LinkWithStatus
+                        href="/password-reset"
+                        className="text-medium underline underline-offset-4"
+                      >
+                        {appText.auth.forgotPassword}
+                      </LinkWithStatus>
+                    </div>}
+                </div>
               </>}
             {shouldRedirect &&
               <input
@@ -233,7 +242,7 @@ export default function SignInForm({
               <SubmitButtonWithStatus
                 disabled={!isFormValid}
                 primary
-                className="w-full justify-center rounded-lg"
+                className="w-full justify-center rounded-xl"
               >
                 {appText.auth.verifyCode}
               </SubmitButtonWithStatus>
@@ -242,9 +251,10 @@ export default function SignInForm({
                   name="intent"
                   value="resend-2fa"
                   icon={<FiRefreshCw size={15} />}
+                  hideText="never"
                   onClick={() => setTwoFactorCode('')}
                   className={clsx(
-                    'w-full justify-center rounded-lg border border-medium',
+                    'w-full justify-center rounded-xl border border-medium',
                     'bg-dim px-4 text-main transition-colors hover:bg-medium',
                   )}
                 >
@@ -254,7 +264,7 @@ export default function SignInForm({
             : <SubmitButtonWithStatus
               disabled={!isFormValid}
               primary
-              className="w-full justify-center rounded-lg"
+              className="w-full justify-center rounded-xl"
             >
               {appText.auth.signIn}
             </SubmitButtonWithStatus>}
@@ -271,8 +281,9 @@ export default function SignInForm({
         <form action={signInWithGoogleAction} className="w-full">
           <SubmitButtonWithStatus
             icon={<FcGoogle size={18} />}
+            hideText="never"
             className={clsx(
-              'w-full justify-center rounded-lg border border-medium',
+              'w-full justify-center rounded-xl border border-medium',
               'bg-dim text-main transition-colors hover:bg-medium',
             )}
           >
@@ -280,7 +291,7 @@ export default function SignInForm({
           </SubmitButtonWithStatus>
         </form>
       </>}
-      {!needsTwoFactor &&
+      {!needsTwoFactor && !includeTitle &&
         <div className={clsx(
           'flex w-full gap-3 text-sm',
           newRegistrationsEnabled ? 'justify-between' : 'justify-end',

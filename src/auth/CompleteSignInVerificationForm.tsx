@@ -18,6 +18,8 @@ import {
 import { clsx } from 'clsx/lite';
 import Note from '@/components/Note';
 import { FiShield } from 'react-icons/fi';
+import AuthHeading from './AuthHeading';
+import AuthCodeField from './AuthCodeField';
 
 export default function CompleteSignInVerificationForm({
   defaultMethod,
@@ -49,22 +51,17 @@ export default function CompleteSignInVerificationForm({
 
   return (
     <Container
+      color="auth"
       className={clsx(
         'w-[calc(100vw-1.5rem)] sm:w-[min(400px,90vw)]',
-        'max-h-[calc(100dvh-2rem)] overflow-y-auto rounded-2xl bg-content px-5 py-6 shadow-lg sm:px-8 sm:py-7',
+        'auth-flow-card rounded-3xl px-5 py-6 sm:px-8 sm:py-7',
       )}
     >
-      <div className="flex w-full items-start gap-3">
-        <span className="mt-0.5 inline-flex size-9 shrink-0 items-center justify-center rounded-full bg-dim text-main">
-          <FiShield size={17} />
-        </span>
-        <div>
-          <h1 className="text-xl font-semibold text-main">Verify it’s you</h1>
-          <p className="mt-1 text-sm leading-relaxed text-dim">
-            Choose any available method, then enter its six-digit code.
-          </p>
-        </div>
-      </div>
+      <AuthHeading
+        icon={<FiShield size={21} />}
+        title="Verify it's you"
+        description="Choose an available method, then enter its six-digit code."
+      />
       <form action={action} className="w-full space-y-4">
         {response && response !== KEY_CREDENTIALS_SUCCESS && !twoFactorState &&
           <ErrorNote>{response}</ErrorNote>}
@@ -85,20 +82,16 @@ export default function CompleteSignInVerificationForm({
           }}
           selectOptions={methodOptions}
         />
-        <FieldsetWithStatus
+        <AuthCodeField
           id="twoFactorCode"
           label="Verification code"
           value={twoFactorCode}
-          onChange={value => setTwoFactorCode(
-            value.replace(/\D/g, '').slice(0, 6),
-          )}
-          inputMode="numeric"
-          autoComplete="one-time-code"
-          maxLength={6}
+          onChange={setTwoFactorCode}
         />
         <SubmitButtonWithStatus
           disabled={twoFactorMethod === 'authenticator' && twoFactorCode.length < 6}
-          className="w-full justify-center"
+          primary
+          className="w-full justify-center rounded-xl"
         >
           {twoFactorCode.length < 6 && twoFactorMethod !== 'authenticator'
             ? twoFactorMethod === 'sms' ? 'Send SMS code' : 'Send email code'

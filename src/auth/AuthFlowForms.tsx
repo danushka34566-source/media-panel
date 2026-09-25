@@ -8,6 +8,8 @@ import LinkWithStatus from '@/components/LinkWithStatus';
 import { clsx } from 'clsx/lite';
 import { FiUserPlus, FiMail, FiKey } from 'react-icons/fi';
 import { useActionState, useState } from 'react';
+import AuthHeading from './AuthHeading';
+import AuthCodeField from './AuthCodeField';
 import {
   confirmPasswordResetAction,
   requestPasswordResetAction,
@@ -22,20 +24,27 @@ export function SignUpForm() {
   const [password, setPassword] = useState('');
   const [response, action] = useActionState(signUpAction, undefined);
   return (
-    <AuthContainer title="Create account" icon={<FiUserPlus size={20} />}>
+    <AuthContainer
+      title="Create your account"
+      icon={<FiUserPlus size={20} />}
+      action={<>Already have an account?{' '}
+        <LinkWithStatus href="/sign-in" className="font-medium text-main underline underline-offset-4">Sign in</LinkWithStatus>
+      </>}
+    >
       <form action={action} className="w-full space-y-5">
         {response && <ErrorNote>{response}</ErrorNote>}
         <FieldsetWithStatus label="Name" value={name} onChange={setName} />
         <FieldsetWithStatus label="Username" value={username} onChange={setUsername} />
         <FieldsetWithStatus label="Email" type="email" value={email} onChange={setEmail} />
         <FieldsetWithStatus label="Password" type="password" value={password} onChange={setPassword} />
-        <SubmitButtonWithStatus disabled={!name || !username || !email || !password}>
+        <SubmitButtonWithStatus
+          disabled={!name || !username || !email || !password}
+          primary
+          className="w-full justify-center rounded-xl"
+        >
           Create account
         </SubmitButtonWithStatus>
       </form>
-      <LinkWithStatus href="/sign-in" className="link text-sm">
-        Already have an account? Sign in
-      </LinkWithStatus>
     </AuthContainer>
   );
 }
@@ -46,32 +55,28 @@ export function VerifyEmailForm({ initialEmail }: { initialEmail?: string }) {
   const [response, action] = useActionState(verifyEmailAction, undefined);
   return (
     <AuthContainer
-      title="Verify email"
+      title="Email verification"
       icon={<FiMail size={20} />}
       description="Enter the six-digit code sent to your inbox."
+      action={<LinkWithStatus href="/sign-in" className="font-medium text-main underline underline-offset-4">Back to sign in</LinkWithStatus>}
     >
       <form action={action} className="w-full space-y-5">
         {response && <ErrorNote>{response}</ErrorNote>}
         <FieldsetWithStatus label="Email" type="email" value={email} onChange={setEmail} />
-        <FieldsetWithStatus
+        <AuthCodeField
           id="code"
           label="Verification code"
           value={code}
-          onChange={value => setCode(value.replace(/\D/g, '').slice(0, 6))}
-          inputMode="numeric"
-          autoComplete="one-time-code"
-          maxLength={6}
+          onChange={setCode}
         />
         <SubmitButtonWithStatus
           disabled={!email || code.length < 6}
-          className="w-full justify-center"
+          primary
+          className="w-full justify-center rounded-xl"
         >
           Verify account
         </SubmitButtonWithStatus>
       </form>
-      <LinkWithStatus href="/sign-in" className="link text-sm">
-        Back to sign in
-      </LinkWithStatus>
     </AuthContainer>
   );
 }
@@ -92,11 +97,14 @@ export function PasswordResetForm({
     useActionState(confirmPasswordResetAction, undefined);
   return (
     <AuthContainer
-      title={codeSent ? 'Enter reset code' : 'Reset password'}
+      title={codeSent ? 'Enter reset code' : 'Reset your password'}
       icon={<FiKey size={20} />}
       description={codeSent
         ? 'Enter the six-digit code from your email and choose a new password.'
         : 'We will email you a secure code to confirm this password change.'}
+      action={<>Remember your password?{' '}
+        <LinkWithStatus href="/sign-in" className="font-medium text-main underline underline-offset-4">Sign in</LinkWithStatus>
+      </>}
     >
       {!codeSent
         ? <form action={requestAction} className="w-full space-y-5">
@@ -104,7 +112,8 @@ export function PasswordResetForm({
           <FieldsetWithStatus label="Email" type="email" value={email} onChange={setEmail} />
           <SubmitButtonWithStatus
             disabled={!email}
-            className="w-full justify-center"
+            primary
+            className="w-full justify-center rounded-xl"
           >
             Send reset code
           </SubmitButtonWithStatus>
@@ -112,26 +121,21 @@ export function PasswordResetForm({
         : <form action={confirmAction} className="w-full space-y-5">
           {confirmResponse && <ErrorNote>{confirmResponse}</ErrorNote>}
           <FieldsetWithStatus label="Email" type="email" value={email} onChange={setEmail} />
-          <FieldsetWithStatus
+          <AuthCodeField
             id="code"
             label="Reset code"
             value={code}
-            onChange={value => setCode(value.replace(/\D/g, '').slice(0, 6))}
-            inputMode="numeric"
-            autoComplete="one-time-code"
-            maxLength={6}
+            onChange={setCode}
           />
           <FieldsetWithStatus label="Password" type="password" value={password} onChange={setPassword} />
           <SubmitButtonWithStatus
             disabled={!email || code.length < 6 || !password}
-            className="w-full justify-center"
+            primary
+            className="w-full justify-center rounded-xl"
           >
             Reset password
           </SubmitButtonWithStatus>
         </form>}
-      <LinkWithStatus href="/sign-in" className="link text-sm">
-        Back to sign in
-      </LinkWithStatus>
     </AuthContainer>
   );
 }
@@ -140,30 +144,24 @@ function AuthContainer({
   title,
   description,
   icon,
+  action,
   children,
 }: {
   title: string
   description?: string
   icon?: React.ReactNode
+  action?: React.ReactNode
   children: React.ReactNode
 }) {
   return (
     <Container
+      color="auth"
       className={clsx(
         'w-[calc(100vw-1.5rem)] sm:w-[min(400px,90vw)]',
-        'max-h-[calc(100dvh-2rem)] overflow-y-auto rounded-2xl bg-content px-5 py-6 shadow-lg sm:px-8 sm:py-7',
+        'auth-flow-card rounded-3xl px-5 py-6 sm:px-8 sm:py-7',
       )}
     >
-      <div className="w-full self-start">
-        {icon && <span className="mb-4 inline-flex size-11 items-center justify-center rounded-2xl bg-dim text-main ring-1 ring-medium">{icon}</span>}
-        <h1 className="text-2xl font-semibold tracking-tight text-main">
-          {title}
-        </h1>
-        {description &&
-          <p className="mt-1 text-sm leading-relaxed text-dim">
-            {description}
-          </p>}
-      </div>
+      <AuthHeading icon={icon} title={title} description={description} action={action} />
       {children}
     </Container>
   );

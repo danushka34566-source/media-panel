@@ -383,6 +383,23 @@ html {
     @apply
       text-black bg-neutral-200/95 rounded-lg
   }
+  .auth-flow-card {
+    background: color-mix(in oklch, var(--background) 86%, transparent);
+    border: 1px solid color-mix(in oklch, var(--foreground) 12%, transparent);
+    box-shadow: 0 12px 36px -18px rgb(0 0 0 / 0.24),
+      0 24px 56px -36px rgb(0 0 0 / 0.18);
+    backdrop-filter: blur(24px) saturate(140%);
+  }
+  .dark .auth-flow-card {
+    background: color-mix(in oklch, var(--card) 82%, transparent);
+    box-shadow: 0 14px 42px -18px rgb(0 0 0 / 0.65);
+  }
+  .auth-flow-card input[type=text],
+  .auth-flow-card input[type=email],
+  .auth-flow-card input[type=password] {
+    border-radius: 0.75rem;
+    min-height: 2.65rem;
+  }
 }
 
 @theme inline {
