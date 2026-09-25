@@ -35,7 +35,7 @@ import AuthCodeField from './AuthCodeField';
 import { useAppText } from '@/i18n/state/client';
 import LinkWithStatus from '@/components/LinkWithStatus';
 import { FiRefreshCw, FiShield } from 'react-icons/fi';
-import { FcGoogle } from 'react-icons/fc';
+import { FaGoogle } from 'react-icons/fa';
 
 export default function SignInForm({
   includeTitle = true,
@@ -136,7 +136,7 @@ export default function SignInForm({
     <Container
       color={includeTitle ? 'auth' : 'gray-border'}
       className={clsx(
-        'w-[calc(100vw-1.5rem)] sm:w-[min(400px,90vw)]',
+        'w-[min(400px,calc(100vw-1.5rem))]',
         includeTitle
           ? 'auth-flow-card rounded-3xl px-6 py-7 sm:px-8'
           : 'rounded-2xl bg-content px-6 py-7 shadow-lg sm:px-8',
@@ -241,8 +241,8 @@ export default function SignInForm({
             ? <div className="grid w-full grid-cols-1 gap-2 sm:grid-cols-2">
               <SubmitButtonWithStatus
                 disabled={!isFormValid}
-                primary
-                className="w-full justify-center rounded-xl"
+                primary={!includeTitle}
+                className={includeTitle ? 'auth-flow-button w-full justify-center' : 'w-full justify-center rounded-lg'}
               >
                 {appText.auth.verifyCode}
               </SubmitButtonWithStatus>
@@ -253,18 +253,15 @@ export default function SignInForm({
                   icon={<FiRefreshCw size={15} />}
                   hideText="never"
                   onClick={() => setTwoFactorCode('')}
-                  className={clsx(
-                    'w-full justify-center rounded-xl border border-medium',
-                    'bg-dim px-4 text-main transition-colors hover:bg-medium',
-                  )}
+                  className="auth-flow-button w-full justify-center"
                 >
                   {appText.auth.resendCode}
                 </SubmitButtonWithStatus>}
             </div>
             : <SubmitButtonWithStatus
               disabled={!isFormValid}
-              primary
-              className="w-full justify-center rounded-xl"
+              primary={!includeTitle}
+              className={includeTitle ? 'auth-flow-button w-full justify-center' : 'w-full justify-center rounded-lg'}
             >
               {appText.auth.signIn}
             </SubmitButtonWithStatus>}
@@ -280,12 +277,9 @@ export default function SignInForm({
         </div>
         <form action={signInWithGoogleAction} className="w-full">
           <SubmitButtonWithStatus
-            icon={<FcGoogle size={18} />}
+            icon={<FaGoogle size={16} />}
             hideText="never"
-            className={clsx(
-              'w-full justify-center rounded-xl border border-medium',
-              'bg-dim text-main transition-colors hover:bg-medium',
-            )}
+            className="auth-flow-button w-full justify-center"
           >
             {appText.auth.continueWithGoogle}
           </SubmitButtonWithStatus>

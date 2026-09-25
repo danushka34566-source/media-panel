@@ -39,8 +39,7 @@ export function SignUpForm() {
         <FieldsetWithStatus label="Password" type="password" value={password} onChange={setPassword} />
         <SubmitButtonWithStatus
           disabled={!name || !username || !email || !password}
-          primary
-          className="w-full justify-center rounded-xl"
+          className="auth-flow-button w-full justify-center"
         >
           Create account
         </SubmitButtonWithStatus>
@@ -71,8 +70,7 @@ export function VerifyEmailForm({ initialEmail }: { initialEmail?: string }) {
         />
         <SubmitButtonWithStatus
           disabled={!email || code.length < 6}
-          primary
-          className="w-full justify-center rounded-xl"
+          className="auth-flow-button w-full justify-center"
         >
           Verify account
         </SubmitButtonWithStatus>
@@ -112,8 +110,7 @@ export function PasswordResetForm({
           <FieldsetWithStatus label="Email" type="email" value={email} onChange={setEmail} />
           <SubmitButtonWithStatus
             disabled={!email}
-            primary
-            className="w-full justify-center rounded-xl"
+            className="auth-flow-button w-full justify-center"
           >
             Send reset code
           </SubmitButtonWithStatus>
@@ -130,8 +127,7 @@ export function PasswordResetForm({
           <FieldsetWithStatus label="Password" type="password" value={password} onChange={setPassword} />
           <SubmitButtonWithStatus
             disabled={!email || code.length < 6 || !password}
-            primary
-            className="w-full justify-center rounded-xl"
+            className="auth-flow-button w-full justify-center"
           >
             Reset password
           </SubmitButtonWithStatus>
@@ -157,7 +153,7 @@ function AuthContainer({
     <Container
       color="auth"
       className={clsx(
-        'w-[calc(100vw-1.5rem)] sm:w-[min(400px,90vw)]',
+        'w-[min(400px,calc(100vw-1.5rem))]',
         'auth-flow-card rounded-3xl px-5 py-6 sm:px-8 sm:py-7',
       )}
     >

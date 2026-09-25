@@ -25,7 +25,7 @@ export default function SetupForm({
   return (
     <Container
       color="auth"
-      className="auth-flow-card w-[calc(100vw-1.5rem)] space-y-5 rounded-3xl px-6 py-6 sm:w-[min(420px,90vw)] sm:px-8"
+      className="auth-flow-card w-[min(420px,calc(100vw-1.5rem))] space-y-5 rounded-3xl px-6 py-6 sm:px-8"
     >
       <AuthHeading
         icon={<FiShield size={21} />}
@@ -50,8 +50,7 @@ export default function SetupForm({
           required
         />
         <SubmitButtonWithStatus
-          primary
-          className="w-full justify-center rounded-xl"
+          className="auth-flow-button w-full justify-center"
           disabled={!name || !email || !password || !confirmPassword}
         >
           Create super admin
@@ -64,7 +63,7 @@ export default function SetupForm({
           <span className="h-px flex-1 bg-medium" />
         </div>
         <form action={setupWithGoogleAction}>
-          <SubmitButtonWithStatus className="w-full justify-center rounded-xl">
+          <SubmitButtonWithStatus className="auth-flow-button w-full justify-center">
             Set up super admin with Google
           </SubmitButtonWithStatus>
         </form>

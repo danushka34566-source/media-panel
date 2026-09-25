@@ -29,7 +29,7 @@ export default function AuthCodeField({
             aria-hidden="true"
             className={clsx(
               'flex h-11 min-w-0 flex-1 items-center justify-center',
-              'rounded-xl border border-medium bg-main font-mono text-lg text-main',
+              'auth-code-slot rounded-xl border border-medium font-sans text-lg text-main',
               'transition-colors group-focus-within:border-gray-400',
               'dark:group-focus-within:border-gray-500',
               index === 3 && 'ml-2',

@@ -13,7 +13,7 @@ export default function AuthHeading({
 }) {
   return (
     <div className="flex w-full flex-col items-center gap-2 text-center">
-      <span className="flex size-10 items-center justify-center rounded-xl bg-dim text-main">
+      <span className="flex size-8 items-center justify-center text-main">
         {icon}
       </span>
       <h1 className="font-sans text-2xl font-semibold tracking-tight text-main">

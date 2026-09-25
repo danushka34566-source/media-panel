@@ -65,7 +65,7 @@ export default function Container({
       {...props}
       className={clsx(
         'flex flex-col items-center justify-center',
-        'rounded-lg',
+        color !== 'auth' && 'rounded-lg',
         ...getColorClasses(),
         getPaddingClasses(),
         className,

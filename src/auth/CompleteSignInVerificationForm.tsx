@@ -53,7 +53,7 @@ export default function CompleteSignInVerificationForm({
     <Container
       color="auth"
       className={clsx(
-        'w-[calc(100vw-1.5rem)] sm:w-[min(400px,90vw)]',
+        'w-[min(400px,calc(100vw-1.5rem))]',
         'auth-flow-card rounded-3xl px-5 py-6 sm:px-8 sm:py-7',
       )}
     >
@@ -90,8 +90,7 @@ export default function CompleteSignInVerificationForm({
         />
         <SubmitButtonWithStatus
           disabled={twoFactorMethod === 'authenticator' && twoFactorCode.length < 6}
-          primary
-          className="w-full justify-center rounded-xl"
+          className="auth-flow-button w-full justify-center"
         >
           {twoFactorCode.length < 6 && twoFactorMethod !== 'authenticator'
             ? twoFactorMethod === 'sms' ? 'Send SMS code' : 'Send email code'
