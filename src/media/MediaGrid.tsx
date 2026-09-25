@@ -64,6 +64,7 @@ export default function MediaGrid({
   replaceMediaNavigation = false,
   sequenceVideoPreviewStartup = true,
   enableVideoPreviews = true,
+  animateOnFirstLoadOnly,
   onLastMediaVisible,
   onAnimationComplete,
   ...categories
@@ -86,6 +87,7 @@ export default function MediaGrid({
   replaceMediaNavigation?: boolean
   sequenceVideoPreviewStartup?: boolean
   enableVideoPreviews?: boolean
+  animateOnFirstLoadOnly?: boolean
   onLastMediaVisible?: () => void
   onAnimationComplete?: () => void
 } & MediaSetCategory) {
@@ -257,6 +259,7 @@ export default function MediaGrid({
         staggerDelay={MEDIA_ENTRANCE_STAGGER_DELAY}
         distanceOffset={0}
         removeTransformAfterAnimation
+        animateOnFirstLoadOnly={animateOnFirstLoadOnly}
         staggerOnFirstLoadOnly={false}
         onAnimationComplete={onAnimationComplete}
         items={photos.map((photo, index) => {
