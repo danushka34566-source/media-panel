@@ -367,6 +367,14 @@ html {
 }
 
 @layer components {
+  body:has(.auth-flow-page) [data-page-content] {
+    min-height: 0;
+    margin-bottom: 0;
+  }
+  .auth-flow-page,
+  .auth-flow-page * {
+    font-family: var(--font-mono) !important;
+  }
   .component-surface {
     @apply
       text-main bg-content rounded-lg
@@ -384,51 +392,38 @@ html {
       text-black bg-neutral-200/95 rounded-lg
   }
   .auth-flow-card {
-    font-family: var(--font-auth-sans), Arial, sans-serif !important;
+    @apply bg-content border-medium shadow-sm rounded-lg text-main;
     overflow: visible;
     max-height: none;
   }
-  .auth-flow-card,
-  .auth-flow-card * {
-    font-family: var(--font-auth-sans), Arial, sans-serif !important;
-  }
   .auth-flow-card label {
-    color: var(--foreground);
+    @apply text-medium;
     font-size: 0.875rem;
-    font-weight: 600;
+    font-weight: 500;
     letter-spacing: 0;
     text-transform: none;
-  }
-  .auth-flow-card :is(h1, p, a, span, label, input, button) {
-    font-family: var(--font-auth-sans), Arial, sans-serif !important;
   }
   .auth-flow-card input[type=text],
   .auth-flow-card input[type=email],
   .auth-flow-card input[type=password] {
     border-radius: 0.5rem;
     min-height: 2.25rem;
-    background: transparent;
-    border-color: rgb(156 163 175 / 0.25);
-    font-family: var(--font-auth-sans), Arial, sans-serif !important;
+    @apply bg-main border-medium;
     font-size: 0.875rem;
   }
   .auth-flow-card .auth-code-slot {
-    background: transparent;
-    border-color: rgb(156 163 175 / 0.25);
+    @apply bg-main border-gray-400/25 dark:border-gray-800;
   }
   .auth-flow-card button.auth-flow-button {
     min-height: 2.25rem;
     border-radius: 0.5rem;
-    background: transparent;
-    border-color: rgb(156 163 175 / 0.25);
-    color: var(--foreground);
-    font-family: var(--font-auth-sans), Arial, sans-serif;
+    @apply bg-dim border-medium text-main hover:bg-medium;
     font-size: 0.875rem;
-    font-weight: 600;
+    font-weight: 500;
     box-shadow: none;
   }
   .auth-flow-card button.auth-flow-button:disabled {
-    color: var(--foreground);
+    @apply text-main;
     opacity: 0.58;
   }
   .auth-flow-card button.auth-method-link {
@@ -437,7 +432,7 @@ html {
     border: 0;
     background: transparent;
     box-shadow: none;
-    color: var(--foreground);
+    @apply text-main;
   }
 }
 

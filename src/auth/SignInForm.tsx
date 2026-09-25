@@ -36,7 +36,7 @@ import AuthVerificationMethodPicker from './AuthVerificationMethodPicker';
 import { useAppText } from '@/i18n/state/client';
 import LinkWithStatus from '@/components/LinkWithStatus';
 import { FiRefreshCw, FiShield } from 'react-icons/fi';
-import { FaGoogle } from 'react-icons/fa';
+import { FcGoogle } from 'react-icons/fc';
 
 export default function SignInForm({
   includeTitle = true,
@@ -277,7 +277,7 @@ export default function SignInForm({
         </div>
         <form action={signInWithGoogleAction} className="w-full">
           <SubmitButtonWithStatus
-            icon={<FaGoogle size={16} />}
+            icon={<FcGoogle size={18} />}
             hideText="never"
             className="auth-flow-button w-full justify-center"
           >

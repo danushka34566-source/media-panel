@@ -32,11 +32,10 @@ import PageResumeRecovery from '@/app/PageResumeRecovery';
 import DeferredAdminBatchEditPanel from '@/admin/select/DeferredAdminBatchEditPanel';
 
 import '../tailwind.css';
-import { Geist, Inter } from "next/font/google";
+import { Geist } from "next/font/google";
 import { cn } from "@/lib/utils";
 
 const geist = Geist({subsets:['latin'],variable:'--font-sans'});
-const authInter = Inter({subsets:['latin'],variable:'--font-auth-sans'});
 
 // Keep server rendering next to the Neon database in AWS Singapore. Without
 // this, Vercel was executing dynamic routes in iad1 and adding a trans-Pacific
@@ -97,7 +96,7 @@ export default async function RootLayout({
     <html
       lang={HTML_LANG}
       // Suppress hydration errors due to next-themes behavior
-      suppressHydrationWarning className={cn("font-sans", geist.variable, authInter.variable)}
+      suppressHydrationWarning className={cn("font-sans", geist.variable)}
     >
       <body className={clsx(
         // Center on large screens
