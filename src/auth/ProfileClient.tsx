@@ -191,12 +191,7 @@ export default function ProfileClient({
   const showTotpSetup = !isTotpEnabled || Boolean(totpSetup);
 
   return (
-    <div className="mx-auto max-w-5xl space-y-5">
-      <div className="space-y-1 px-1">
-        <p className="text-xs font-semibold uppercase tracking-[0.18em] text-dim">Account &amp; security</p>
-        <h1 className="text-2xl font-semibold tracking-tight text-main sm:text-3xl">Profile settings</h1>
-        <p className="text-sm text-dim">Manage your account details, sign-in options, and protection.</p>
-      </div>
+    <div className="mx-auto max-w-5xl space-y-4">
       <Container centered={false} className="items-stretch rounded-2xl bg-content shadow-sm">
         <div className="flex flex-col gap-4 sm:flex-row sm:items-center">
           <button

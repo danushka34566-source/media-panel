@@ -150,7 +150,7 @@ function AuthContainer({
   return (
     <Container
       className={clsx(
-        'w-full max-w-[400px]',
+        'w-[calc(100vw-1.5rem)] sm:w-[min(400px,90vw)]',
         'max-h-[calc(100dvh-2rem)] overflow-y-auto rounded-2xl bg-content px-5 py-6 shadow-lg sm:px-8 sm:py-7',
       )}
     >

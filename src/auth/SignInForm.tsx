@@ -133,7 +133,7 @@ export default function SignInForm({
   return (
     <Container
       className={clsx(
-        'w-full max-w-[400px]',
+        'w-[calc(100vw-1.5rem)] sm:w-[min(400px,90vw)]',
         'rounded-2xl bg-content px-6 py-7 shadow-lg sm:px-8',
         className,
       )}
