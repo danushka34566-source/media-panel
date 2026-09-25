@@ -136,7 +136,7 @@ export default function SignInForm({
       className={clsx(
         'w-full max-w-sm',
         includeTitle
-          ? 'auth-flow-card rounded-3xl p-5 sm:p-6'
+          ? 'auth-flow-card rounded-lg bg-content p-5 sm:p-6'
           : 'rounded-2xl bg-content px-6 py-7 shadow-lg sm:px-8',
         className,
       )}
