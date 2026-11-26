@@ -33,7 +33,7 @@ export default function MediaGridContainer({
   sidebar?: ReactNode
   className?: string
 } & ComponentProps<typeof MediaGrid>) {
-  useMediaScrollRestoration();
+  useMediaScrollRestoration(cacheKey);
   const [
     shouldAnimateDynamicItems,
     setShouldAnimateDynamicItems,
@@ -56,7 +56,7 @@ export default function MediaGridContainer({
         <div className={GRID_SPACE_CLASSNAME}>
           {count > photos.length
             ?
-            <MediaGridInfinite {...{
+            <MediaGridInfinite key={cacheKey} {...{
               cacheKey,
               initialPhotos: photos,
               initialOffset: photos.length,
@@ -70,6 +70,7 @@ export default function MediaGridContainer({
             }} />
             : <MediaGrid {...{
               photos,
+              sortBy,
               ...categories,
               onAnimationComplete,
             }} />}

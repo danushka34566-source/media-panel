@@ -1,15 +1,38 @@
 'use client';
 
-import { ReactNode, useCallback, useEffect, useMemo, useState } from 'react';
+import { ReactNode, Suspense, useCallback, useEffect, useState } from 'react';
 import { SelectMediaContext } from './SelectMediaState';
 import { PARAM_SELECT, PATH_GRID_INFERRED } from '@/app/path';
-import { usePathname, useRouter } from 'next/navigation';
+import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { useAppState } from '@/app/AppState';
-import useClientSearchParams from '@/utility/useClientSearchParams';
-import { replacePathWithEvent } from '@/utility/url';
 import { isElementPartiallyInViewport } from '@/utility/dom';
 
 export const DATA_KEY_MEDIA_GRID = 'data-photo-grid';
+
+// Isolate the query subscription so public pages can still be prerendered.
+function SelectionQuery({ onChange }: { onChange: (selecting: boolean) => void }) {
+  const pathname = usePathname();
+  const query = useSearchParams().toString();
+  useEffect(() => {
+    onChange(new URLSearchParams(query).get(PARAM_SELECT) === 'true');
+  }, [pathname, query, onChange]);
+  return null;
+}
+
+function updateSelectionParam(selecting: boolean) {
+  const url = new URL(window.location.href);
+  if (selecting) { url.searchParams.set(PARAM_SELECT, 'true'); }
+  else { url.searchParams.delete(PARAM_SELECT); }
+  if (url.href === window.location.href) { return; }
+  if (selecting) {
+    window.history.pushState({ mediaPanelSelection: true }, '', url);
+  } else if (window.history.state?.mediaPanelSelection) {
+    window.history.back();
+  } else {
+    // A deep link or a switch from full view has no underlying grid entry.
+    window.history.replaceState(null, '', url);
+  }
+}
 
 export default function SelectMediaProvider({
   children,
@@ -22,21 +45,19 @@ export default function SelectMediaProvider({
 
   const { canEdit } = useAppState();
   
-  const searchParamsSelect = useClientSearchParams(
-    PARAM_SELECT,
-    // Only scan urls when admin is signed in
-    canEdit,
-  );
-
+  const [selecting, setSelecting] = useState(false);
   const [canCurrentPageSelectMedia, setCanCurrentPageSelectMedia] =
-    useState(false);
-  const [selectionRedirectPending, setSelectionRedirectPending] =
     useState(false);
   const [selectedMediaIds, setSelectedMediaIds] =
     useState<string[]>([]);
   const [selectableMediaIds, setSelectableMediaIds] = useState<string[]>([]);
   const [isPerformingSelectEdit, setIsPerformingSelectEdit] =
     useState(false);
+
+  const onSelectionRouteChange = useCallback((active: boolean) => {
+    setSelecting(active);
+    setSelectedMediaIds([]);
+  }, []);
 
   const getMediaGridElements = useCallback(() =>
     document.querySelectorAll(`[${DATA_KEY_MEDIA_GRID}=true]`)
@@ -75,31 +96,25 @@ export default function SelectMediaProvider({
     };
   }, [pathname, canEdit, syncSelectableMedia]);
 
-  const isSelectingMedia = useMemo(() =>
-    canEdit &&
-    (searchParamsSelect === 'true' || selectionRedirectPending)
-  , [canEdit, searchParamsSelect, selectionRedirectPending]);
-    
+  const isSelectingMedia = canEdit && selecting;
+
   const startSelectingMedia = useCallback(() => {
     // The DOM is the source of truth at click time. React state can still be
     // one render behind while a type page's grid is mounting.
     const canSelectCurrentPage = getMediaGridElements().length > 0;
 
-    // Use replacePathWithEvent because only query params change.
     if (canSelectCurrentPage) {
-      replacePathWithEvent(`${pathname}?${PARAM_SELECT}=true`);
+      updateSelectionParam(true);
       return;
     }
 
     // Full view and non-grid pages use the shared Grid selection surface.
-    setSelectionRedirectPending(true);
     router.push(`${PATH_GRID_INFERRED}?${PARAM_SELECT}=true`);
-  }, [getMediaGridElements, pathname, router]);
+  }, [getMediaGridElements, router]);
   
   const stopSelectingMedia = useCallback(() => {
-    setSelectionRedirectPending(false);
-    replacePathWithEvent(pathname);
-  }, [pathname]);
+    updateSelectionParam(false);
+  }, []);
 
   useEffect(() => {
     if (isSelectingMedia) {
@@ -109,9 +124,6 @@ export default function SelectMediaProvider({
       if (!isSomeMediaGridVisible) {
         photoGrids[0]?.scrollIntoView({ behavior: 'smooth' });
       }
-    } else {
-      // eslint-disable-next-line react-hooks/set-state-in-effect
-      setSelectedMediaIds([]);
     }
   }, [isSelectingMedia, getMediaGridElements]);
 
@@ -129,6 +141,9 @@ export default function SelectMediaProvider({
       isPerformingSelectEdit,
       setIsPerformingSelectEdit,
     }}>
+      {canEdit && <Suspense fallback={null}>
+        <SelectionQuery onChange={onSelectionRouteChange} />
+      </Suspense>}
       {children}
     </SelectMediaContext.Provider>
   );

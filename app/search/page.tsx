@@ -3,7 +3,7 @@ import Container from '@/components/Container';
 import { PATH_ROOT } from '@/app/path';
 import MediaGridContainer from '@/media/MediaGridContainer';
 import { getMedia, getMediaMeta } from '@/media/query';
-import Link from 'next/link';
+import BackLink from '@/components/BackLink';
 import { getEffectiveMediaSortOptions } from '@/media/sort/preference';
 
 export const dynamic = 'force-dynamic';
@@ -32,9 +32,9 @@ export default async function SearchPage({
             <p className="text-dim">
               Choose a tag, category, performer, or studio to view matching media.
             </p>
-            <Link href={PATH_ROOT} className="text-main hover:underline">
+            <BackLink href={PATH_ROOT} matchPath className="text-main hover:underline">
               Back to gallery
-            </Link>
+            </BackLink>
           </Container>
         }
       />

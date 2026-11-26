@@ -14,7 +14,6 @@ import AnimateItems from '@/components/AnimateItems';
 import { Fragment, type ReactNode } from 'react';
 import DivDebugBaselineGrid from '@/components/DivDebugBaselineGrid';
 import MediaPrevNextActions from './MediaPrevNextActions';
-import MediaLink from './MediaLink';
 import ResponsiveText from '@/components/primitives/ResponsiveText';
 import { useAppState } from '@/app/AppState';
 import { GRID_GAP_CLASSNAME } from '@/components';
@@ -62,7 +61,7 @@ export default function MediaHeader({
     ? photos.findIndex(photo => photo.id === selectedMedia.id)
     : undefined;
 
-  const paginationIndex = indexNumber || (selectedMediaIndex ?? 0 + 1);
+  const paginationIndex = indexNumber ?? ((selectedMediaIndex ?? 0) + 1);
   const paginationCount = count ?? photos.length;
 
   const headerType = selectedMediaIndex === undefined
@@ -72,7 +71,7 @@ export default function MediaHeader({
       : 'photo-detail';
 
   const renderPrevNext =
-    <MediaPrevNextActions {...{
+    <MediaPrevNextActions key={selectedMedia?.id} {...{
       photo: selectedMedia,
       photos,
       hasAiTextGeneration,
@@ -97,16 +96,9 @@ export default function MediaHeader({
     </div>
     : (
       selectedMedia !== undefined &&
-        <MediaLink
-          photo={selectedMedia}
-          // The detail title is not the originating grid card. Keeping this
-          // navigation out of scroll-anchor persistence prevents a later
-          // title click from replacing the card position used by Back.
-          replace
-          className="uppercase font-bold break-all whitespace-normal"
-        >
+        <span className="uppercase font-bold break-all whitespace-normal">
           {titleForMedia(selectedMedia, true)}
-        </MediaLink>);
+        </span>);
 
   const renderBlock = (content: ReactNode) =>
     <DivDebugBaselineGrid

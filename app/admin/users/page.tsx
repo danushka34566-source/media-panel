@@ -58,7 +58,8 @@ export default async function AdminUsersPage({
       pageSize={USERS_PAGE_SIZE}
       currentUserId={session?.user?.id}
       currentUserRole={session?.user?.role}
-      initialEditorUser={initialEditorUser}
+      editorUser={initialEditorUser}
+      creatingUser={params.create === 'true' && !selectedId}
     />
   );
 }

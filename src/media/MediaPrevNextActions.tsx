@@ -158,6 +158,7 @@ export default function MediaPrevNextActions({
     : undefined;
 
   const onKeyDown = useCallback((e: KeyboardEvent) => {
+    if (e.defaultPrevented || e.altKey || e.ctrlKey || e.shiftKey) { return; }
     if (e.metaKey) {
       switch (e.key.toUpperCase()) {
         case KEY_COMMANDS.delete[1]:
@@ -277,7 +278,7 @@ export default function MediaPrevNextActions({
             photo={previousMedia}
             nextMediaAnimation={ANIMATION_RIGHT}
             scroll={false}
-            replace
+            rememberAnchor={false}
             loaderType="badge"
             prefetch
             onNavigateStart={() => announceDetailNavigationStart('previous')}
@@ -306,7 +307,7 @@ export default function MediaPrevNextActions({
             photo={nextMedia}
             nextMediaAnimation={ANIMATION_LEFT}
             scroll={false}
-            replace
+            rememberAnchor={false}
             loaderType="badge"
             prefetch
             onNavigateStart={() => announceDetailNavigationStart('next')}

@@ -3,11 +3,16 @@
 import { clsx } from 'clsx/lite';
 import { usePathname } from 'next/navigation';
 import Link from 'next/link';
+import BackLink from '@/components/BackLink';
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu';
 import AppGrid from '../components/AppGrid';
 import AppViewSwitcher, { SwitcherSelection } from '@/app/AppViewSwitcher';
 import {
   PATH_ROOT,
+  PATH_ADMIN_MEDIA,
+  PATH_ADMIN_CONFIGURATION,
+  PATH_SIGN_IN,
+  getEscapePath,
   PATH_FAVORITES,
   PATH_PROFILE,
   isPathAdmin,
@@ -29,6 +34,7 @@ import UserAvatar from '@/components/UserAvatar';
 import IconSignOut from '@/components/icons/IconSignOut';
 import {
   IoChevronDown,
+  IoArrowBack,
   IoChevronUp,
   IoHeartOutline,
   IoPersonCircleOutline,
@@ -65,6 +71,12 @@ export default function NavClient({
 
   const pathname = usePathname();
   const showNav = !isPathSignIn(pathname) && pathname !== '/verify-login';
+  const hasAdminBreadcrumb = /^\/admin\/(?:[^/]+\/[^/]+\/edit|uploads\/[^/]+|(?:media|photos)\/updates)\/?$/.test(pathname);
+  const backFallback = getEscapePath(pathname) ?? (
+    ['/sign-up', '/verify-email', '/password-reset'].includes(pathname) ? PATH_SIGN_IN :
+      pathname.startsWith(PATH_ADMIN_CONFIGURATION + '/') ? PATH_ADMIN_CONFIGURATION :
+        isPathAdmin(pathname) && pathname !== PATH_ADMIN_MEDIA ? PATH_ADMIN_MEDIA : PATH_ROOT
+  );
 
   const {
     hasLoadedWithAnimations,
@@ -332,6 +344,15 @@ export default function NavClient({
                 'md:w-[calc(100%+8px)] md:translate-x-[-4px] md:px-[4px]',
                 classNameStickyNav,
               )}>
+              {pathname !== PATH_ROOT && !hasAdminBreadcrumb &&
+                <BackLink
+                  href={backFallback}
+                  aria-label="Go back"
+                  title="Go back"
+                  className="mr-1 inline-flex size-8 shrink-0 items-center justify-center rounded hover:bg-dim"
+                >
+                  <IoArrowBack aria-hidden="true" size={18} />
+                </BackLink>}
               <AppViewSwitcher
                 currentSelection={switcherSelectionForPath()}
                 className="translate-x-[-1px]"

@@ -3,7 +3,7 @@ import SignInForm from '@/auth/SignInForm';
 import { PATH_ADMIN, PATH_ROOT, PATH_SETUP, PATH_VERIFY_LOGIN } from '@/app/path';
 import { clsx } from 'clsx/lite';
 import { redirect } from 'next/navigation';
-import LinkWithStatus from '@/components/LinkWithStatus';
+import BackLink from '@/components/BackLink';
 import { IoArrowBack } from 'react-icons/io5';
 import { getAppText } from '@/i18n/state/server';
 import AuthPageShell from '@/auth/AuthPageShell';
@@ -40,8 +40,9 @@ export default async function SignInPage() {
           siteAccessSettings.newRegistrationsEnabled
         }
       />
-      {siteAccessSettings.siteVisibility === 'public' && <LinkWithStatus
+      {siteAccessSettings.siteVisibility === 'public' && <BackLink
         href={PATH_ROOT}
+        matchPath
         className={clsx(
           'flex items-center gap-2.5',
           'font-sans text-sm font-medium text-medium',
@@ -49,7 +50,7 @@ export default async function SignInPage() {
       >
         <IoArrowBack className="translate-y-[1px]" />
         {appText.nav.home}
-      </LinkWithStatus>}
+      </BackLink>}
     </AuthPageShell>
   );
 }

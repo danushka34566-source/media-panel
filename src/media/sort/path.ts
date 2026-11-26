@@ -130,13 +130,23 @@ export const getFeedSortByFromPath = (pathname: string): SortBy | undefined => {
     : undefined;
 };
 
-export const getPathForSortBy = (pathname: string, sortBy: SortBy) => {
+export const getPathForSortBy = (
+  pathname: string,
+  sortBy: SortBy,
+  searchParams?: Record<string, string | string[] | undefined>,
+) => {
   const { gridOrFull } = getPathSortComponents(pathname);
   const { sortType, sortOrder } = getSortByComponents(sortBy);
   // Keep an explicitly selected sort canonical in the URL, including when it
   // matches the configured default. Bare /grid and /full remain the only
   // preference-resolving entry points.
-  return `/${gridOrFull}/${sortType}/${sortOrder}`;
+  const path = `/${gridOrFull}/${sortType}/${sortOrder}`;
+  const query = new URLSearchParams();
+  for (const [key, value] of Object.entries(searchParams ?? {})) {
+    if (Array.isArray(value)) { value.forEach(item => query.append(key, item)); }
+    else if (value !== undefined) { query.set(key, value); }
+  }
+  return query.size ? `${path}?${query}` : path;
 };
 
 export const getSortStateFromPath = (

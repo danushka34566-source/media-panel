@@ -52,7 +52,6 @@ export default function MediaDetailRelated({
     // the main player responsive without delaying the related image grid.
     mountPreviewsOnlyWhenVisible
     prefetchInitialMediaLinks={false}
-    replaceMediaNavigation
     sequenceVideoPreviewStartup
     enableVideoPreviews={canStartRelatedPreviews}
     animateOnFirstLoadOnly

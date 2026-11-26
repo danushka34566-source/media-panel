@@ -61,7 +61,6 @@ export default function MediaGrid({
   suspendSmartPreviewsOnMainPlayback = false,
   mountPreviewsOnlyWhenVisible = false,
   prefetchInitialMediaLinks = true,
-  replaceMediaNavigation = false,
   sequenceVideoPreviewStartup = true,
   enableVideoPreviews = true,
   animateOnFirstLoadOnly,
@@ -84,7 +83,6 @@ export default function MediaGrid({
   suspendSmartPreviewsOnMainPlayback?: boolean
   mountPreviewsOnlyWhenVisible?: boolean
   prefetchInitialMediaLinks?: boolean
-  replaceMediaNavigation?: boolean
   sequenceVideoPreviewStartup?: boolean
   enableVideoPreviews?: boolean
   animateOnFirstLoadOnly?: boolean
@@ -297,7 +295,6 @@ export default function MediaGrid({
                 // Limit route prefetching to the first viewport. Prefetching
                 // every detail route in a large grid saturates the connection.
                 prefetch: prefetchInitialMediaLinks && index < 6,
-                replace: replaceMediaNavigation,
                 selected: photo.id === selectedMedia?.id,
                 // The detail hero owns the browser's high-priority image
                 // slot. Related cards still mount immediately, but their

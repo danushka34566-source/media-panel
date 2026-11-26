@@ -15,7 +15,7 @@ import { useAppText } from '@/i18n/state/client';
 
 const SIZE_KEY_SEPARATOR = '__';
 const getSizeFromKey = (key: string) =>
-  parseInt(key.split(SIZE_KEY_SEPARATOR)[1]);
+  Number(key.slice(key.lastIndexOf(SIZE_KEY_SEPARATOR) + SIZE_KEY_SEPARATOR.length));
 
 // Keep the pages already seen in this tab across a detail-route unmount. A
 // saved page count alone makes SWR rebuild each page before the clicked card
@@ -48,6 +48,13 @@ export default function InfiniteMediaScroll({
   excludeFromFeeds,
   query,
   excludeIds,
+  album,
+  category,
+  contentType,
+  performer,
+  recent,
+  studio,
+  year,
   camera,
   lens,
   tag,
@@ -91,11 +98,12 @@ export default function InfiniteMediaScroll({
   const snapshotKey = JSON.stringify({
     cacheKey, initialOffset, itemsPerPage, sortBy, sortWithPriority,
     excludeFromFeeds, query, camera, lens, tag, recipe, film, focal,
+    album, category, contentType, performer, recent, studio, year,
     includeHiddenMedia, includeMissingStorageStatus,
   });
   const feedKey = `${snapshotKey}-exclude-${excludedIdsKey}`;
   const rememberedPages = restoreCachedPagesOnRemount
-    ? rememberedFeedPages.get(snapshotKey)
+    ? rememberedFeedPages.get(feedKey)
     : undefined;
   const initialPageCountRef = useRef(Math.max(1, rememberedPages?.length ?? 0));
   const [hasStartedLoading, setHasStartedLoading] = useState(
@@ -124,6 +132,7 @@ export default function InfiniteMediaScroll({
       limit: itemsPerPage,
       hidden: includeHiddenMedia ? 'include' : 'exclude',
       includeMissingStorageStatus,
+      album, category, contentType, performer, recent, studio, year,
       camera,
       lens,
       tag,
@@ -142,6 +151,7 @@ export default function InfiniteMediaScroll({
     itemsPerPage,
     includeHiddenMedia,
     includeMissingStorageStatus,
+    album, category, contentType, performer, recent, studio, year,
     camera,
     lens,
     tag,
@@ -189,9 +199,9 @@ export default function InfiniteMediaScroll({
 
   useEffect(() => {
     if (restoreCachedPagesOnRemount && pages.length > 0) {
-      rememberFeedPages(snapshotKey, pages.map(page => [...page]));
+      rememberFeedPages(feedKey, pages.map(page => [...page]));
     }
-  }, [pages, restoreCachedPagesOnRemount, snapshotKey]);
+  }, [pages, restoreCachedPagesOnRemount, feedKey]);
 
   const renderedPages = useMemo(() => {
     const seenIds = new Set<string>();

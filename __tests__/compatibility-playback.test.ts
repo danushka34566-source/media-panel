@@ -59,14 +59,34 @@ describe('getCompatibilityPlaybackUrl', () => {
     })).toBe('/media/video-stream.mp4');
   });
 
-  it('retries the original MP4 when its optional stream does not exist', () => {
-    expect(selectRetryVideoPlaybackUrl({
-      sourceUrl: '/storage/xhub/332642348989.MP4?token=abc',
-      compatibilityUrl: '/storage/xhub/332642348989-stream.mp4',
-      wasUsingCompatibility: false,
-    })).toEqual({
-      url: '/storage/xhub/332642348989.MP4?token=abc',
-      useCompatibility: false,
+  it('derives the stream in place when the filename repeats in its parent path', () => {
+    expect(getCompatibilityPlaybackUrl('https://example.org/video.mp4/video.mp4'))
+      .toBe('https://example.org/video.mp4/video-stream.mp4');
+  });
+
+  const original = '/storage/xhub/video.MP4';
+  const compatibility = '/storage/xhub/video-stream.mp4';
+  const retry = (errorCode: number, tried: string[] = [], usingCompatibility = false) =>
+    selectRetryVideoPlaybackUrl({
+      sourceUrl: original,
+      compatibilityUrl: compatibility,
+      wasUsingCompatibility: usingCompatibility,
+      errorCode,
+      retriedUrls: new Set(tried),
     });
+
+  it('reopens an interrupted transfer once, then tries the other source', () => {
+    expect(retry(2)).toBe(original);
+    expect(retry(2, [original])).toBe(compatibility);
+    expect(retry(2, [original, compatibility])).toBeUndefined();
+  });
+
+  it('tries a different encoding on decode or unsupported-source errors', () => {
+    expect(retry(3)).toBe(compatibility);
+    expect(retry(4, [], true)).toBe(original);
+  });
+
+  it('ignores an aborted request', () => {
+    expect(retry(1)).toBeUndefined();
   });
 });

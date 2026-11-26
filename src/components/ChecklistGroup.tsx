@@ -7,13 +7,15 @@ import { parameterize } from '@/utility/string';
 import ScoreCard from './ScoreCard';
 import useVisibility from '@/utility/useVisibility';
 
+export const CHECKLIST_SECTION_VISIBLE = 'media-panel:checklist-section-visible';
+
 export default function ChecklistGroup({
   title,
   titleShort,
   icon,
   optional,
   experimental,
-  updateHashOnVisible,
+  highlightOnVisible,
   children,
 }: {
   title: string
@@ -21,7 +23,7 @@ export default function ChecklistGroup({
   icon?: ReactNode
   optional?: boolean
   experimental?: boolean
-  updateHashOnVisible?: boolean
+  highlightOnVisible?: boolean
   children: ReactNode
 }) {
   const ref = useRef<HTMLAnchorElement>(null);
@@ -29,8 +31,8 @@ export default function ChecklistGroup({
   const slug = parameterize(title);
 
   useVisibility({ ref, onVisible: () => {
-    if (updateHashOnVisible) {
-      window.history.replaceState(null, '', `#${slug}`);
+    if (highlightOnVisible) {
+      window.dispatchEvent(new CustomEvent(CHECKLIST_SECTION_VISIBLE, { detail: slug }));
     }
   } });
 

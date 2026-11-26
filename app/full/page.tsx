@@ -26,10 +26,10 @@ export async function generateMetadata(): Promise<Metadata> {
   return generateOgImageMetaForMedia(photos);
 }
 
-export default async function FullPage() {
+export default async function FullPage({ searchParams }: PageProps<'/full'>) {
   const sortOptions = await getEffectiveMediaSortOptionsCached();
   if (sortOptions.sortBy !== USER_DEFAULT_SORT_BY) {
-    redirect(getPathForSortBy('/full', sortOptions.sortBy));
+    redirect(getPathForSortBy('/full', sortOptions.sortBy, await searchParams));
   }
   const [
     photos,

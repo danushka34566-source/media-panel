@@ -1,7 +1,9 @@
 import { fireEvent, render, screen } from '@testing-library/react';
 import { SWRConfig } from 'swr';
 import InfiniteMediaScroll from '@/media/InfiniteMediaScroll';
-import useMediaScrollRestoration from '@/media/useMediaScrollRestoration';
+import useMediaScrollRestoration, {
+  rememberMediaScrollPosition,
+} from '@/media/useMediaScrollRestoration';
 import type { Media } from '@/media';
 import { getMediaAction } from '../src/media/actions';
 
@@ -43,6 +45,58 @@ const RestoredFeed = () => {
 };
 
 describe('infinite media scroll restoration', () => {
+  it('keeps distinct visits to the same search results independent', () => {
+    const originalUrl = window.location.href;
+    const navigation = Object.getOwnPropertyDescriptor(window, 'navigation');
+    const currentEntry = { key: 'first' };
+    Object.defineProperty(window, 'navigation', {
+      configurable: true,
+      value: { currentEntry },
+    });
+    try {
+      window.history.replaceState(null, '', '/search?query=test');
+      rememberMediaScrollPosition('first-card');
+      currentEntry.key = 'second';
+      rememberMediaScrollPosition('second-card');
+      for (const [entry, card] of [
+        ['first', 'first-card'], ['second', 'second-card'],
+      ]) {
+        const snapshot = window.sessionStorage.getItem(
+          `media-panel:scroll:/search?query=test#${entry}`,
+        );
+        expect(JSON.parse(snapshot!)).toMatchObject({ anchorId: card });
+      }
+    } finally {
+      if (navigation) { Object.defineProperty(window, 'navigation', navigation); }
+      else { Reflect.deleteProperty(window, 'navigation'); }
+      window.history.replaceState(null, '', originalUrl);
+      window.sessionStorage.clear();
+    }
+  });
+
+  it('retains collection filters and page offsets in a restored feed', async () => {
+    const fetchMedia = jest.mocked(getMediaAction);
+    fetchMedia.mockResolvedValue([media('album-card')]);
+    const album = { id: 'a', slug: 'summer__trips', title: 'Summer trips' };
+    render(<SWRConfig value={{ provider: () => new Map() }}>
+      <InfiniteMediaScroll
+        cacheKey="album-summer__trips"
+        album={album}
+        initialOffset={4}
+        itemsPerPage={2}
+        startImmediately
+        useCachedMedia={false}
+        restoreCachedPagesOnRemount
+      >
+        {({ photos }) => photos.map(photo => <span key={photo.id}>{photo.id}</span>)}
+      </InfiniteMediaScroll>
+    </SWRConfig>);
+    await screen.findByText('album-card');
+    expect(fetchMedia).toHaveBeenCalledWith(
+      expect.objectContaining({ album, offset: 4 }), undefined,
+    );
+  });
+
   it('renders already viewed deep cards immediately after a feed remount', async () => {
     const fetchMedia = jest.mocked(getMediaAction);
     fetchMedia.mockImplementation(async options => options.offset === 0

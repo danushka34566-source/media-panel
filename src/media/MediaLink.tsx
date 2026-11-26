@@ -1,6 +1,6 @@
 'use client';
 
-import { ReactNode, ComponentProps, RefObject } from 'react';
+import { ReactNode, ComponentProps, RefObject, useRef } from 'react';
 import { Media, titleForMedia } from '@/media';
 import { MediaSetCategory } from '@/category';
 import { AnimationConfig } from '../components/AnimateItems';
@@ -19,7 +19,7 @@ export default function MediaLink({
   photo,
   scroll,
   prefetch,
-  replace,
+  rememberAnchor = true,
   nextMediaAnimation,
   className,
   children: _children,
@@ -32,7 +32,7 @@ export default function MediaLink({
   photo?: Media
   scroll?: boolean
   prefetch?: boolean
-  replace?: boolean
+  rememberAnchor?: boolean
   nextMediaAnimation?: AnimationConfig
   className?: string
   children?: ReactNode
@@ -42,6 +42,8 @@ export default function MediaLink({
 } & MediaSetCategory) {
   const { setNextMediaAnimation } = useAppState();
   const router = useRouter();
+  const localRef = useRef<HTMLAnchorElement>(null);
+  const anchorRef = ref ?? localRef;
 
   const linkProps:
     Omit<ComponentProps<typeof LinkWithStatus>, 'children'> |
@@ -49,18 +51,14 @@ export default function MediaLink({
       ? (() => {
         const href = pathForMedia({ photo, sortBy, ...categories });
         return {
-          ref,
+          ref: anchorRef,
           className,
           href,
           'data-media-id': photo.id,
-          onClick: event => {
+          onNavigate: () => {
             onNavigateStart?.();
-            // Next/previous detail navigation replaces the current detail
-            // route. It must not overwrite the originating grid's saved
-            // anchor with the chevron's DOM position; otherwise Back restores
-            // to the detail controls instead of the card the user opened.
-            if (!replace) {
-              rememberMediaScrollPosition(photo.id, event.currentTarget);
+            if (rememberAnchor) {
+              rememberMediaScrollPosition(photo.id, anchorRef.current ?? undefined);
             }
             if (nextMediaAnimation) {
               setNextMediaAnimation?.(nextMediaAnimation);
@@ -81,7 +79,6 @@ export default function MediaLink({
           },
           scroll,
           prefetch,
-          replace,
         };
       })()
       : undefined;

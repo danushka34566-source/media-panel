@@ -19,6 +19,10 @@ const NO_STORE_HEADERS = {
   'x-content-type-options': 'nosniff',
 };
 const SIGNED_URL_TTL_MS = 5 * 60 * 60 * 1000;
+// The player renews five minutes before expiry. Allow for transport and
+// clock differences so that a renewal receives a fresh delivery URL.
+const SIGNED_URL_REUSE_MARGIN_MS = 6 * 60 * 1000;
+const MAX_SIGNED_DOWNLOADS = 512;
 const signedDownloads = new Map<string, {
   expiresAt: number
   value: Promise<{ url: string }>
@@ -27,13 +31,19 @@ const signedDownloads = new Map<string, {
 const getSignedDownload = (key: string, downloadName?: string) => {
   const cacheKey = downloadName ? `${key}\u0000${downloadName}` : key;
   const cached = signedDownloads.get(cacheKey);
-  if (cached && cached.expiresAt > Date.now()) { return cached; }
+  if (cached && cached.expiresAt > Date.now() + SIGNED_URL_REUSE_MARGIN_MS) {
+    return cached;
+  }
   const value = driveCreatePresignedDownload(key, { downloadName });
   const signedDownload = {
     value,
     expiresAt: Date.now() + SIGNED_URL_TTL_MS,
   };
   signedDownloads.set(cacheKey, signedDownload);
+  if (signedDownloads.size > MAX_SIGNED_DOWNLOADS) {
+    const oldest = signedDownloads.keys().next();
+    if (!oldest.done) { signedDownloads.delete(oldest.value); }
+  }
   void value.catch(() => {
     if (signedDownloads.get(cacheKey)?.value === value) {
       signedDownloads.delete(cacheKey);
@@ -133,10 +143,7 @@ export async function HEAD(request: NextRequest) {
       !await driveObjectExists(key)) {
       return new NextResponse(null, { status: 404, headers: NO_STORE_HEADERS });
     }
-    const signedDownload = getSignedDownload(
-      key,
-      requestedDownloadName(request),
-    );
+    const signedDownload = getSignedDownload(key, requestedDownloadName(request));
     const signed = await signedDownload.value;
     return new NextResponse(null, {
       status: 204,

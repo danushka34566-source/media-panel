@@ -175,12 +175,12 @@ class VideoPlaybackManagerImpl {
         // When the PiP window closes, restore playback/time and unmute original
         pipWin.addEventListener('unload', () => {
           try {
-            if (this.currentVideo) {
-              const t = (this.pipVideo?.currentTime ?? undefined);
-              if (typeof t === 'number') { try { this.currentVideo.currentTime = t; } catch {} }
-              try { this.currentVideo.muted = false; } catch {}
-              if (this.wasPlayingBeforePiP) { this.currentVideo.play?.().catch(() => {}); }
+            if (this.currentVideo === video) {
+              const t = pipVid.currentTime;
+              if (Number.isFinite(t)) { try { video.currentTime = t; } catch {} }
+              if (this.wasPlayingBeforePiP) { video.play?.().catch(() => {}); }
             }
+            video.muted = false;
           } catch {}
           this.pipWindow = null;
           this.pipVideo = null;
@@ -212,27 +212,34 @@ class VideoPlaybackManagerImpl {
     }
   }
 
-  async requestPlay(video: HTMLVideoElement, opts: PlayOptions = {}): Promise<void> {
+  async requestPlay(video: HTMLVideoElement, opts: PlayOptions = {}):
+    Promise<'playing' | 'blocked' | 'failed'> {
     const wasPiPActive = this.isPiPActive();
-    if (this.currentVideo && this.currentVideo !== video) {
-      // Stop previously managed video and exit PiP if it had it
-      await this.exitPiP();
-      if (this.currentVideo !== opts.preserveVideoUntilPlaying || wasPiPActive) {
-        this.pauseVideo(this.currentVideo);
-      }
-    }
+    const previousVideo = this.currentVideo;
     this.currentVideo = video;
+    const switchingVideo = previousVideo && previousVideo !== video;
+    const leavingPiP = switchingVideo && (wasPiPActive || this.pipWindow)
+      ? this.exitPiP()
+      : undefined;
+    if (switchingVideo && (previousVideo !== opts.preserveVideoUntilPlaying || wasPiPActive)) {
+      this.pauseVideo(previousVideo);
+    }
     // The adaptive full-video controller may temporarily detach the
     // progressive source while hls.js is loading. Preserve an explicit play
     // request so it can resume once the manifest is ready.
     try { video.dataset.fullVideoPlayRequested = 'true'; } catch { /* ignore */ }
-    try { await video.play(); } catch { /* ignore */ }
+    // Keep play() inside the original input event, including PiP handoffs.
+    try { await video.play(); } catch (error) {
+      return error instanceof Error && error.name === 'NotAllowedError' ? 'blocked' : 'failed';
+    }
+    if (leavingPiP) { await leavingPiP; }
 
-    if (opts.preferPiP || wasPiPActive) {
+    if (this.currentVideo === video && (opts.preferPiP || wasPiPActive)) {
       if (this.isPiPEnabled() || this.supportsDocumentPiP()) {
         await this.requestPiP(video);
       }
     }
+    return 'playing';
   }
 
   async togglePiP(video: HTMLVideoElement): Promise<void> {

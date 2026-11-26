@@ -1,5 +1,5 @@
 import { ReactNode } from 'react';
-import Link from 'next/link';
+import BackLink from './BackLink';
 import { FiArrowLeft } from 'react-icons/fi';
 import AppGrid from './AppGrid';
 import { clsx } from 'clsx/lite';
@@ -39,15 +39,17 @@ function AdminChildPage({
                 breadcrumbEllipsis ? 'min-w-0' : 'flex-wrap',
               )}>
                 {backPath &&
-                  <Link
+                  <BackLink
                     href={backPath}
+                    matchPath
+                    aria-label={backLabel && backLabel !== 'Back' ? `Back to ${backLabel}` : 'Go back'}
                     className="flex gap-1.5 items-center"
                   >
                     <FiArrowLeft size={16} />
                     <span className="hidden xs:inline-block">
                       {backLabel || 'Back'}
                     </span>
-                  </Link>}
+                  </BackLink>}
                 {breadcrumb &&
                   <>
                     <span>/</span>

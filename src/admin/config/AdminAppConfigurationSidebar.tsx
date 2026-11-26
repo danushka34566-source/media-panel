@@ -3,7 +3,8 @@
 import clsx from 'clsx/lite';
 import { getAdminConfigSections } from '.';
 import { parameterize } from '@/utility/string';
-import useHash from '@/utility/useHash';
+import { useEffect, useState } from 'react';
+import { CHECKLIST_SECTION_VISIBLE } from '@/components/ChecklistGroup';
 
 export default function AdminAppConfigurationSidebar({
   simplifiedView,
@@ -12,7 +13,18 @@ export default function AdminAppConfigurationSidebar({
   simplifiedView?: boolean
   areInternalToolsEnabled: boolean
 }) {
-  const { hash } = useHash();
+  const [activeSection, setActiveSection] = useState('');
+  useEffect(() => {
+    const readHash = () => setActiveSection(window.location.hash.slice(1));
+    const onVisible = (event: Event) => setActiveSection((event as CustomEvent<string>).detail);
+    readHash();
+    window.addEventListener('hashchange', readHash);
+    window.addEventListener(CHECKLIST_SECTION_VISIBLE, onVisible);
+    return () => {
+      window.removeEventListener('hashchange', readHash);
+      window.removeEventListener(CHECKLIST_SECTION_VISIBLE, onVisible);
+    };
+  }, []);
 
   return (
     <div className={clsx(
@@ -26,7 +38,7 @@ export default function AdminAppConfigurationSidebar({
             href={`#${parameterize(title)}`}
             className={clsx(
               'block',
-              parameterize(title) === hash
+              parameterize(title) === activeSection
                 ? 'text-main hover:text-main font-medium'
                 : 'text-dim hover:text-main',
             )}

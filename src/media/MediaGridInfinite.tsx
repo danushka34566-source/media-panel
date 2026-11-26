@@ -63,6 +63,7 @@ export default function MediaGridInfinite({
         <MediaGrid key={key} {...{
           photos: combineUniqueMedia(initialPhotos ?? [], photos),
           ...categories,
+          sortBy,
           canStart,
           onLastMediaVisible,
         }} />}

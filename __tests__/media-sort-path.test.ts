@@ -35,6 +35,9 @@ describe('media sort paths', () => {
   });
 
   it('keeps all four date sort choices explicit for account persistence', () => {
+    expect(getPathForSortBy('/grid', 'createdAt', {
+      select: 'true', tag: ['some value', 'other'],
+    })).toBe('/grid/uploaded-at/descending?select=true&tag=some+value&tag=other');
     expect(getPathForSortBy('/grid', 'takenAt')).toBe(
       '/grid/taken-at/descending',
     );

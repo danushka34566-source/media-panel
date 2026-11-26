@@ -1,15 +1,14 @@
 'use client';
 
-import { ReactNode, RefObject, useEffect, useRef, useState } from 'react';
+import { ReactNode, useCallback, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { motion } from 'framer-motion';
 import { clsx } from 'clsx/lite';
-import useClickInsideOutside from '@/utility/useClickInsideOutside';
 import { useRouter } from 'next/navigation';
 import AnimateItems from './AnimateItems';
 import { PATH_ROOT } from '@/app/path';
 import usePrefersReducedMotion from '@/utility/usePrefersReducedMotion';
-import useEscapeHandler from '@/utility/useEscapeHandler';
+import { goBackOrReplace } from '@/utility/back-navigation';
 import { useTheme } from 'next-themes';
 
 export default function Modal({
@@ -57,38 +56,31 @@ export default function Modal({
 
   const contentRef = useRef<HTMLDivElement>(null);
 
-  const [htmlElements, setHtmlElements] =
-    useState<RefObject<HTMLDivElement | null>[]>([]);
+  const { resolvedTheme } = useTheme();
+  const close = useCallback(() => {
+    if (onClose) { onClose(); }
+    else { goBackOrReplace(router, onClosePath ?? PATH_ROOT, Boolean(onClosePath)); }
+  }, [onClose, onClosePath, router]);
 
   useEffect(() => {
-    if (contentRef.current) {
-      setHtmlElements([contentRef]);
-    }
-  }, []);
-
-  const { resolvedTheme } = useTheme();
-
-  useClickInsideOutside({
-    htmlElements,
-    onClickOutside: () => {
-      if (onClose) {
-        onClose();
-      } else {
-        router.push(
-          onClosePath ?? PATH_ROOT,
-          { scroll: false },
-        );
-      }
-    },
-  });
-
-  useEscapeHandler({
-    onKeyDown: onClose,
-    ignoreShouldRespondToKeyboardCommands: true,
-  });
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape' || event.defaultPrevented || event.repeat) { return; }
+      const dialogs = document.querySelectorAll('[aria-modal="true"]');
+      if (dialogs[dialogs.length - 1] !== contentRef.current) { return; }
+      event.preventDefault();
+      event.stopPropagation();
+      close();
+    };
+    document.addEventListener('keydown', onKeyDown);
+    return () => document.removeEventListener('keydown', onKeyDown);
+  }, [close]);
 
   const modalNode = (
     <motion.div
+      onMouseDown={event => {
+        if (event.currentTarget.contains(event.target as Node) &&
+          !contentRef.current?.contains(event.target as Node)) { close(); }
+      }}
       className={clsx(
         'fixed inset-0 z-50 flex justify-center',
         anchor === 'top'
@@ -117,6 +109,8 @@ export default function Modal({
         duration={fast ? 0.1 : 0.3}
         items={[<div
           ref={contentRef}
+          role="dialog"
+          aria-modal="true"
           key="modalContent"
           className={clsx(
             ...container ? [

@@ -27,13 +27,13 @@ export async function generateMetadata(): Promise<Metadata> {
   return generateOgImageMetaForMedia(photos);
 }
 
-export default async function GridPage() {
+export default async function GridPage({ searchParams }: PageProps<'/grid'>) {
   const sortOptions = await getEffectiveMediaSortOptionsCached();
   // Resolve the account preference before rendering any grid markup. The
   // client used to render the default URL first and redirect a few moments
   // later, causing a visible order flash and a second data load.
   if (sortOptions.sortBy !== USER_DEFAULT_SORT_BY) {
-    redirect(getPathForSortBy('/grid', sortOptions.sortBy));
+    redirect(getPathForSortBy('/grid', sortOptions.sortBy, await searchParams));
   }
   const [
     photos,

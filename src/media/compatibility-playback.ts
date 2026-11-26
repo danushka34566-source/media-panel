@@ -17,10 +17,8 @@ export const getCompatibilityPlaybackUrl = (
   try {
     const url = new URL(sourceUrl);
     const fileName = url.pathname.split('/').pop() || '';
-    url.pathname = url.pathname.replace(
-      fileName,
-      compatibilityFileName(fileName),
-    );
+    const lastSlash = url.pathname.lastIndexOf('/');
+    url.pathname = url.pathname.slice(0, lastSlash + 1) + compatibilityFileName(fileName);
     return url.toString();
   } catch {
     const [pathOnly, query] = sourceUrl.split('?');
@@ -60,22 +58,24 @@ export const selectInitialVideoPlaybackUrl = ({
   ? compatibilityUrl
   : sourceUrl;
 
-export const selectRetryVideoPlaybackUrl = ({
+export function selectRetryVideoPlaybackUrl({
   sourceUrl,
   compatibilityUrl,
   wasUsingCompatibility,
+  errorCode,
+  retriedUrls,
 }: {
   sourceUrl: string
   compatibilityUrl?: string
   wasUsingCompatibility: boolean
-}) => {
-  const extension = sourceUrl.split(/[?#]/, 1)[0]?.toLowerCase();
-  const useCompatibility = Boolean(
-    compatibilityUrl && !extension?.endsWith('.mp4') &&
-    !wasUsingCompatibility,
-  );
-  return {
-    url: useCompatibility ? compatibilityUrl! : sourceUrl,
-    useCompatibility,
-  };
-};
+  errorCode: number
+  retriedUrls: ReadonlySet<string>
+}) {
+  if (errorCode === 1) { return undefined; } // MEDIA_ERR_ABORTED
+  const current = wasUsingCompatibility && compatibilityUrl ? compatibilityUrl : sourceUrl;
+  const alternate = wasUsingCompatibility ? sourceUrl : compatibilityUrl;
+  // For a network interruption, retry the selected file first using a fresh
+  // bridge request. For a decoder/format error, try a different encoding.
+  const choices = errorCode === 2 ? [current, alternate] : [alternate, current];
+  return choices.find(url => url && !retriedUrls.has(url));
+}

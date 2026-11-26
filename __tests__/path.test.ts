@@ -1,6 +1,7 @@
 import {
   getEscapePath,
   getPathComponents,
+  doesPathOfferSort,
   isPathCamera,
   isPathCameraMedia,
   isPathFilm,
@@ -50,6 +51,41 @@ const PATH_FOCAL_LENGTH             = `/focal/${FOCAL_LENGTH_STRING}`;
 const PATH_FOCAL_LENGTH_PHOTO       = `${PATH_FOCAL_LENGTH}/${PHOTO_ID}`;
  
 describe('Paths', () => {
+  it.each([
+    ['/recents', { recent: true }],
+    ['/year/2025', { year: '2025' }],
+    ['/album/spring', { album: 'spring' }],
+    ['/recipe/daylight', { recipe: 'daylight' }],
+    ['/lens/-/35mm', { lens: { model: '35mm' } }],
+    ['/lens/sony/35mm', { lens: { make: 'sony', model: '35mm' } }],
+    ['/category/summer%20days', { category: 'summer%20days' }],
+    ['/studio/a', { studio: 'a' }],
+    ['/performer/b', { performer: 'b' }],
+    ['/content-type/music', { contentType: 'music' }],
+    ['/tag/private', { tag: 'private' }],
+  ] as const)('preserves the collection path for %s', (parent, components) => {
+    const detail = `${parent}/${PHOTO_ID}/`;
+    expect(getPathComponents(detail)).toEqual({ ...components, photoId: PHOTO_ID });
+    expect(getEscapePath(detail)).toBe(parent);
+    expect(getEscapePath(parent)).toBe(PATH_ROOT);
+  });
+
+  it.each([
+    '/search', '/profile', '/favorites', '/sign-up', '/verify-login',
+    '/password-reset', '/verify-email', '/film-demo', '/template-image',
+    '/template-image-tight', '/template-url', '/favicon.ico', '/recents/image',
+    '/album/spring/image', '/tag/x/id/extra', '/unknown/nested',
+  ])('keeps media keyboard navigation off %s', path => {
+    expect(isPathMedia(path)).toBe(false);
+    expect(getPathComponents(path)).toEqual({});
+    expect(getEscapePath(path)).toBeUndefined();
+  });
+
+  it('matches complete route segments when showing navigation controls', () => {
+    expect(doesPathOfferSort('/grid/taken-at/ascending')).toBe(true);
+    expect(doesPathOfferSort('/grid123')).toBe(false);
+    expect(isPathProtected('/og123')).toBe(false);
+  });
   it('preserves the page that opened the media editor', () => {
     expect(pathForAdminMediaEdit(PHOTO_ID, PATH_TAG_PHOTO)).toBe(
       `/admin/media/${PHOTO_ID}/edit?returnTo=${encodeURIComponent(

@@ -15,6 +15,7 @@ import AdminRegistrationErrorButton from './AdminRegistrationErrorButton';
 import { LuFileImage, LuFileVideo2, LuPlay } from 'react-icons/lu';
 import { Fragment, useEffect, useRef, useTransition } from 'react';
 import AdminPagination from './AdminPagination';
+import { pathForProcessingPage } from './processing/path';
 import { useRouter } from 'next/navigation';
 
 const PROCESSING_PAGE_SIZE = 15;
@@ -103,10 +104,12 @@ function RegisteringTable({
   items,
   total,
   page,
+  hrefForPage,
 }: {
   items: RegistrationItem[]
   total: number
   page: number
+  hrefForPage: (nextPage: number) => string
 }) {
   if (total === 0) {
     return <div className="text-sm text-dim">No files registering.</div>;
@@ -193,7 +196,7 @@ function RegisteringTable({
         page={page}
         pageSize={PROCESSING_PAGE_SIZE}
         total={total}
-        hrefForPage={nextPage => `/admin/processing?registrationPage=${nextPage}`}
+        hrefForPage={hrefForPage}
       />
     </div>
   );
@@ -203,10 +206,12 @@ function ProcessingTable({
   items,
   total,
   page,
+  hrefForPage,
 }: {
   items: Media[]
   total: number
   page: number
+  hrefForPage: (nextPage: number) => string
 }) {
   if (total === 0) {
     return <div className="text-sm text-dim">No files processing.</div>;
@@ -296,7 +301,7 @@ function ProcessingTable({
         page={page}
         pageSize={PROCESSING_PAGE_SIZE}
         total={total}
-        hrefForPage={nextPage => `/admin/processing?processingPage=${nextPage}`}
+        hrefForPage={hrefForPage}
       />
     </div>
   );
@@ -351,6 +356,7 @@ export default function AdminProcessingTable({
           items={registering}
           total={registeringTotal}
           page={registrationPage}
+          hrefForPage={page => pathForProcessingPage(page, processingPage)}
         />
         <div className="h-px w-full bg-medium" />
       </>}
@@ -362,6 +368,7 @@ export default function AdminProcessingTable({
         items={processing}
         total={processingTotal}
         page={processingPage}
+        hrefForPage={page => pathForProcessingPage(registrationPage, page)}
       />
     </div>
   );

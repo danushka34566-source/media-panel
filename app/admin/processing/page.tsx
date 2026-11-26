@@ -1,4 +1,6 @@
 import AppGrid from '@/components/AppGrid';
+import { redirect } from 'next/navigation';
+import { pathForProcessingPage } from '@/admin/processing/path';
 import AdminProcessingTable, {
   type RegistrationItem,
 } from '@/admin/AdminProcessingTable';
@@ -57,24 +59,34 @@ export default async function AdminProcessingPage({
     getUnregisteredStorageUploadsPage(
       PROCESSING_PAGE_SIZE,
       (registrationPage - 1) * PROCESSING_PAGE_SIZE,
-    ).catch(() => ({ uploads: [], total: 0 })),
+    ).catch(() => undefined),
     getPendingMediaProcessingPage(
       PROCESSING_PAGE_SIZE,
       (processingPage - 1) * PROCESSING_PAGE_SIZE,
-    ).catch(() => ({ items: [], total: 0 })),
+    ).catch(() => undefined),
   ]);
 
-  const registeringUrls = registrationResult.uploads.map(registrationRowToStatus);
+  // Either queue may shrink while visiting its last page.
+  const lastValidPage = (page: number, total?: number) => total === undefined
+    ? page
+    : Math.min(page, Math.max(1, Math.ceil(total / PROCESSING_PAGE_SIZE)));
+  const validRegistrationPage = lastValidPage(registrationPage, registrationResult?.total);
+  const validProcessingPage = lastValidPage(processingPage, processingResult?.total);
+  if (registrationPage !== validRegistrationPage || processingPage !== validProcessingPage) {
+    redirect(pathForProcessingPage(validRegistrationPage, validProcessingPage));
+  }
+
+  const registeringUrls = registrationResult?.uploads.map(registrationRowToStatus) ?? [];
 
   return (
     <AppGrid
       contentMain={
         <AdminProcessingTable
           registering={registeringUrls}
-          registeringTotal={registrationResult.total}
+          registeringTotal={registrationResult?.total ?? 0}
           registrationPage={registrationPage}
-          processing={processingResult.items}
-          processingTotal={processingResult.total}
+          processing={processingResult?.items ?? []}
+          processingTotal={processingResult?.total ?? 0}
           processingPage={processingPage}
         />
       }

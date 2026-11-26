@@ -1,7 +1,7 @@
 'use client';
 
 import SubmitButtonWithStatus from '@/components/SubmitButtonWithStatus';
-import Link from 'next/link';
+import BackLink from '@/components/BackLink';
 import FieldsetWithStatus from '@/components/FieldsetWithStatus';
 import { ReactNode, useMemo, useState } from 'react';
 import { useAppState } from '@/app/AppState';
@@ -68,7 +68,7 @@ export default function AdminMediaLibraryValueForm({
       />
       {children}
       <div className="flex gap-3">
-        <Link className="button" href={backPath}>Cancel</Link>
+        <BackLink className="button" href={backPath} matchPath>Cancel</BackLink>
         <SubmitButtonWithStatus
           disabled={!normalizedValue || (
             normalizedValue === value && targetType === sourceType

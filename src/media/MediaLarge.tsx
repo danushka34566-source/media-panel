@@ -57,7 +57,6 @@ import MediaDate from './MediaDate';
 import { useAppState } from '@/app/AppState';
 import { LuExpand, LuPictureInPicture, LuCaptions, LuCaptionsOff, LuChevronDown, LuChevronUp } from 'react-icons/lu';
 import LoaderButton from '@/components/primitives/LoaderButton';
-import Spinner from '@/components/Spinner';
 import Tooltip from '@/components/Tooltip';
 import ZoomControls, { ZoomControlsRef } from '@/components/image/ZoomControls';
 import { AnimatePresence } from 'framer-motion';
@@ -312,7 +311,7 @@ export default function MediaLarge({
   const [fullVideoDeliveryExpiresAt, setFullVideoDeliveryExpiresAt] =
     useState<number>();
   const fullVideoRenewalRef = useRef<Promise<boolean> | null>(null);
-  const didRetryFullVideoSourceRef = useRef(false);
+  const retriedPlaybackUrls = useRef(new Set<string>());
   const [preparedFullVideoDownloads, setPreparedFullVideoDownloads] = useState<Record<string, {
     url: string
     expiresAt: number
@@ -322,7 +321,6 @@ export default function MediaLarge({
   const [isMainVideoActuallyPlaying, setIsMainVideoActuallyPlaying] =
     useState(false);
   const [isFullVideoFrameReady, setIsFullVideoFrameReady] = useState(false);
-  const [isFullVideoBuffering, setIsFullVideoBuffering] = useState(false);
   const [hasFullVideoPlaybackError, setHasFullVideoPlaybackError] = useState(false);
   const [hasDecodedPreviewFrame, setHasDecodedPreviewFrame] = useState(false);
   const [hasStartedMainVideoPlayback, setHasStartedMainVideoPlayback] =
@@ -378,6 +376,7 @@ export default function MediaLarge({
     };
   }, [isLangMenuOpen]);
   const [lastInlineWasPlaying, setLastInlineWasPlaying] = useState(false);
+  const [zoomSource, setZoomSource] = useState<{ url: string; useCompatibility: boolean }>();
   const [zoomStartTime, setZoomStartTime] = useState<number | undefined>(undefined);
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
@@ -389,9 +388,8 @@ export default function MediaLarge({
     setPreparedFullVideoDownloads({});
     setIsMainVideoActuallyPlaying(false);
     setIsFullVideoFrameReady(false);
-    setIsFullVideoBuffering(false);
     setHasFullVideoPlaybackError(false);
-    didRetryFullVideoSourceRef.current = false;
+    retriedPlaybackUrls.current.clear();
     setHasDecodedPreviewFrame(false);
     setHasStartedMainVideoPlayback(false);
     setFailedGeneratedPreviewSrc(undefined);
@@ -534,58 +532,55 @@ export default function MediaLarge({
   // Full playback is deliberately progressive from the single original file.
   // The browser uses byte ranges to keep buffering ahead while it plays.
   const fullVideoManifestUrl = undefined;
-  const preparedFullVideoDownload = preparedFullVideoDownloads[currentVideoUrl];
-  const playbackClockRef = useRef(0);
-  useEffect(() => {
-    playbackClockRef.current = Date.now();
-  }, [currentVideoUrl, isFullVideoPlaying, photo.id]);
-  const preparedFullVideoUrl = preparedFullVideoDownload &&
-    preparedFullVideoDownload.expiresAt > playbackClockRef.current + 10_000
-    ? preparedFullVideoDownload.url
-    : undefined;
   const fullVideoSourceUrl = isFullVideoPlaying
-    ? fullVideoDeliveryUrl ?? preparedFullVideoUrl ??
-      getFullVideoBridgeUrl(currentVideoUrl)
+    ? fullVideoDeliveryUrl ?? getFullVideoBridgeUrl(currentVideoUrl)
     : currentVideoUrl;
   const fullVideoCompatibilityUrl = compatibilityPlaybackUrl
     ? getFullVideoBridgeUrl(compatibilityPlaybackUrl)
     : undefined;
 
   const recoverFullVideoStartup = useCallback((video: HTMLVideoElement) => {
-    if (video.dataset.fullVideoHlsInitializing === 'true') { return; }
-    setIsFullVideoFrameReady(false);
-    if (!didRetryFullVideoSourceRef.current) {
-      didRetryFullVideoSourceRef.current = true;
-      // A generated stream is optional even when the preview is ready. Retry
-      // the actual original for MP4 instead of a guessed, often missing file.
-      const retry = selectRetryVideoPlaybackUrl({
-        sourceUrl: photo.url,
-        compatibilityUrl: fullVideoCompatibilityUrl,
-        wasUsingCompatibility: shouldUseCompatibilityPlayback,
-      });
-      const retryUrl = retry.useCompatibility
-        ? retry.url
-        : getFullVideoBridgeUrl(retry.url);
-      const resumeTime = Number.isFinite(video.currentTime)
-        ? video.currentTime
-        : 0;
-      if (resumeTime > 0) {
-        video.addEventListener('loadedmetadata', () => {
-          try { video.currentTime = resumeTime; } catch {}
-        }, { once: true });
-      }
-      setShouldUseCompatibilityPlayback(retry.useCompatibility);
-      setFullVideoDeliveryUrl(retryUrl);
-      setFullVideoDeliveryExpiresAt(Date.now() + FULL_VIDEO_URL_TTL_MS);
-      video.src = retryUrl;
-      video.load();
-      void video.play().catch(() => undefined);
+    const error = video.error;
+    // load() and route changes can abort an obsolete media request.
+    if (video !== fullVideoRef.current || !error || error.code === 1 ||
+      video.dataset.fullVideoHlsInitializing === 'true') { return; }
+    const usedUrls = retriedPlaybackUrls.current;
+    const currentUrl = video.getAttribute('src');
+    const original = getFullVideoBridgeUrl(photo.url);
+    const compatibility = compatibilityPlaybackUrl &&
+      (unavailableFullVideoWarmups.current.get(compatibilityPlaybackUrl) ?? 0) <= Date.now()
+      ? fullVideoCompatibilityUrl
+      : undefined;
+    const retryUrl = selectRetryVideoPlaybackUrl({
+      sourceUrl: original,
+      compatibilityUrl: compatibility,
+      wasUsingCompatibility: shouldUseCompatibilityPlayback,
+      errorCode: error.code,
+      retriedUrls: usedUrls,
+    });
+    if (!retryUrl) {
+      setIsFullVideoPlaying(false);
+      setHasFullVideoPlaybackError(true);
       return;
     }
-    setIsFullVideoBuffering(false);
-    setIsFullVideoPlaying(false);
-    setHasFullVideoPlaybackError(true);
-  }, [fullVideoCompatibilityUrl, photo.url, shouldUseCompatibilityPlayback]);
+    usedUrls.add(retryUrl);
+    const resumeTime = video.currentTime;
+    if (Number.isFinite(resumeTime) && resumeTime > 0) {
+      video.addEventListener('loadedmetadata', () => {
+        try { video.currentTime = resumeTime; } catch {}
+      }, { once: true });
+    }
+    flushSync(() => {
+      setIsFullVideoFrameReady(false);
+      setShouldUseCompatibilityPlayback(retryUrl === compatibility);
+      setFullVideoDeliveryUrl(retryUrl);
+      setFullVideoDeliveryExpiresAt(Date.now() + FULL_VIDEO_URL_TTL_MS);
+    });
+    // React has committed a changed src. Calling load() a second time would
+    // cancel that request, along with any concurrent play() promise.
+    if (retryUrl === currentUrl) { video.load(); }
+    void video.play().catch(() => undefined);
+  }, [compatibilityPlaybackUrl, fullVideoCompatibilityUrl, photo.url, shouldUseCompatibilityPlayback]);
 
   const renewFullVideoPlayback = useCallback(async () => {
     if (!isVideo || !isFullVideoPlaying || fullVideoRenewalRef.current) {
@@ -595,6 +590,9 @@ export default function MediaLarge({
     if (!bridgeUrl.startsWith('/api/media/full-video')) {
       return false;
     }
+    const video = fullVideoRef.current;
+    if (!video) { return false; }
+    const sourceBeforeRenewal = video.getAttribute('src');
     const renewal = (async () => {
       const response = await fetch(bridgeUrl, {
         method: 'HEAD',
@@ -609,8 +607,12 @@ export default function MediaLarge({
         expiresAt <= Date.now()) {
         return false;
       }
-      const video = videoRef.current;
-      if (!video) { return false; }
+      if (fullVideoRef.current !== video ||
+        video.getAttribute('src') !== sourceBeforeRenewal) { return false; }
+      if (sourceBeforeRenewal === signedUrl) {
+        setFullVideoDeliveryExpiresAt(expiresAt);
+        return true;
+      }
       const resumeTime = Number.isFinite(video.currentTime)
         ? video.currentTime
         : 0;
@@ -622,13 +624,6 @@ export default function MediaLarge({
       video.addEventListener('loadedmetadata', restorePlayback, { once: true });
       setFullVideoDeliveryExpiresAt(expiresAt);
       setFullVideoDeliveryUrl(signedUrl);
-      window.setTimeout(() => {
-        if (videoRef.current === video && video.currentSrc !== signedUrl) {
-          try { video.src = signedUrl; video.load(); } catch {}
-        } else if (videoRef.current === video) {
-          restorePlayback();
-        }
-      }, 0);
       return true;
     })().catch(() => false);
     fullVideoRenewalRef.current = renewal;
@@ -679,7 +674,7 @@ export default function MediaLarge({
       const expiresAt = Number(response.headers.get(
         'x-media-signed-download-expires-at',
       ));
-      if (!signedUrl || !Number.isFinite(expiresAt) || expiresAt <= Date.now()) {
+      if (!response.ok || !signedUrl || !Number.isFinite(expiresAt) || expiresAt <= Date.now()) {
         return;
       }
       setPreparedFullVideoDownloads(current => {
@@ -696,6 +691,10 @@ export default function MediaLarge({
   const getPreferredFullVideoUrl = useCallback(() => {
     const preparedCompatibility = compatibilityPlaybackUrl &&
       preparedFullVideoDownloads[compatibilityPlaybackUrl];
+    if (compatibilityPlaybackUrl &&
+      (unavailableFullVideoWarmups.current.get(compatibilityPlaybackUrl) ?? 0) > Date.now()) {
+      return photo.url;
+    }
     if (preparedCompatibility &&
       preparedCompatibility.expiresAt > Date.now() + 10_000) {
       return compatibilityPlaybackUrl;
@@ -707,6 +706,30 @@ export default function MediaLarge({
       nativeMatroskaSupport: capabilityVideo.canPlayType('video/x-matroska'),
     });
   }, [compatibilityPlaybackUrl, photo.url, preparedFullVideoDownloads]);
+  const getPlaybackSource = () => {
+    const selected = getPreferredFullVideoUrl();
+    const prepared = preparedFullVideoDownloads[selected];
+    const usePrepared = prepared && prepared.expiresAt > Date.now() + 10_000;
+    return {
+      url: usePrepared ? prepared.url : getFullVideoBridgeUrl(selected),
+      expiresAt: usePrepared ? prepared.expiresAt : Date.now() + FULL_VIDEO_URL_TTL_MS,
+      useCompatibility: selected === compatibilityPlaybackUrl,
+    };
+  };
+  const startFullVideo = () => {
+    const source = getPlaybackSource();
+    retriedPlaybackUrls.current.clear();
+    flushSync(() => {
+      setHasFullVideoPlaybackError(false);
+      setIsFullVideoFrameReady(false);
+      setShouldUseCompatibilityPlayback(source.useCompatibility);
+      setFullVideoDeliveryUrl(source.url);
+      setFullVideoDeliveryExpiresAt(source.expiresAt);
+      setIsFullVideoPlaying(true);
+      setIsPiPLocked(false);
+    });
+    return fullVideoRef.current;
+  };
   const warmPreferredFullVideoDownload = useCallback(() => {
     warmFullVideoDownload(photo.url);
     if (compatibilityPlaybackUrl) {
@@ -780,8 +803,9 @@ export default function MediaLarge({
   const shouldKeepPreviewVideo = Boolean(
     automaticPreviewSrc &&
     videoPreviewMode !== 'off' &&
-    (shouldRenderAutomaticPreview ||
-      (isFullVideoPlaying && !isFullVideoFrameReady)),
+    (isFullVideoPlaying
+      ? hasDecodedPreviewFrame && !isFullVideoFrameReady
+      : shouldRenderAutomaticPreview),
   );
   const isAutomaticPreviewReady =
     readyPreviewSrc === automaticPreviewSrc &&
@@ -837,10 +861,7 @@ export default function MediaLarge({
 
   const previewRecovery = useVideoPreviewRecovery({
     videoRef: previewVideoRef,
-    active: Boolean(isVideo && (
-      isAutomaticPreviewActive ||
-      (isFullVideoPlaying && !isFullVideoFrameReady)
-    )),
+    active: Boolean(isVideo && !isFullVideoPlaying && isAutomaticPreviewActive),
     src: automaticPreviewSrc,
     onFatalError: () => {
       if (automaticPreviewSrc) {
@@ -875,12 +896,13 @@ export default function MediaLarge({
   // the page to crash while scrolling. Cards near the viewport are warmed;
   // pointer-hover and explicit play still warm immediately on demand.
   useEffect(() => {
-    if (!preloadFullVideoDownload || !isVideo || !isInPreloadRange) { return; }
+    if (!preloadFullVideoDownload || !isVideo || (!priority && !isInPreloadRange)) { return; }
     warmPreferredFullVideoDownload();
   }, [
     isInPreloadRange,
     isVideo,
     preloadFullVideoDownload,
+    priority,
     warmPreferredFullVideoDownload,
   ]);
   const shouldLoadVideoPoster = shouldLoadPreviewImage &&
@@ -1287,7 +1309,7 @@ export default function MediaLarge({
       sortBy={feedSortBy}
       className="font-bold uppercase grow break-all whitespace-normal"
       prefetch={prefetch}
-      replace={broadcastDetailVideoPlayback}
+      rememberAnchor={!broadcastDetailVideoPlayback}
     />;
 
   // Restrict width for landscape photos
@@ -1313,7 +1335,9 @@ export default function MediaLarge({
       target?.closest('button, a, input, textarea, select, [role="button"]'),
     ) && !isPlayOverlayTarget;
     const videoElement = target?.closest('video');
-    let ignoreSwipe = isInteractiveTarget;
+    // Reserve gestures starting at either screen edge for browser Back/Forward.
+    let ignoreSwipe = isInteractiveTarget ||
+      touch.clientX < 24 || touch.clientX > window.innerWidth - 24;
 
     if (!ignoreSwipe && videoElement) {
       const rect = videoElement.getBoundingClientRect();
@@ -1378,11 +1402,11 @@ export default function MediaLarge({
     if (deltaX < 0 && swipeNextPath) {
       setNextMediaAnimation?.(SWIPE_ANIMATION_LEFT);
       announceDetailNavigationStart('next');
-      router.replace(swipeNextPath, { scroll: false });
+      router.push(swipeNextPath, { scroll: false });
     } else if (deltaX > 0 && swipePreviousPath) {
       setNextMediaAnimation?.(SWIPE_ANIMATION_RIGHT);
       announceDetailNavigationStart('previous');
-      router.replace(swipePreviousPath, { scroll: false });
+      router.push(swipePreviousPath, { scroll: false });
     }
   }, [
     router,
@@ -1476,7 +1500,6 @@ export default function MediaLarge({
                             setPosterFailedMediaId(photo.id);
                           }
                         }}
-                        showLoadingIndicator
                       />
                     </div>
                     : <div
@@ -1543,7 +1566,6 @@ export default function MediaLarge({
                     onLoadStart={() => {
                       if (isFullVideoElement) {
                         setIsFullVideoFrameReady(false);
-                        setIsFullVideoBuffering(true);
                       }
                       if (!isFullVideoElement && (
                         isAutomaticPreviewActive || isFullVideoPlaying
@@ -1554,6 +1576,7 @@ export default function MediaLarge({
                       }
                     }}
                     onLoadedData={() => {
+                      if (isFullVideoElement) { setIsFullVideoFrameReady(true); }
                       if (!isFullVideoElement && automaticPreviewSrc) {
                         if (broadcastDetailVideoPlayback) {
                           completeDetailPreviewStartup(photo.id);
@@ -1572,7 +1595,6 @@ export default function MediaLarge({
                     onPlaying={() => {
                       if (isFullVideoElement) {
                         setIsFullVideoFrameReady(true);
-                        setIsFullVideoBuffering(false);
                         setHasStartedMainVideoPlayback(true);
                         setIsMainVideoActuallyPlaying(true);
                         previewVideoRef.current?.pause();
@@ -1584,17 +1606,8 @@ export default function MediaLarge({
                         previewRecovery.onPlaying();
                       }
                     }}
-                    onWaiting={() => {
-                      if (isFullVideoElement) {
-                        setIsFullVideoBuffering(true);
-                      }
-                    }}
                     onStalled={() => {
-                      if (isFullVideoElement) {
-                        setIsFullVideoBuffering(true);
-                      } else {
-                        previewRecovery.onStalled();
-                      }
+                      if (!isFullVideoElement) { previewRecovery.onStalled(); }
                     }}
                     onError={event => {
                       if (isFullVideoElement) {
@@ -1653,16 +1666,6 @@ export default function MediaLarge({
                   Sorry, your browser does not support embedded videos.
                   </video>;
                   })}
-                {isFullVideoPlaying && (
-                  isFullVideoBuffering || !isFullVideoFrameReady
-                ) && <div
-                  className="absolute inset-0 z-30 grid place-items-center pointer-events-none"
-                  aria-label="Buffering video"
-                >
-                  <span className="flex items-center justify-center rounded-full bg-black/70 p-4 text-white">
-                    <Spinner size={32} color="text" />
-                  </span>
-                </div>}
                 </>
             : shouldLoadPreviewImage
               ? <ImageLarge
@@ -1717,39 +1720,17 @@ export default function MediaLarge({
               onPointerDown={warmPreferredFullVideoDownload}
               onClick={async () => {
                 if (isPreparingFullVideo) { return; }
-                didRetryFullVideoSourceRef.current = false;
-                setHasFullVideoPlaybackError(false);
                 setIsPreparingFullVideo(true);
                 try {
-                  const selectedPlaybackUrl = getPreferredFullVideoUrl();
-                  const preferCompatibility = Boolean(
-                    compatibilityPlaybackUrl &&
-                    selectedPlaybackUrl === compatibilityPlaybackUrl,
-                  );
-                  const preparedDownload = preparedFullVideoDownloads[
-                    selectedPlaybackUrl
-                  ];
-                  const selectedDeliveryUrl = preparedDownload &&
-                    preparedDownload.expiresAt > Date.now() + 10_000
-                    ? preparedDownload.url
-                    : getFullVideoBridgeUrl(selectedPlaybackUrl);
-                  flushSync(() => {
-                    setIsFullVideoFrameReady(false);
-                    setIsFullVideoBuffering(true);
-                    setShouldUseCompatibilityPlayback(preferCompatibility);
-                    setFullVideoDeliveryUrl(selectedDeliveryUrl);
-                    setFullVideoDeliveryExpiresAt(
-                      preparedDownload?.expiresAt ?? Date.now() + FULL_VIDEO_URL_TTL_MS,
-                    );
-                    setIsFullVideoPlaying(true);
-                    setIsPiPLocked(false);
-                  });
-                  const video = videoRef.current;
+                  const video = startFullVideo();
                   if (!video) { return; }
-                  await VideoPlaybackManager.requestPlay(video, {
+                  const result = await VideoPlaybackManager.requestPlay(video, {
                     preferPiP: VideoPlaybackManager.isPiPActive(),
                     preserveVideoUntilPlaying: previewVideoRef.current,
                   });
+                  if (result === 'blocked' && fullVideoRef.current === video) {
+                    setIsFullVideoFrameReady(true);
+                  }
                 } finally {
                   setIsPreparingFullVideo(false);
                 }
@@ -2110,7 +2091,7 @@ export default function MediaLarge({
                           onClick={() => {
                             const video = videoRef.current;
                             if (video) {
-                              setZoomStartTime(video.currentTime || 0);
+                              setZoomStartTime(isFullVideoPlaying ? video.currentTime || 0 : 0);
                               setLastInlineWasPlaying(
                                 !video.paused && !video.ended,
                               );
@@ -2119,6 +2100,9 @@ export default function MediaLarge({
                               setZoomStartTime(undefined);
                               setLastInlineWasPlaying(false);
                             }
+                            setZoomSource(isFullVideoPlaying
+                              ? { url: fullVideoSourceUrl, useCompatibility: shouldUseCompatibilityPlayback }
+                              : getPlaybackSource());
                             setIsVideoZoomOpen(true);
                           }}
                           styleAs="link"
@@ -2133,7 +2117,7 @@ export default function MediaLarge({
                             const video = videoRef.current;
                             if (!video) { return; }
                             if (!isFullVideoPlaying) {
-                              setIsFullVideoPlaying(true);
+                              startFullVideo();
                               requestAnimationFrame(() => {
                                 const fullVideo = videoRef.current;
                                 if (!fullVideo) { return; }
@@ -2149,7 +2133,6 @@ export default function MediaLarge({
                                     open,
                                     { once: true },
                                   );
-                                  try { fullVideo.load(); } catch {}
                                 }
                               });
                             } else {
@@ -2282,12 +2265,13 @@ export default function MediaLarge({
             </MaskedScroll>
           </div>}
       />
-      {isVideo &&
+      {isVideo && isVideoZoomOpen && zoomSource &&
       <VideoZoomOverlay
         open={isVideoZoomOpen}
         onClose={() => setIsVideoZoomOpen(false)}
         videoUrl={photo.url}
-        playbackUrl={getFullVideoBridgeUrl(photo.url)}
+        playbackUrl={zoomSource.url}
+        usingCompatibility={zoomSource.useCompatibility}
         manifestUrl={fullVideoManifestUrl}
         mediaId={photo.id}
         compatibilityUrl={fullVideoCompatibilityUrl}
@@ -2313,6 +2297,7 @@ export default function MediaLarge({
 };
 
 function VideoZoomOverlay({
+  usingCompatibility,
   open,
   onClose,
   videoUrl,
@@ -2328,6 +2313,7 @@ function VideoZoomOverlay({
   activeCaptionIndex,
   onCloseWithState,
 }: {
+  usingCompatibility: boolean
   open: boolean
   onClose: () => void
   videoUrl: string
@@ -2346,7 +2332,11 @@ function VideoZoomOverlay({
   const videoRef = useRef<HTMLVideoElement>(null);
   const [wasPlaying, setWasPlaying] = useState(true);
   const progressiveUrlRef = useRef<{ source: string, url: string } | undefined>(undefined);
-  const activePlaybackUrl = playbackUrl ?? videoUrl;
+  const [retrySource, setRetrySource] = useState<string>();
+  const retriedUrls = useRef(new Set<string>());
+  const [needsCrossOriginCaptions] = useState(() => !subtitleTracks?.length);
+  const activePlaybackUrl = retrySource ?? playbackUrl ?? videoUrl;
+  const resumeAt = useRef(startTime);
   const activeManifestUrl = open && manifestUrl
     ? getFullVideoBridgeUrl(manifestUrl)
     : undefined;
@@ -2388,24 +2378,11 @@ function VideoZoomOverlay({
     if (!open) { return; }
     const v = videoRef.current;
     if (!v) { return; }
-    const onLoaded = () => {
-      if (typeof startTime === 'number' && Number.isFinite(startTime)) {
-        try { v.currentTime = Math.max(0, startTime); } catch {}
-      }
-      v.play?.().catch(() => {});
-      if (v.textTracks && v.textTracks.length > 0) {
-        for (let i = 0; i < v.textTracks.length; i++) {
-          v.textTracks[i].mode = captionsOn && i === (activeCaptionIndex ?? 0) ? 'showing' : 'hidden';
-        }
-      }
-    };
-    v.addEventListener('loadedmetadata', onLoaded);
     const onPlay = () => setWasPlaying(true);
     const onPause = () => setWasPlaying(false);
     v.addEventListener('play', onPlay);
     v.addEventListener('pause', onPause);
     return () => {
-      v.removeEventListener('loadedmetadata', onLoaded);
       v.removeEventListener('play', onPlay);
       v.removeEventListener('pause', onPause);
     };
@@ -2445,17 +2422,33 @@ function VideoZoomOverlay({
           ref={videoRef}
           className="w-full h-full max-h-[80vh] object-contain rounded-md bg-black"
           src={progressiveUrl ?? activePlaybackUrl}
+          crossOrigin={needsCrossOriginCaptions ? 'anonymous' : undefined}
           poster={posterUrl}
           controls
           controlsList="nodownload noplaybackrate"
           autoPlay
           playsInline
           onContextMenu={(e) => e.preventDefault()}
-          crossOrigin="anonymous"
+          onError={event => {
+            const video = event.currentTarget;
+            if (!video.error || video.dataset.fullVideoHlsInitializing === 'true') { return; }
+            const next = selectRetryVideoPlaybackUrl({
+              sourceUrl: getFullVideoBridgeUrl(videoUrl),
+              compatibilityUrl,
+              wasUsingCompatibility: retrySource ? retrySource === compatibilityUrl : usingCompatibility,
+              errorCode: video.error.code,
+              retriedUrls: retriedUrls.current,
+            });
+            if (!next) { return; }
+            retriedUrls.current.add(next);
+            if (video.currentTime > 0) { resumeAt.current = video.currentTime; }
+            if (next === activePlaybackUrl) { video.load(); }
+            else { setRetrySource(next); }
+          }}
           onLoadedMetadata={(e) => {
             const v = e.currentTarget as HTMLVideoElement;
-            if (typeof startTime === 'number' && Number.isFinite(startTime)) {
-              try { v.currentTime = Math.max(0, startTime); } catch {}
+            if (typeof resumeAt.current === 'number' && Number.isFinite(resumeAt.current)) {
+              try { v.currentTime = Math.max(0, resumeAt.current); } catch {}
             }
             if (v.textTracks && v.textTracks.length > 0) {
               for (let i = 0; i < v.textTracks.length; i++) {

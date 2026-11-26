@@ -4,7 +4,6 @@ import {
   Fragment,
   useCallback,
   useEffect,
-  useState,
   useTransition,
 } from 'react';
 import { useRouter } from 'next/navigation';
@@ -30,6 +29,7 @@ import { toastSuccess, toastWarning } from '@/toast';
 import SriLankaMobileInput from '@/components/SriLankaMobileInput';
 import AdminPagination from './AdminPagination';
 import { PATH_ADMIN_USERS } from '@/app/path';
+import { goBackOrReplace } from '@/utility/back-navigation';
 
 const badgeClassName = (value: string) => clsx(
   'shrink-0 rounded-sm px-[5px] py-[3px]',
@@ -384,7 +384,8 @@ export default function AdminUsersClient({
   pageSize,
   currentUserId,
   currentUserRole,
-  initialEditorUser,
+  editorUser,
+  creatingUser,
 }: {
   users: AppUser[]
   totalUsers: number
@@ -392,28 +393,31 @@ export default function AdminUsersClient({
   pageSize: number
   currentUserId?: string
   currentUserRole?: string
-  initialEditorUser?: AppUser
+  editorUser?: AppUser
+  creatingUser: boolean
 }) {
   const router = useRouter();
-  const [editorUser, setEditorUser] =
-    useState<AppUser | null | undefined>(initialEditorUser);
+  const listPath = pageNumber <= 1
+    ? PATH_ADMIN_USERS
+    : `${PATH_ADMIN_USERS}?page=${pageNumber}`;
+  const openEditor = useCallback((userId?: string) => {
+    const url = new URL(listPath, window.location.origin);
+    if (userId) { url.searchParams.set('user', userId); }
+    else { url.searchParams.set('create', 'true'); }
+    router.push(url.pathname + url.search, { scroll: false });
+  }, [listPath, router]);
   const closeEditor = useCallback(() => {
-    setEditorUser(undefined);
-    if (initialEditorUser) {
-      router.replace(pageNumber <= 1
-        ? PATH_ADMIN_USERS
-        : `${PATH_ADMIN_USERS}?page=${pageNumber}`);
-    }
-  }, [initialEditorUser, pageNumber, router]);
+    goBackOrReplace(router, listPath, 'exact');
+  }, [listPath, router]);
 
   useEffect(() => {
-    const openCreateUser = () => setEditorUser(null);
+    const openCreateUser = () => openEditor();
     window.addEventListener(ADMIN_CREATE_USER_EVENT, openCreateUser);
     return () => window.removeEventListener(
       ADMIN_CREATE_USER_EVENT,
       openCreateUser,
     );
-  }, []);
+  }, [openEditor]);
 
   return (
     <AppGrid
@@ -458,7 +462,7 @@ export default function AdminUsersClient({
                     />
                     <button
                       type="button"
-                      onClick={() => setEditorUser(user)}
+                      onClick={() => openEditor(user.id)}
                       className={clsx(
                         'inline-flex size-8 shrink-0 items-center justify-center',
                         'rounded-md border border-medium bg-transparent',
@@ -483,7 +487,7 @@ export default function AdminUsersClient({
               ? PATH_ADMIN_USERS
               : `${PATH_ADMIN_USERS}?page=${targetPage}`}
           />
-          {editorUser !== undefined &&
+          {(editorUser || creatingUser) &&
             <UserEditor
               key={editorUser?.id ?? 'new-user'}
               user={editorUser ?? undefined}

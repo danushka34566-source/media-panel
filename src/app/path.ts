@@ -37,9 +37,7 @@ export const PARAM_SORT_TYPE_COLOR        = 'chromatic';
 export const PARAM_SORT_ORDER_DESCENDING  = 'descending';
 export const PARAM_SORT_ORDER_ASCENDING   = 'ascending';
 export const doesPathOfferSort = (pathname: string) =>
-  pathname === PATH_ROOT ||
-  pathname.startsWith(PATH_GRID) ||
-  pathname.startsWith(PATH_FULL);
+  isPathTopLevel(pathname);
 
 // Feeds
 export const PATH_SITEMAP               = '/sitemap.xml';
@@ -471,18 +469,29 @@ export const absolutePathForYearImage = (year: string) =>
 export const absolutePathForRecentsImage = () =>
   `${absolutePathForRecents()}/${IMAGE}`;
 
-// /[photoId]
+const stringCollectionKeys = new Map<string, keyof Pick<MediaSetCategory,
+  'year' | 'album' | 'tag' | 'category' | 'studio' | 'performer' |
+  'contentType' | 'recipe' | 'film'
+>>([
+  [PREFIX_YEAR, 'year'], [PREFIX_ALBUM, 'album'], [PREFIX_TAG, 'tag'],
+  [PREFIX_CATEGORY, 'category'], [PREFIX_STUDIO, 'studio'],
+  [PREFIX_PERFORMER, 'performer'], [PREFIX_CONTENT_TYPE, 'contentType'],
+  [PREFIX_RECIPE, 'recipe'], [PREFIX_FILM, 'film'],
+]);
+
+const reservedRootPaths = new Set([
+  PATH_GRID, PATH_FULL, PATH_ADMIN, PATH_API, PATH_SIGN_IN, PATH_SETUP,
+  PATH_ACCESS_DENIED, PATH_VERIFY_LOGIN, PATH_PROFILE, PATH_FAVORITES,
+  PATH_OG, PATH_SEARCH, PATH_SITEMAP, PATH_RSS_XML, PATH_FEED_JSON,
+  '/sign-up', '/verify-email', '/password-reset', '/home-image', '/film-demo',
+  '/template-image', '/template-image-tight', '/template-url', '/favicon.ico',
+  ...stringCollectionKeys.keys(), PREFIX_CAMERA, PREFIX_LENS,
+  PREFIX_FOCAL_LENGTH, PREFIX_RECENTS,
+]);
+
 export const isPathMedia = (pathname = '') => {
-  // Single-segment root media detail path that is not a reserved prefix.
-  const seg = pathname.split('/').filter(Boolean);
-  if (seg.length !== 1) { return false; }
-  const first = seg[0];
-  const reserved = new Set([
-    '', 'grid', 'full', 'admin', 'api', 'sign-in', 'setup', 'access-denied', 'og', 'home-image',
-    'shot-on', 'lens', 'album', 'tag', 'category', 'studio', 'performer', 'content-type', 'recipe', 'film', 'focal', 'year', 'recents',
-    'sitemap.xml', 'rss.xml', 'feed.json',
-  ]);
-  return !reserved.has(first);
+  const path = pathname.replace(/\/$/, '');
+  return /^\/[^/]+$/.test(path) && !reservedRootPaths.has(path);
 };
 
 // recents
@@ -557,8 +566,10 @@ export const isPathFocalLength = (pathname = '') =>
 export const isPathFocalLengthMedia = (pathname = '') =>
   new RegExp(`^${PREFIX_FOCAL_LENGTH}/[^/]+/[^/]+/?$`).test(pathname);
 
-export const checkPathPrefix = (pathname = '', prefix: string) =>
-  pathname.toLowerCase().startsWith(prefix);
+export const checkPathPrefix = (pathname = '', prefix: string) => {
+  const path = pathname.toLowerCase();
+  return path === prefix || path.startsWith(`${prefix}/`);
+};
 
 export const isPathRoot = (pathname?: string) =>
   pathname === PATH_ROOT;
@@ -614,114 +625,45 @@ export const getPathComponents = (
   album?: string
   photoId?: string
 }) => {
-  // Root-based photo path: /[photoId]
-  const maybeRootId = pathname.match(new RegExp(`^/([^/]+)`))?.[1];
-  const reserved = new Set([
-    'grid', 'full', 'admin', 'api', 'sign-in', 'sign-up', 'verify-email',
-    'setup', 'access-denied', 'favorites',
-    'password-reset', 'profile', 'og', 'home-image',
-    'verify-login',
-    'shot-on', 'lens', 'album', 'tag', 'recipe', 'film', 'focal', 'year', 'recents',
-    'sitemap.xml', 'rss.xml', 'feed.json',
-  ]);
-  const photoIdFromRoot = (maybeRootId && !reserved.has(maybeRootId)) ? maybeRootId : undefined;
-  const photoIdFromCamera = pathname.match(
-    new RegExp(`^${PREFIX_CAMERA}/[^/]+/[^/]+/([^/]+)`))?.[1];
-  const cameraMake = pathname.match(
-    new RegExp(`^${PREFIX_CAMERA}/([^/]+)`))?.[1];
-  const cameraModel = pathname.match(
-    new RegExp(`^${PREFIX_CAMERA}/[^/]+/([^/]+)`))?.[1];
-  const photoIdFromTag = pathname.match(
-    new RegExp(`^${PREFIX_TAG}/[^/]+/([^/]+)`))?.[1];
-  const photoIdFromFilm = pathname.match(
-    new RegExp(`^${PREFIX_FILM}/[^/]+/([^/]+)`))?.[1];
-  const photoIdFromFocalLength = pathname.match(
-    new RegExp(`^${PREFIX_FOCAL_LENGTH}/[0-9]+mm/([^/]+)`))?.[1];
-  const photoIdFromYear = pathname.match(
-    new RegExp(`^${PREFIX_YEAR}/[^/]+/([^/]+)`))?.[1];
-  const photoIdFromRecents = pathname.match(
-    new RegExp(`^${PREFIX_RECENTS}/([^/]+)`))?.[1];
-  const album = pathname.match(
-    new RegExp(`^${PREFIX_ALBUM}/([^/]+)`))?.[1];
-  const tag = pathname.match(
-    new RegExp(`^${PREFIX_TAG}/([^/]+)`))?.[1];
-  const film = pathname.match(
-    new RegExp(`^${PREFIX_FILM}/([^/]+)`))?.[1] as string;
-  const focalString = pathname.match(
-    new RegExp(`^${PREFIX_FOCAL_LENGTH}/([0-9]+)mm`))?.[1];
-  const year = pathname.match(
-    new RegExp(`^${PREFIX_YEAR}/([^/]+)`))?.[1];
-  const recent = isPathRecents(pathname) ? true : undefined;
+  const path = pathname.replace(/\/$/, '');
+  if (isPathMedia(pathname)) { return { photoId: path.slice(1) }; }
 
-  const camera = cameraMake && cameraModel
-    ? { make: cameraMake, model: cameraModel }
-    : undefined;
+  const [, section, ...parts] = path.split('/');
+  const prefix = `/${section}`;
+  if (parts.some(part => !part)) { return {}; }
 
-  const focal = focalString ? parseInt(focalString) : undefined;
+  if (prefix === PREFIX_RECENTS && parts.length <= 1) {
+    if (parts[0] === IMAGE) { return {}; }
+    return { recent: true, photoId: parts[0] };
+  }
+  if (prefix === PREFIX_CAMERA || prefix === PREFIX_LENS) {
+    if (parts.length !== 2 && parts.length !== 3) { return {}; }
+    const [make, model, photoId] = parts;
+    if (photoId === IMAGE) { return {}; }
+    return prefix === PREFIX_CAMERA
+      ? { camera: { make, model }, photoId }
+      : { lens: make === MISSING_FIELD ? { model } : { make, model }, photoId };
+  }
+  if (parts.length !== 1 && parts.length !== 2) { return {}; }
+  const [value, photoId] = parts;
+  if (photoId === IMAGE && [
+    PREFIX_FOCAL_LENGTH, PREFIX_YEAR, PREFIX_FILM, PREFIX_RECIPE,
+    PREFIX_ALBUM, PREFIX_TAG,
+  ].includes(prefix)) { return {}; }
+  if (prefix === PREFIX_FOCAL_LENGTH) {
+    const focal = value.match(/^(\d+)mm$/);
+    return focal ? { focal: Number(focal[1]), photoId } : {};
+  }
 
-  return {
-    photoId: (
-      photoIdFromRoot ||
-      photoIdFromTag ||
-      photoIdFromCamera ||
-      photoIdFromFilm ||
-      photoIdFromFocalLength ||
-      photoIdFromYear ||
-      photoIdFromRecents
-    ),
-    album,
-    tag,
-    camera,
-    film,
-    focal,
-    year,
-    recent,
-  };
+  const key = stringCollectionKeys.get(prefix);
+  return key ? { [key]: value, photoId } : {};
 };
 
-export const getEscapePath = (pathname?: string) => {
-  const {
-    photoId,
-    recent,
-    year,
-    camera,
-    lens,
-    album,
-    tag,
-    recipe,
-    film,
-    focal,
-  } = getPathComponents(pathname);
-
-  if (
-    (photoId && isPathMedia(pathname)) ||
-    (recent && isPathRecents(pathname)) ||
-    (year && isPathYear(pathname)) ||
-    (camera && isPathCamera(pathname)) ||
-    (lens && isPathLens(pathname)) ||
-    (tag && isPathTag(pathname)) ||
-    (film && isPathFilm(pathname)) ||
-    (focal && isPathFocalLength(pathname)) ||
-    (recipe && isPathRecipe(pathname))
-  ) {
-    return PATH_ROOT;
-  } else if (recent && isPathRecentsMedia(pathname)) {
-    return PREFIX_RECENTS;
-  } else if (year && isPathYearMedia(pathname)) {
-    return pathForYear(year);
-  } else if (camera && isPathCameraMedia(pathname)) {
-    return pathForCamera(camera);
-  } else if (lens && isPathLensMedia(pathname)) {
-    return pathForLens(lens);
-  } else if (album && isPathAlbumMedia(pathname)) {
-    return pathForAlbum(album);
-  } else if (tag && isPathTagMedia(pathname)) {
-    return pathForTag(tag);
-  } else if (recipe && isPathRecipeMedia(pathname)) {
-    return pathForRecipe(recipe);
-  } else if (film && isPathFilmMedia(pathname)) {
-    return pathForFilm(film);
-  } else if (focal && isPathFocalLengthMedia(pathname)) {
-    return pathForFocalLength(focal);
+export const getEscapePath = (pathname = '') => {
+  const components = getPathComponents(pathname);
+  if (components.photoId) {
+    const path = pathname.replace(/\/$/, '');
+    return path.slice(0, path.lastIndexOf('/')) || PATH_ROOT;
   }
+  if (Object.keys(components).length > 0) { return PATH_ROOT; }
 };

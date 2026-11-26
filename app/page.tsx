@@ -31,10 +31,10 @@ export async function generateMetadata(): Promise<Metadata> {
   return generateOgImageMetaForMedia(photos);
 }
 
-export default async function HomePage() {
+export default async function HomePage({ searchParams }: PageProps<'/'>) {
   const sortOptions = await getEffectiveMediaSortOptions();
   if (sortOptions.sortBy !== USER_DEFAULT_SORT_BY) {
-    redirect(getPathForSortBy('/', sortOptions.sortBy));
+    redirect(getPathForSortBy('/', sortOptions.sortBy, await searchParams));
   }
   const [
     photos,

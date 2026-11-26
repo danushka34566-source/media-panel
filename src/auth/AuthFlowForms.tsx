@@ -5,6 +5,7 @@ import ErrorNote from '@/components/ErrorNote';
 import FieldsetWithStatus from '@/components/FieldsetWithStatus';
 import SubmitButtonWithStatus from '@/components/SubmitButtonWithStatus';
 import LinkWithStatus from '@/components/LinkWithStatus';
+import BackLink from '@/components/BackLink';
 import { clsx } from 'clsx/lite';
 import { FiUserPlus, FiMail, FiKey } from 'react-icons/fi';
 import { useActionState, useState } from 'react';
@@ -57,7 +58,7 @@ export function VerifyEmailForm({ initialEmail }: { initialEmail?: string }) {
       title="Email verification"
       icon={<FiMail size={20} />}
       description="Enter the six-digit code sent to your inbox."
-      action={<LinkWithStatus href="/sign-in" className="font-medium text-main underline underline-offset-4">Back to sign in</LinkWithStatus>}
+      action={<BackLink href="/sign-in" matchPath className="font-medium text-main underline underline-offset-4">Back to sign in</BackLink>}
     >
       <form action={action} className="w-full space-y-5">
         {response && <ErrorNote>{response}</ErrorNote>}
