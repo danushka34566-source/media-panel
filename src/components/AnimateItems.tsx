@@ -81,7 +81,7 @@ function AnimateItems({
   const shouldAnimate = type !== 'none' &&
     !prefersReducedMotion &&
     !(animateOnFirstLoadOnly && hasLoadedWithAnimations);
-  const shouldStagger =
+  const shouldStagger = shouldAnimate &&
     !(staggerOnFirstLoadOnly && hasLoadedWithAnimations);
 
   const typeResolved = animateFromAppState
@@ -156,9 +156,17 @@ function AnimateItems({
           layout={layoutItems}
           layoutDependency={layoutDependency}
           className={classNameItem}
+          animate={shouldAnimateItem ? undefined : 'settled'}
           variants={{
             hidden: shouldAnimateItem ? hidden : shown,
             show: shown,
+            // Override a previously scheduled parent stagger on a history
+            // restore without remounting the children.
+            settled: {
+              opacity: 1,
+              transform: removeTransformAfterAnimation ? 'none' : shown.transform,
+              transition: { duration: 0, delay: 0 },
+            },
           }}
           transition={{
             duration: shouldAnimateItem ? durationResolved : 0,

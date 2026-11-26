@@ -106,7 +106,7 @@ export default function useVideoPreviewRecovery({
 
   const armDecodeWatchdog = useCallback(() => {
     clearDecodeWatchdog();
-    if (!recoverWhileInactiveRef.current || document.hidden) { return; }
+    if (!canRecover() || document.hidden) { return; }
     decodeWatchdogRef.current = window.setTimeout(() => {
       decodeWatchdogRef.current = undefined;
       const video = videoRef.current;
@@ -116,7 +116,7 @@ export default function useVideoPreviewRecovery({
       ) { return; }
       scheduleRetryRef.current(true);
     }, DECODE_WATCHDOG_MS);
-  }, [clearDecodeWatchdog, videoRef]);
+  }, [canRecover, clearDecodeWatchdog, videoRef]);
   armDecodeWatchdogRef.current = armDecodeWatchdog;
 
   useEffect(() => {
@@ -128,13 +128,14 @@ export default function useVideoPreviewRecovery({
   }, [armDecodeWatchdog, clearRetryTimer, src]);
 
   useEffect(() => {
-    if (!recoverWhileInactive || !src) {
+    if ((!active && !recoverWhileInactive) || !src) {
       clearDecodeWatchdog();
       return;
     }
     armDecodeWatchdog();
     return clearDecodeWatchdog;
   }, [
+    active,
     armDecodeWatchdog,
     clearDecodeWatchdog,
     recoverWhileInactive,

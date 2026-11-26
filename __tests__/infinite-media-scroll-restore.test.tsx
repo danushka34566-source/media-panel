@@ -1,6 +1,7 @@
 import { fireEvent, render, screen } from '@testing-library/react';
 import { SWRConfig } from 'swr';
 import InfiniteMediaScroll from '@/media/InfiniteMediaScroll';
+import MediaGridContainer from '@/media/MediaGridContainer';
 import useMediaScrollRestoration, {
   rememberMediaScrollPosition,
 } from '@/media/useMediaScrollRestoration';
@@ -20,6 +21,11 @@ jest.mock('../src/components/AppGrid', () => ({
   default: ({ contentMain }: { contentMain: React.ReactNode }) => contentMain,
 }));
 jest.mock('../src/components/Spinner', () => ({ __esModule: true, default: () => null }));
+jest.mock('../src/media/MediaGrid', () => ({
+  __esModule: true,
+  default: ({ animate }: { animate: boolean }) =>
+    <div data-testid="grid" data-animate={animate} />,
+}));
 
 const media = (id: string) => ({ id }) as Media;
 
@@ -45,6 +51,29 @@ const RestoredFeed = () => {
 };
 
 describe('infinite media scroll restoration', () => {
+  it('settles the restored grid while keeping entrance motion on a fresh entry', () => {
+    const grid = <MediaGridContainer cacheKey="grid-entrance" photos={[media('a')]} count={1} />;
+    const fresh = render(grid);
+    expect(screen.getByTestId('grid').dataset.animate).toBe('true');
+    fresh.unmount();
+
+    const scrollTo = jest.spyOn(window, 'scrollTo').mockImplementation(() => undefined);
+    const key = `media-panel:scroll:${window.location.pathname}${window.location.search}`;
+    window.sessionStorage.setItem(key, JSON.stringify({ top: 300 }));
+    try {
+      const restored = render(grid);
+      expect(screen.getByTestId('grid').dataset.animate).toBe('false');
+      restored.rerender(
+        <MediaGridContainer cacheKey="grid-entrance" photos={[media('a'), media('b')]} count={2} />,
+      );
+      expect(screen.getByTestId('grid').dataset.animate).toBe('false');
+      restored.unmount();
+    } finally {
+      window.sessionStorage.removeItem(key);
+      scrollTo.mockRestore();
+    }
+  });
+
   it('keeps distinct visits to the same search results independent', () => {
     const originalUrl = window.location.href;
     const navigation = Object.getOwnPropertyDescriptor(window, 'navigation');

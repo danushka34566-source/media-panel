@@ -524,17 +524,17 @@ export default function MediaLarge({
     failedGeneratedPreviewSrc !== previewSrc
     ? previewSrc
     : undefined;
+  const previewsEnabled = broadcastDetailVideoPlayback || videoPreviewMode !== 'off';
   useEffect(() => {
     if (!broadcastDetailVideoPlayback) { return; }
     beginDetailPreviewStartup(photo.id);
-    if (videoPreviewMode === 'off' || !automaticPreviewSrc) {
+    if (!automaticPreviewSrc) {
       completeDetailPreviewStartup(photo.id);
     }
   }, [
     automaticPreviewSrc,
     broadcastDetailVideoPlayback,
     photo.id,
-    videoPreviewMode,
   ]);
   const hasPosterFailed = posterFailedMediaId === photo.id;
   const displayTranscodeStatus = getDisplayTranscodeStatus(photo);
@@ -807,13 +807,13 @@ export default function MediaLarge({
     ref,
     enabled: Boolean(
       isVideo &&
-      videoPreviewMode !== 'off' &&
+      previewsEnabled && !broadcastDetailVideoPlayback &&
       automaticPreviewSrc &&
       !isFullVideoPlaying,
     ),
     preloadEnabled: Boolean(
       isVideo &&
-      videoPreviewMode !== 'off' &&
+      previewsEnabled && !broadcastDetailVideoPlayback &&
       automaticPreviewSrc &&
       !isFullVideoPlaying &&
       !mountPreviewOnlyWhenVisible,
@@ -826,9 +826,9 @@ export default function MediaLarge({
   // Include its preview in the initial HTML so the browser can request it
   // immediately instead of waiting for the observer effect after first paint.
   const shouldStartPriorityPreview = Boolean(
-    priority &&
+    (broadcastDetailVideoPlayback || priority) &&
     isVideo &&
-    videoPreviewMode !== 'off' &&
+    previewsEnabled &&
     automaticPreviewSrc &&
     !isFullVideoPlaying,
   );
@@ -838,14 +838,16 @@ export default function MediaLarge({
     shouldStartPriorityPreview;
   const shouldKeepPreviewVideo = Boolean(
     automaticPreviewSrc &&
-    videoPreviewMode !== 'off' &&
+    previewsEnabled &&
     (isFullVideoPlaying
       ? hasDecodedPreviewFrame && !isFullVideoFrameReady
       : shouldRenderAutomaticPreview),
   );
   const isAutomaticPreviewReady =
     readyPreviewSrc === automaticPreviewSrc &&
-    readyPreviewActivationId === previewActivationId;
+    (broadcastDetailVideoPlayback || readyPreviewActivationId === previewActivationId);
+  const showDetailPoster = broadcastDetailVideoPlayback &&
+    !(isAutomaticPreviewReady || (isFullVideoPlaying && hasDecodedPreviewFrame));
 
   // Mobile browsers can suspend the compositor and media decoder while the
   // device is locked. Re-assert the visible image/video state on resume so a
@@ -856,7 +858,7 @@ export default function MediaLarge({
     // recovery state/timer for every offscreen full-page media item causes a
     // large rerender burst after a mobile lock/unlock.
     if (!isMainVideoActuallyPlaying &&
-      (isFullVideoPlaying || !isPreviewActive)) {
+      (isFullVideoPlaying || !isAutomaticPreviewActive)) {
       return;
     }
     let resetTimer: number | undefined;
@@ -870,7 +872,7 @@ export default function MediaLarge({
             if (video.error || video.networkState === HTMLMediaElement.NETWORK_NO_SOURCE) {
               video.load();
             }
-            if (isMainVideoActuallyPlaying || (!isFullVideoPlaying && isPreviewActive)) {
+            if (isMainVideoActuallyPlaying || (!isFullVideoPlaying && isAutomaticPreviewActive)) {
               void video.play().catch(() => undefined);
             }
           } catch { /* browser may still be restoring the document */ }
@@ -893,7 +895,7 @@ export default function MediaLarge({
       window.removeEventListener('focus', recoverMedia);
       if (resetTimer !== undefined) { window.clearTimeout(resetTimer); }
     };
-  }, [isFullVideoPlaying, isMainVideoActuallyPlaying, isPreviewActive, isVideo]);
+  }, [isFullVideoPlaying, isMainVideoActuallyPlaying, isAutomaticPreviewActive, isVideo]);
 
   const previewRecovery = useVideoPreviewRecovery({
     videoRef: previewVideoRef,
@@ -1507,7 +1509,7 @@ export default function MediaLarge({
                   posterSrc && shouldLoadVideoPoster && !hasPosterFailed
                     ? <div
                       key={`poster-${photo.id}`}
-                      className="absolute inset-0 z-0"
+                      className={clsx('absolute inset-0', showDetailPoster ? 'z-10' : 'z-0')}
                     >
                       <ImageLarge
                         className="h-full w-full"
@@ -1540,7 +1542,10 @@ export default function MediaLarge({
                     </div>
                     : <div
                       key={`poster-fallback-${photo.id}`}
-                      className="absolute inset-0 z-0 max-h-full w-full rounded-md bg-black"
+                      className={clsx(
+                        'absolute inset-0 max-h-full w-full rounded-md bg-black',
+                        showDetailPoster ? 'z-10' : 'z-0',
+                      )}
                     />
                 )}
                 {(shouldKeepPreviewVideo || isFullVideoPlaying) &&
@@ -1556,12 +1561,13 @@ export default function MediaLarge({
                     className={clsx(
                       isFullVideoElement
                         ? 'absolute inset-0 z-20 w-full h-full'
-                        : 'relative z-10 max-h-full w-full',
+                        : clsx('relative max-h-full w-full', showDetailPoster ? 'z-0' : 'z-10'),
                       areMediaMatted ? 'object-contain' : 'object-cover',
                       'rounded-md bg-black',
                       !isFullVideoElement &&
                         'transition-opacity duration-150',
                       !isFullVideoElement &&
+                        !broadcastDetailVideoPlayback &&
                         !(isAutomaticPreviewReady ||
                           (isFullVideoPlaying && hasDecodedPreviewFrame)) &&
                         'opacity-0',
@@ -1603,6 +1609,7 @@ export default function MediaLarge({
                       if (!isFullVideoElement && (
                         isAutomaticPreviewActive || isFullVideoPlaying
                       )) {
+                        previewRecovery.onLoadStart();
                         setHasDecodedPreviewFrame(false);
                         setReadyPreviewSrc(undefined);
                         setReadyPreviewActivationId(undefined);

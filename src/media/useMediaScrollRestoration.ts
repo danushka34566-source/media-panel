@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useLayoutEffect } from 'react';
+import { useEffect, useLayoutEffect, useState } from 'react';
 import { usePathname } from 'next/navigation';
 import { currentHistoryKey } from '@/utility/back-navigation';
 
@@ -153,6 +153,7 @@ export const restoreMediaViewportAnchor = (anchor?: MediaViewportAnchor) => {
  */
 export default function useMediaScrollRestoration(routeKey?: string, resetAtStart = false) {
   const pathname = usePathname();
+  const [restoredEntry, setRestoredEntry] = useState(false);
   // Restore before the browser paints the remounted feed.  useEffect lets the
   // new route render at scrollTop 0 for one frame, which is especially visible
   // when returning from a detail page; the subsequent correction then looks
@@ -168,10 +169,14 @@ export default function useMediaScrollRestoration(routeKey?: string, resetAtStar
     try {
       saved = parseSavedPosition(window.sessionStorage.getItem(key));
     } catch { /* Scroll still works when storage is disabled. */ }
+    let restoring = Boolean(saved && (saved.top > 0 || saved.anchorId));
+    // Keep returning grids settled for the lifetime of this route, including
+    // rows that arrive after the initial scroll correction.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setRestoredEntry(restoring);
     if (resetAtStart && !saved?.anchorId && !saved?.top && window.scrollY) {
       window.scrollTo({ top: 0, left: 0, behavior: 'instant' });
     }
-    let restoring = Boolean(saved && (saved.top > 0 || saved.anchorId));
     let mutationObserver: MutationObserver | undefined;
     let resizeObserver: ResizeObserver | undefined;
     let wasPageHidden = false;
@@ -326,4 +331,6 @@ export default function useMediaScrollRestoration(routeKey?: string, resetAtStar
       stopRestoring();
     };
   }, [pathname, routeKey, resetAtStart]);
+
+  return restoredEntry;
 }

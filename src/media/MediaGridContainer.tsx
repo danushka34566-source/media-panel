@@ -33,7 +33,8 @@ export default function MediaGridContainer({
   sidebar?: ReactNode
   className?: string
 } & ComponentProps<typeof MediaGrid>) {
-  useMediaScrollRestoration(cacheKey);
+  const restoredEntry = useMediaScrollRestoration(cacheKey);
+  const shouldAnimate = !restoredEntry && categories.animate !== false;
   const [
     shouldAnimateDynamicItems,
     setShouldAnimateDynamicItems,
@@ -65,6 +66,7 @@ export default function MediaGridContainer({
               excludeFromFeeds,
               query,
               ...categories,
+              animate: shouldAnimate,
               canStart: shouldAnimateDynamicItems,
               onAnimationComplete,
             }} />
@@ -72,6 +74,7 @@ export default function MediaGridContainer({
               photos,
               sortBy,
               ...categories,
+              animate: shouldAnimate,
               onAnimationComplete,
             }} />}
         </div>
