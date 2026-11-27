@@ -63,6 +63,7 @@ export default function InlineVideoPreview({
       recovery.onLoadStart();
     }}
     onLoadedData={reportPreparedFrame}
+    onProgress={recovery.onProgress}
     // Some mobile resume/cache paths surface canplay without React observing
     // the earlier loadeddata event. Treat either event as a decoded frame so
     // the queue cannot leave a ready preview paused and unaccounted for.

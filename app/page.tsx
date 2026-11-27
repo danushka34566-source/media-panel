@@ -10,53 +10,46 @@ import { NULL_CATEGORY_DATA } from '@/category/data';
 import MediaFullPage from '@/media/MediaFullPage';
 import MediaGridPage from '@/media/MediaGridPage';
 import { getDataForCategoriesCached } from '@/category/cache';
-import { getMediaCached, getMediaMetaCached } from '@/media/cache';
-import { FEED_META_QUERY_OPTIONS, getFeedQueryOptions } from '@/feed';
+import { getMediaPageCached, getMediaMetaCached } from '@/media/cache';
+import { getFeedQueryOptions } from '@/feed';
 import { getEffectiveMediaSortOptions } from '@/media/sort/preference';
+import type { SortBy } from '@/media/sort';
 import { getPathForSortBy } from '@/media/sort/path';
 import { redirect } from 'next/navigation';
 
 export const maxDuration = 60;
 
-const getFeedMediaCached = cache((sortOptions: ReturnType<typeof getFeedQueryOptions>) =>
-  getMediaCached(sortOptions));
+const getFeedPageCached = cache((sortBy: SortBy, sortWithPriority: boolean) =>
+  getMediaPageCached(getFeedQueryOptions({
+    isGrid: GRID_HOMEPAGE_ENABLED,
+    sortBy,
+    sortWithPriority,
+  })));
+const getEffectiveMediaSortOptionsCached = cache(getEffectiveMediaSortOptions);
 
 export async function generateMetadata(): Promise<Metadata> {
-  const sortOptions = await getEffectiveMediaSortOptions();
-  const photos = await getFeedMediaCached(getFeedQueryOptions({
-    isGrid: GRID_HOMEPAGE_ENABLED,
-    ...sortOptions,
-  }))
-    .catch(() => []);
+  const { sortBy, sortWithPriority } = await getEffectiveMediaSortOptionsCached();
+  const { photos } = await getFeedPageCached(sortBy, sortWithPriority)
+    .catch(() => ({ photos: [], hasMore: false }));
   return generateOgImageMetaForMedia(photos);
 }
 
 export default async function HomePage({ searchParams }: PageProps<'/'>) {
-  const sortOptions = await getEffectiveMediaSortOptions();
+  const sortOptions = await getEffectiveMediaSortOptionsCached();
   if (sortOptions.sortBy !== USER_DEFAULT_SORT_BY) {
     redirect(getPathForSortBy('/', sortOptions.sortBy, await searchParams));
   }
-  const [
-    photos,
-    photosCount,
-    photosCountWithExcludes,
-    categories,
-  ] = await Promise.all([
-    getFeedMediaCached(getFeedQueryOptions({
-      isGrid: GRID_HOMEPAGE_ENABLED,
-      ...sortOptions,
-    }))
-      .catch(() => []),
-    getMediaMetaCached(FEED_META_QUERY_OPTIONS)
-      .then(({ count }) => count)
-      .catch(() => 0),
-    getMediaMetaCached()
-      .then(({ count }) => count)
-      .catch(() => 0),
-    GRID_HOMEPAGE_ENABLED
-      ? getDataForCategoriesCached()
-      : NULL_CATEGORY_DATA,
-  ]);
+  const { photos, hasMore } = await getFeedPageCached(
+    sortOptions.sortBy,
+    sortOptions.sortWithPriority,
+  );
+  const [photosCountWithExcludes, categories] = GRID_HOMEPAGE_ENABLED
+    ? await Promise.all([
+      getMediaMetaCached().then(({ count }) => count),
+      getDataForCategoriesCached(),
+    ])
+    : [0, NULL_CATEGORY_DATA];
+  const photosCount = hasMore ? photos.length + 1 : photos.length;
 
   return (
     photos.length > 0
@@ -66,6 +59,7 @@ export default async function HomePage({ searchParams }: PageProps<'/'>) {
             photos,
             photosCount,
             photosCountWithExcludes,
+            initialHasMore: hasMore,
             ...sortOptions,
             ...categories,
           }}
@@ -73,6 +67,7 @@ export default async function HomePage({ searchParams }: PageProps<'/'>) {
         : <MediaFullPage {...{
           photos,
           photosCount,
+          initialHasMore: hasMore,
           ...sortOptions,
         }} />
       : <MediaEmptyState />

@@ -1,7 +1,7 @@
 {
   "name": "media-panel",
   "scripts": {
-    "dev": "next dev",
+    "dev": "next dev --hostname 127.0.0.1",
     "build": "next build",
     "start": "next start",
     "upload:folder": "python tools/media-panel-folder-uploader/upload_folder.py",

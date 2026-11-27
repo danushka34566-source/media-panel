@@ -29,13 +29,14 @@ import { getUnregisteredStorageUploadsCountCached } from './processing/server';
 import { unstable_cache } from 'next/cache';
 
 const getAlbumsCountCached = unstable_cache(
-  () => getAlbumsWithMeta().then(albums => albums.length).catch(() => 0),
+  () => getAlbumsWithMeta().then(albums => albums.length)
+    .catch(() => undefined),
   ['admin-nav-albums-count'],
   { revalidate: 60 },
 );
 
 const getUsersCountCached = unstable_cache(
-  () => getUsersCount().catch(() => 0),
+  () => getUsersCount().catch(() => undefined),
   ['admin-nav-users-count'],
   { revalidate: 60, tags: [AUTH_USERS_CACHE_TAG] },
 );
@@ -57,23 +58,23 @@ const getAdminNavDataCached = unstable_cache(async () => {
   ] = await Promise.all([
     getMediaMetaCached({ hidden: 'include' })
       .then(({ count }) => count)
-      .catch(() => 0),
+      .catch(() => undefined),
     getAlbumsCountCached(),
     getUniqueCategoriesCached().then(categories => categories.length)
-      .catch(() => 0),
+      .catch(() => undefined),
     getUniqueStudiosCached().then(studios => studios.length)
-      .catch(() => 0),
+      .catch(() => undefined),
     getUniquePerformersCached().then(performers => performers.length)
-      .catch(() => 0),
+      .catch(() => undefined),
     getUniqueVideoContentTypesCached().then(contentTypes => contentTypes.length)
-      .catch(() => 0),
+      .catch(() => undefined),
     getUniqueTagsCached().then(tags => tags.length)
-      .catch(() => 0),
+      .catch(() => undefined),
     getUniqueRecipesCached().then(recipes => recipes.length)
-      .catch(() => 0),
+      .catch(() => undefined),
     getUsersCountCached(),
-    getUnregisteredStorageUploadsCountCached().catch(() => 0),
-    countMediaProcessingCached().catch(() => 0),
+    getUnregisteredStorageUploadsCountCached().catch(() => undefined),
+    countMediaProcessingCached().catch(() => undefined),
     getMediaMostRecentUpdateCached().catch(() => undefined),
   ]);
 
@@ -112,7 +113,7 @@ export default async function AdminNav() {
     getAppText(),
   ]);
 
-  const includeInsights = countMedia > 0;
+  const includeInsights = countMedia !== 0;
 
   // Media
   const items = [{
@@ -122,49 +123,51 @@ export default async function AdminNav() {
   }, {
     label: 'Processing',
     href: PATH_ADMIN_PROCESSING,
-    count: countRegistering + countVideoProcessing,
+    count: countRegistering === undefined || countVideoProcessing === undefined
+      ? undefined
+      : countRegistering + countVideoProcessing,
   }];
 
   // Albums
-  if (countAlbums > 0) { items.push({
+  if (countAlbums !== 0) { items.push({
     label: appText.category.albumPlural,
     href: PATH_ADMIN_ALBUMS,
     count: countAlbums,
   }); }
 
-  if (countCategories > 0) { items.push({
+  if (countCategories !== 0) { items.push({
     label: 'Categories',
     href: PATH_ADMIN_CATEGORIES,
     count: countCategories,
   }); }
 
-  if (countStudios > 0) { items.push({
+  if (countStudios !== 0) { items.push({
     label: 'Studios',
     href: PATH_ADMIN_STUDIOS,
     count: countStudios,
   }); }
 
-  if (countPerformers > 0) { items.push({
+  if (countPerformers !== 0) { items.push({
     label: 'Performers',
     href: PATH_ADMIN_PERFORMERS,
     count: countPerformers,
   }); }
 
-  if (countContentTypes > 0) { items.push({
+  if (countContentTypes !== 0) { items.push({
     label: 'Content Types',
     href: PATH_ADMIN_CONTENT_TYPES,
     count: countContentTypes,
   }); }
 
   // Tags
-  if (countTags > 0) { items.push({
+  if (countTags !== 0) { items.push({
     label: appText.category.tagPlural,
     href: PATH_ADMIN_TAGS,
     count: countTags,
   }); }
 
   // Recipes
-  if (countRecipes > 0) { items.push({
+  if (countRecipes !== 0) { items.push({
     label: appText.category.recipePlural,
     href: PATH_ADMIN_RECIPES,
     count: countRecipes,

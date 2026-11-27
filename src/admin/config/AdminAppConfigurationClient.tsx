@@ -7,12 +7,13 @@ import {
   ReactNode,
   useEffect,
   useState,
+  useTransition,
 } from 'react';
 import ChecklistRow from '@/components/ChecklistRow';
 import ChecklistGroup from '@/components/ChecklistGroup';
 import { AppConfiguration } from '@/app/config';
 import StatusIcon from '@/components/StatusIcon';
-import { testConnectionsAction } from '@/admin/actions';
+import type { testConnectionsAction } from '@/admin/actions';
 import ErrorNote from '@/components/ErrorNote';
 import SecretGenerator from '@/app/SecretGenerator';
 import EnvVar from '@/components/EnvVar';
@@ -25,7 +26,12 @@ import {
 } from '@/media/ai';
 import clsx from 'clsx/lite';
 import Link from 'next/link';
-import { PATH_FEED_JSON, PATH_RSS_XML } from '@/app/path';
+import { useRouter } from 'next/navigation';
+import {
+  PATH_ADMIN_CONFIGURATION,
+  PATH_FEED_JSON,
+  PATH_RSS_XML,
+} from '@/app/path';
 import { APP_DEFAULT_SORT_BY, DEFAULT_SORT_BY_OPTIONS } from '@/media/sort';
 import {
   AdminConfigSection,
@@ -39,17 +45,10 @@ import { DEFAULT_SOCIAL_KEYS, SOCIAL_KEYS } from '@/social';
 import MaskedScroll from '@/components/MaskedScroll';
 import { IoLink } from 'react-icons/io5';
 import ProcessingConfigurationForm from './ProcessingConfigurationForm';
-import {
-  PROCESSING_SETTINGS_DEFAULTS,
-  ProcessingSettings,
-} from '@/processing/settings-schema';
+import type { ProcessingSettings } from '@/processing/settings-schema';
 import SiteAccessConfigurationForm from './SiteAccessConfigurationForm';
 import StaticOptimizationForm from './StaticOptimizationForm';
-import {
-  SITE_ACCESS_SETTINGS_DEFAULTS,
-  type SiteAccessSettings,
-} from '@/auth/site-access-schema';
-import { PATH_ADMIN_CONFIGURATION } from '@/app/path';
+import type { SiteAccessSettings } from '@/auth/site-access-schema';
 
 export default function AdminAppConfigurationClient({
   // Storage
@@ -82,10 +81,6 @@ export default function AdminAppConfigurationClient({
   hasPageAbout,
   // Performance
   isStaticallyOptimized,
-  areMediaStaticallyOptimized,
-  areMediaOGImagesStaticallyOptimized,
-  areMediaCategoriesStaticallyOptimized,
-  areMediaCategoryOgImagesStaticallyOptimized,
   areOriginalUploadsPreserved,
   areUniqueMediaNamesEnabled,
   hasImageQuality,
@@ -151,49 +146,62 @@ export default function AdminAppConfigurationClient({
   // Auth
   secret,
   // Connection status
-  databaseError,
-  driveStorageError,
-  cloudflareR2StorageError,
-  redisError,
-  aiError,
-  locationError,
+  connectionErrors,
   // Component props
   simplifiedView,
   isAnalyzingConfiguration,
-  processingSettings = PROCESSING_SETTINGS_DEFAULTS,
+  processingSettings,
   processingConnectionSettings,
   applicationSettings,
-  siteAccessSettings = SITE_ACCESS_SETTINGS_DEFAULTS,
-}: AppConfiguration &
-  { secret: string } &
-  Partial<Awaited<ReturnType<typeof testConnectionsAction>>> & {
-    simplifiedView?: boolean
-    isAnalyzingConfiguration?: boolean
-    processingSettings?: ProcessingSettings
-    processingConnectionSettings?: {
-      orchestratorBaseUrl?: string
-      hasOrchestratorSecret: boolean
-      hasProcessorSecret: boolean
-      isConfigured: boolean
-      usingEnvironmentFallback: boolean
-    }
-    applicationSettings?: {
-      staticMediaPages: boolean
-      staticMediaOgImages: boolean
-      staticMediaCategories: boolean
-      staticMediaCategoryOgImages: boolean
-    }
-    siteAccessSettings?: SiteAccessSettings
-  }) {
+  siteAccessSettings,
+}: AppConfiguration & {
+  secret: string
+  connectionErrors?: Awaited<ReturnType<typeof testConnectionsAction>>
+  simplifiedView?: boolean
+  isAnalyzingConfiguration?: boolean
+  processingSettings?: ProcessingSettings
+  processingConnectionSettings?: {
+    orchestratorBaseUrl?: string
+    hasOrchestratorSecret: boolean
+    hasProcessorSecret: boolean
+    isConfigured: boolean
+    usingEnvironmentFallback: boolean
+  }
+  applicationSettings?: {
+    staticMediaPages: boolean
+    staticMediaOgImages: boolean
+    staticMediaCategories: boolean
+    staticMediaCategoryOgImages: boolean
+  }
+  siteAccessSettings?: SiteAccessSettings
+}) {
+  const router = useRouter();
   const [hasScrolled, setHasScrolled] = useState(false);
+  const [isRetryingConnections, startConnectionRetry] = useTransition();
+  const isCheckingConnections =
+    isAnalyzingConfiguration || isRetryingConnections;
+  const connectionChecksFailed =
+    !isAnalyzingConfiguration && !connectionErrors;
+  const {
+    databaseError,
+    driveStorageError,
+    cloudflareR2StorageError,
+    redisError,
+    aiError,
+    locationError,
+  } = connectionErrors ?? {};
   const hasPrimaryStorageProvider =
     hasDriveStorage || hasCloudflareR2Storage;
   const activeStorageError = currentStorage === 'drive'
     ? driveStorageError
     : cloudflareR2StorageError;
-  const arePrimaryStorageConnectionsHealthy =
-    hasPrimaryStorageProvider &&
-    !activeStorageError;
+  const isConnectionHealthy = (configured: boolean, error?: string) =>
+    configured && Boolean(connectionErrors) && !error;
+  const renderConfigForm = (form: ReactNode) => isAnalyzingConfiguration
+    ? <p role="status" className="text-sm text-dim">Loading settings…</p>
+    : form || <ErrorNote>
+      Unable to load saved settings. Reload the page to try again.
+    </ErrorNote>;
 
   useEffect(() => {
     const handleScroll = () => { setHasScrolled(true); };
@@ -229,7 +237,22 @@ export default function AdminAppConfigurationClient({
         {label}
       </span>
     </div>;
-    
+
+  const renderConnectionSubStatus = (provider: string, error?: string) => {
+    if (isCheckingConnections) {
+      return renderSubStatus('optional', `${provider}: checking connection`);
+    }
+    if (connectionChecksFailed) {
+      return renderSubStatus(
+        'warning',
+        `${provider}: connection status unknown`,
+      );
+    }
+    return error
+      ? renderSubStatus('missing', `${provider}: connection failed`)
+      : renderSubStatus('checked', `${provider}: connected`);
+  };
+
   const renderSubStatusWithEnvVar = (
     type: ComponentProps<typeof StatusIcon>['type'],
     variable: string,
@@ -301,20 +324,22 @@ export default function AdminAppConfigurationClient({
       case 'Storage':
         return <>
           <ChecklistRow
-            title={hasDatabase && isAnalyzingConfiguration
+            title={hasDatabase && isCheckingConnections
               ? 'Testing database connection'
               : 'Setup database'}
-            status={hasDatabase}
-            isPending={hasDatabase && isAnalyzingConfiguration}
+            status={isConnectionHealthy(hasDatabase, databaseError)}
+            isPending={hasDatabase && isCheckingConnections}
+            showWarning={hasDatabase && connectionChecksFailed}
           >
             {databaseError && renderError({
               connection: { provider: 'Database', error: databaseError},
             })}
             {hasDatabase
-              ? renderSubStatus(
-                'checked',
-                // eslint-disable-next-line max-len
-                `${postgresProvider === 'supabase' ? 'Supabase Postgres' : 'Neon Postgres'}: connected`,
+              ? renderConnectionSubStatus(
+                postgresProvider === 'supabase'
+                  ? 'Supabase Postgres'
+                  : 'Neon Postgres',
+                databaseError,
               )
               : renderSubStatus('missing', <>
                 Postgres:
@@ -355,13 +380,15 @@ export default function AdminAppConfigurationClient({
             ])}
           </ChecklistRow>
           <ChecklistRow
-            title={hasPrimaryStorageProvider && isAnalyzingConfiguration
+            title={hasPrimaryStorageProvider && isCheckingConnections
               ? 'Testing storage connections'
               : 'Setup storage'}
-            status={arePrimaryStorageConnectionsHealthy}
-            isPending={
-              hasPrimaryStorageProvider && isAnalyzingConfiguration
-            }
+            status={isConnectionHealthy(
+              hasPrimaryStorageProvider,
+              activeStorageError,
+            )}
+            isPending={hasPrimaryStorageProvider && isCheckingConnections}
+            showWarning={hasPrimaryStorageProvider && connectionChecksFailed}
           >
             {currentStorage === 'drive' && driveStorageError && renderError({
               connection: { provider: 'Drive', error: driveStorageError},
@@ -376,12 +403,7 @@ export default function AdminAppConfigurationClient({
             <div>
               {hasDriveStorage
                 ? <>
-                  {renderSubStatus(
-                    driveStorageError ? 'missing' : 'checked',
-                    driveStorageError
-                      ? 'Drive: connection failed'
-                      : 'Drive: connected',
-                  )}
+                  {renderConnectionSubStatus('Drive', driveStorageError)}
                   {renderEnvVars([
                     'DRIVE_STORAGE_BASE_URL',
                     'DRIVE_STORAGE_API_KEY',
@@ -404,11 +426,9 @@ export default function AdminAppConfigurationClient({
               {hasCloudflareR2Storage
                 ? currentStorage === 'cloudflare-r2'
                   ? <>
-                    {renderSubStatus(
-                      cloudflareR2StorageError ? 'missing' : 'checked',
-                      cloudflareR2StorageError
-                        ? 'Cloudflare R2: connection failed'
-                        : 'Cloudflare R2: connected',
+                    {renderConnectionSubStatus(
+                      'Cloudflare R2',
+                      cloudflareR2StorageError,
                     )}
                     {renderEnvVars([
                       'CLOUDFLARE_R2_ACCESS_KEY',
@@ -455,7 +475,10 @@ export default function AdminAppConfigurationClient({
           </ChecklistRow>
           <div className="p-3 sm:p-4">
             <div className="pb-3 font-bold text-main">Site access</div>
-            <SiteAccessConfigurationForm settings={siteAccessSettings} />
+            {renderConfigForm(
+              siteAccessSettings &&
+                <SiteAccessConfigurationForm settings={siteAccessSettings} />,
+            )}
           </div>
         </>;
       case 'Processing':
@@ -480,10 +503,13 @@ export default function AdminAppConfigurationClient({
             secret field blank when editing to keep the current value.
           </ChecklistRow>
           <div className="p-3 sm:p-4">
-            <ProcessingConfigurationForm
-              settings={processingSettings}
-              connectionSettings={processingConnectionSettings}
-            />
+            {renderConfigForm(
+              processingSettings && processingConnectionSettings &&
+                <ProcessingConfigurationForm
+                  settings={processingSettings}
+                  connectionSettings={processingConnectionSettings}
+                />,
+            )}
           </div>
         </>;
       case 'Content':
@@ -569,12 +595,15 @@ export default function AdminAppConfigurationClient({
       case 'External Services':
         return <>
           <ChecklistRow
-            title={hasRedisStorage && isAnalyzingConfiguration
+            title={hasRedisStorage && isCheckingConnections
               ? 'Testing Redis connection'
               : 'Rate limiting'}
-            status={hasRedisStorage}
-            isPending={hasRedisStorage && isAnalyzingConfiguration}
-            showWarning={isAiTextGenerationEnabled || hasLocationServices}
+            status={isConnectionHealthy(hasRedisStorage, redisError)}
+            isPending={hasRedisStorage && isCheckingConnections}
+            showWarning={
+              Boolean(redisError) || isAiTextGenerationEnabled ||
+              hasLocationServices || (hasRedisStorage && connectionChecksFailed)
+            }
             optional
           >
             {redisError && renderError({
@@ -585,11 +614,13 @@ export default function AdminAppConfigurationClient({
             to enable rate limiting on external services
           </ChecklistRow>
           <ChecklistRow
-            title={isAiTextGenerationEnabled && isAnalyzingConfiguration
+            title={isAiTextGenerationEnabled && isCheckingConnections
               ? 'Testing OpenAI connection'
               : 'OpenAI'}
-            status={isAiTextGenerationEnabled}
-            isPending={isAiTextGenerationEnabled && isAnalyzingConfiguration}
+            status={isConnectionHealthy(isAiTextGenerationEnabled, aiError)}
+            isPending={isAiTextGenerationEnabled && isCheckingConnections}
+            showWarning={Boolean(aiError) ||
+              (isAiTextGenerationEnabled && connectionChecksFailed)}
             optional
           >
             {aiError && renderError({
@@ -603,11 +634,13 @@ export default function AdminAppConfigurationClient({
             {renderEnvVars(['OPENAI_SECRET_KEY'])}
           </ChecklistRow>
           <ChecklistRow
-            title={hasLocationServices && isAnalyzingConfiguration
+            title={hasLocationServices && isCheckingConnections
               ? 'Testing Google Places connection'
               : 'Google Places'}
-            status={hasLocationServices}
-            isPending={hasLocationServices && isAnalyzingConfiguration}
+            status={isConnectionHealthy(hasLocationServices, locationError)}
+            isPending={hasLocationServices && isCheckingConnections}
+            showWarning={Boolean(locationError) ||
+              (hasLocationServices && connectionChecksFailed)}
             optional
           >
             {locationError && renderError({
@@ -669,22 +702,10 @@ export default function AdminAppConfigurationClient({
               and revalidated normally.
             </p>
             <div className="mt-4">
-              <StaticOptimizationForm
-                key={Object.values(applicationSettings ?? {
-                  staticMediaPages: areMediaStaticallyOptimized,
-                  staticMediaOgImages: areMediaOGImagesStaticallyOptimized,
-                  staticMediaCategories: areMediaCategoriesStaticallyOptimized,
-                  staticMediaCategoryOgImages:
-                    areMediaCategoryOgImagesStaticallyOptimized,
-                }).join('-')}
-                settings={applicationSettings ?? {
-                  staticMediaPages: areMediaStaticallyOptimized,
-                  staticMediaOgImages: areMediaOGImagesStaticallyOptimized,
-                  staticMediaCategories: areMediaCategoriesStaticallyOptimized,
-                  staticMediaCategoryOgImages:
-                    areMediaCategoryOgImagesStaticallyOptimized,
-                }}
-              />
+              {renderConfigForm(
+                applicationSettings &&
+                  <StaticOptimizationForm settings={applicationSettings} />,
+              )}
             </div>
           </ChecklistRow>
           <ChecklistRow
@@ -1103,6 +1124,17 @@ export default function AdminAppConfigurationClient({
 
   return (
     <ScoreCardContainer>
+      {connectionChecksFailed && <ErrorNote>
+        Unable to check connections. Connection statuses are unknown.{' '}
+        <button
+          type="button"
+          className="underline underline-offset-3"
+          disabled={isRetryingConnections}
+          onClick={() => startConnectionRetry(() => router.refresh())}
+        >
+          {isRetryingConnections ? 'Retrying…' : 'Retry connection checks'}
+        </button>
+      </ErrorNote>}
       {getAdminConfigSections(areInternalToolsEnabled, simplifiedView)
         .map((section) => (
           <ChecklistGroup

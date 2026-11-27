@@ -3,7 +3,7 @@ import AppGrid from '@/components/AppGrid';
 import { getUniqueRecipes } from '@/media/query';
 
 export default async function AdminRecipesPage() {
-  const recipes = await getUniqueRecipes().catch(() => []);
+  const recipes = await getUniqueRecipes();
 
   return (
     <AppGrid

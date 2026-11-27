@@ -1,5 +1,6 @@
 import { auth } from './server';
 import { hasCapability, type AuthCapability } from './permissions';
+import { isVerifiedSession } from './session';
 
 const AUTOMATION_SHARED_SECRET =
   process.env.AUTOMATION_API_SECRET ??
@@ -15,7 +16,7 @@ const getBearerToken = (authorization?: string | null) => {
 
 export const isSessionAuthorized = async (capability: AuthCapability) => {
   const session = await auth();
-  return session?.user?.status === 'active' &&
+  return isVerifiedSession(session) &&
     hasCapability(session.user.role, capability);
 };
 

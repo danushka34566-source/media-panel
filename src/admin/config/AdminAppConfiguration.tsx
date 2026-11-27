@@ -17,7 +17,7 @@ export default async function AdminAppConfiguration({
       secret,
       simplifiedView,
     }} /> }>
-      <AdminAppConfigurationServer {...{ simplifiedView }} />
+      <AdminAppConfigurationServer {...{ secret, simplifiedView }} />
     </Suspense>
   );
 }

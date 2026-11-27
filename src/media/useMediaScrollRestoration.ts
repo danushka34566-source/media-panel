@@ -1,14 +1,33 @@
 'use client';
 
-import { useEffect, useLayoutEffect, useState } from 'react';
+import { useEffect, useLayoutEffect, useState, useSyncExternalStore } from 'react';
 import { usePathname } from 'next/navigation';
-import { currentHistoryKey } from '@/utility/back-navigation';
+import { getMediaSearchQuery } from '@/app/path';
+import {
+  currentHistoryKey,
+  ensureLegacyHistoryTracking,
+  subscribeToHistoryEntryChanges,
+} from '@/utility/back-navigation';
 
 const useMediaLayoutEffect = typeof window === 'undefined'
   ? useEffect
   : useLayoutEffect;
 
 const STORAGE_PREFIX = 'media-panel:scroll:';
+const ANCHOR_REQUEST_EVENT = 'media-feed-restore-anchor';
+
+type AnchorRequest = { routeKey: string, storageKey: string, anchorId: string };
+let anchorRequest: AnchorRequest | undefined;
+
+const publishAnchorRequest = (request?: AnchorRequest) => {
+  anchorRequest = request;
+  window.dispatchEvent(new Event(ANCHOR_REQUEST_EVENT));
+};
+
+const subscribeToAnchorRequests = (notify: () => void) => {
+  window.addEventListener(ANCHOR_REQUEST_EVENT, notify);
+  return () => window.removeEventListener(ANCHOR_REQUEST_EVENT, notify);
+};
 
 type SavedScrollPosition = {
   top: number
@@ -84,8 +103,9 @@ export const rememberMediaScrollPosition = (
   if (typeof window === 'undefined') { return; }
   const key = getStorageKey();
   if (!key) { return; }
-  const anchorOffset = anchor
-    ? getLayoutTop(anchor) - window.scrollY
+  const resolvedAnchor = anchor ?? findAnchor(anchorId);
+  const anchorOffset = resolvedAnchor
+    ? getLayoutTop(resolvedAnchor) - window.scrollY
     : undefined;
   writePosition(key, {
     top: Math.max(0, Math.round(window.scrollY)),
@@ -103,6 +123,18 @@ const findAnchor = (anchorId?: string) => {
     element.closest('[data-media-smart-preview-card]')) ??
     matches.find(element => element.tagName === 'A') ?? matches[0];
 };
+
+export const hasMediaScrollAnchor = (anchorId: string) => Boolean(findAnchor(anchorId));
+
+export const useMediaFeedRestorationAnchor = (routeKey: string) =>
+  useSyncExternalStore(
+    subscribeToAnchorRequests,
+    () => anchorRequest?.routeKey === routeKey &&
+      anchorRequest.storageKey === getStorageKey()
+      ? anchorRequest.anchorId
+      : undefined,
+    () => undefined,
+  );
 
 export type MediaViewportAnchor = {
   mediaId: string
@@ -151,9 +183,15 @@ export const restoreMediaViewportAnchor = (anchor?: MediaViewportAnchor) => {
  * single initial nudge still wakes the infinite-scroll sentinel when the
  * saved card is below the first page.
  */
-export default function useMediaScrollRestoration(routeKey?: string, resetAtStart = false) {
+export default function useMediaScrollRestoration(
+  routeKey?: string,
+  resetAtStart = false,
+  feedComplete = false,
+  committedSearchQuery?: string,
+) {
   const pathname = usePathname();
   const [restoredEntry, setRestoredEntry] = useState(false);
+  const [historyRevision, setHistoryRevision] = useState(0);
   // Restore before the browser paints the remounted feed.  useEffect lets the
   // new route render at scrollTop 0 for one frame, which is especially visible
   // when returning from a detail page; the subsequent correction then looks
@@ -162,8 +200,35 @@ export default function useMediaScrollRestoration(routeKey?: string, resetAtStar
   // synchronously and still retain the observers for delayed infinite rows.
   useMediaLayoutEffect(() => {
     if (typeof window === 'undefined') { return; }
+    const committedPathname = pathname ?? window.location.pathname;
+    const matchesCommittedRoute = () =>
+      window.location.pathname === committedPathname && (
+        committedSearchQuery === undefined ||
+        getMediaSearchQuery(new URLSearchParams(window.location.search)
+          .get('query') ?? undefined) === committedSearchQuery
+      );
+    ensureLegacyHistoryTracking();
     const key = getStorageKey();
     if (!key) { return; }
+    // A popstate URL can change before React replaces the prior search grid.
+    // Its DOM must never satisfy or consume the incoming entry's anchor. Keep
+    // a history listener while waiting so a rapid Back/Forward can re-arm this
+    // effect even when the committed route itself does not change.
+    if (!matchesCommittedRoute()) {
+      let waiting = true;
+      const unsubscribe = subscribeToHistoryEntryChanges(() => {
+        if (waiting && matchesCommittedRoute()) {
+          setHistoryRevision(revision => revision + 1);
+        }
+      });
+      return () => {
+        waiting = false;
+        unsubscribe();
+      };
+    }
+    let disposed = false;
+    let leftEntry = false;
+    const isCurrentEntry = () => !disposed && !leftEntry && key === getStorageKey();
 
     let saved: SavedScrollPosition | undefined;
     try {
@@ -179,6 +244,8 @@ export default function useMediaScrollRestoration(routeKey?: string, resetAtStar
     }
     let mutationObserver: MutationObserver | undefined;
     let resizeObserver: ResizeObserver | undefined;
+    let restoreTimeout: ReturnType<typeof setTimeout> | undefined;
+    let requestedAnchor: AnchorRequest | undefined;
     let wasPageHidden = false;
     const previousScrollRestoration = window.history.scrollRestoration;
     const root = document.documentElement;
@@ -191,15 +258,23 @@ export default function useMediaScrollRestoration(routeKey?: string, resetAtStar
     }
 
     const stopRestoring = () => {
+      if (!restoring) { return; }
       restoring = false;
+      if (restoreTimeout !== undefined) {
+        clearTimeout(restoreTimeout);
+        restoreTimeout = undefined;
+      }
       mutationObserver?.disconnect();
       resizeObserver?.disconnect();
+      if (requestedAnchor && anchorRequest === requestedAnchor) {
+        publishAnchorRequest();
+      }
       window.history.scrollRestoration = previousScrollRestoration;
       delete root.dataset.mediaScrollRestoring;
     };
 
     const restore = () => {
-      if (!restoring || !saved) { return; }
+      if (!isCurrentEntry() || !restoring || !saved) { return; }
       const anchor = findAnchor(saved.anchorId);
       if (anchor) {
         const offset = saved.anchorOffset ?? 0;
@@ -219,9 +294,12 @@ export default function useMediaScrollRestoration(routeKey?: string, resetAtStar
         return;
       }
 
-      // Move to the largest reachable position once to activate the existing
-      // infinite-scroll sentinel. Observers retry only after actual layout or
-      // DOM growth, not on a timer every 120ms.
+      // The old pixel position can be far above the sentinel on a taller
+      // layout. Ask the matching feed to advance until the card mounts.
+      if (routeKey && saved.anchorId && !feedComplete && !requestedAnchor) {
+        requestedAnchor = { routeKey, storageKey: key, anchorId: saved.anchorId };
+        publishAnchorRequest(requestedAnchor);
+      }
       const maxScroll = Math.max(
         0,
         document.documentElement.scrollHeight - window.innerHeight,
@@ -235,11 +313,40 @@ export default function useMediaScrollRestoration(routeKey?: string, resetAtStar
       }
     };
 
+    const settleAtReachablePosition = () => {
+      if (!isCurrentEntry() || !restoring || !saved) { return; }
+      // The requested card may have been deleted or excluded from this feed.
+      // Keep as much of the saved position as the now-complete layout allows,
+      // then release the restored-grid animation state.
+      const maxScroll = Math.max(
+        0,
+        document.documentElement.scrollHeight - window.innerHeight,
+      );
+      const target = Math.min(saved.top, maxScroll);
+      if (Math.abs(window.scrollY - target) > 2) {
+        window.scrollTo({ top: target, behavior: 'auto' });
+      }
+      writePosition(key, { top: target });
+      stopRestoring();
+    };
+
+    const onFeedExhausted = (event: Event) => {
+      if (!isCurrentEntry()) { return; }
+      const detail = (event as CustomEvent<{
+        cacheKey?: string
+        href?: string
+      }>).detail;
+      if (detail?.href !== window.location.href) { return; }
+      if (routeKey && detail.cacheKey !== routeKey) { return; }
+      restore();
+      settleAtReachablePosition();
+    };
+
     const onScroll = () => {
       // Browser history and Next navigation can both dispatch scroll events.
       // Neither proves the user moved away from the saved card; keep waiting
       // for its grid row until a real input event cancels restoration.
-      if (restoring || key !== getStorageKey()) { return; }
+      if (restoring || !isCurrentEntry()) { return; }
       let previous: SavedScrollPosition | undefined;
       try {
         const stored = parseSavedPosition(window.sessionStorage.getItem(key));
@@ -248,7 +355,7 @@ export default function useMediaScrollRestoration(routeKey?: string, resetAtStar
       saveCurrentScrollPosition(key, previous);
     };
     const cancelForUserInput = () => {
-      if (!restoring) { return; }
+      if (!isCurrentEntry() || !restoring) { return; }
       writePosition(key, { top: Math.max(0, Math.round(window.scrollY)) });
       stopRestoring();
     };
@@ -257,7 +364,7 @@ export default function useMediaScrollRestoration(routeKey?: string, resetAtStar
         .includes(event.key)) { cancelForUserInput(); }
     };
     const onPageHide = () => {
-      if (key !== getStorageKey()) { return; }
+      if (!isCurrentEntry()) { return; }
       wasPageHidden = true;
       // A media click records the precise anchor immediately before the
       // route starts unloading. Do not overwrite that richer record with a
@@ -271,7 +378,7 @@ export default function useMediaScrollRestoration(routeKey?: string, resetAtStar
     };
 
     const restoreAfterPageShow = () => {
-      if (!wasPageHidden || document.hidden) { return; }
+      if (!isCurrentEntry() || !wasPageHidden || document.hidden) { return; }
       wasPageHidden = false;
       let latest: SavedScrollPosition | undefined;
       try {
@@ -291,6 +398,7 @@ export default function useMediaScrollRestoration(routeKey?: string, resetAtStar
     };
 
     const onVisibilityChange = () => {
+      if (!isCurrentEntry()) { return; }
       if (document.hidden) { onPageHide(); }
       else { window.requestAnimationFrame(restoreAfterPageShow); }
     };
@@ -303,6 +411,17 @@ export default function useMediaScrollRestoration(routeKey?: string, resetAtStar
     window.addEventListener('pagehide', onPageHide, { passive: true });
     window.addEventListener('pageshow', restoreAfterPageShow);
     document.addEventListener('visibilitychange', onVisibilityChange);
+    window.addEventListener('media-feed-exhausted', onFeedExhausted);
+    const unsubscribe = subscribeToHistoryEntryChanges(() => {
+      if (key !== getStorageKey()) {
+        leftEntry = true;
+        stopRestoring();
+      }
+      // Rapid Back and Forward may return before the intervening grid renders.
+      if (leftEntry && matchesCommittedRoute()) {
+        setHistoryRevision(revision => revision + 1);
+      }
+    });
     if (restoring && typeof MutationObserver !== 'undefined') {
       mutationObserver = new MutationObserver(restore);
       mutationObserver.observe(document.body, { childList: true, subtree: true });
@@ -316,10 +435,18 @@ export default function useMediaScrollRestoration(routeKey?: string, resetAtStar
       // anchor is present, then keep observers only for pages that need more
       // infinite-scroll content.
       restore();
-      window.requestAnimationFrame(restore);
+      if (restoring && feedComplete) {
+        settleAtReachablePosition();
+      } else if (restoring) {
+        window.requestAnimationFrame(restore);
+        // A request can fail permanently or a feed can be interrupted before
+        // its terminal event. Never leave restored cards frozen indefinitely.
+        restoreTimeout = setTimeout(settleAtReachablePosition, 15_000);
+      }
     }
 
     return () => {
+      disposed = true;
       window.removeEventListener('scroll', onScroll);
       window.removeEventListener('wheel', cancelForUserInput);
       window.removeEventListener('touchmove', cancelForUserInput);
@@ -328,9 +455,14 @@ export default function useMediaScrollRestoration(routeKey?: string, resetAtStar
       window.removeEventListener('pagehide', onPageHide);
       window.removeEventListener('pageshow', restoreAfterPageShow);
       document.removeEventListener('visibilitychange', onVisibilityChange);
+      window.removeEventListener('media-feed-exhausted', onFeedExhausted);
+      unsubscribe();
       stopRestoring();
     };
-  }, [pathname, routeKey, resetAtStart]);
+  }, [
+    pathname, routeKey, resetAtStart, feedComplete, committedSearchQuery,
+    historyRevision,
+  ]);
 
   return restoredEntry;
 }

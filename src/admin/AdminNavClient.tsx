@@ -17,6 +17,7 @@ import {
   PATH_ADMIN_UPLOADS,
   PATH_ADMIN_USERS,
   checkPathPrefix,
+  getCanonicalAdminMediaPath,
   isPathAdminInfo,
   isPathTopLevelAdmin,
 } from '@/app/path';
@@ -56,12 +57,12 @@ export default function AdminNavClient({
   items: {
     label: string,
     href: string,
-    count: number,
+    count?: number,
   }[]
   mostRecentMediaUpdateTime?: Date
   includeInsights?: boolean
 }) {
-  const pathname = usePathname();
+  const pathname = getCanonicalAdminMediaPath(usePathname());
   const router = useRouter();
   const appText = useAppText();
   const adminInfoPath = includeInsights
@@ -276,7 +277,7 @@ export default function AdminNavClient({
                     prefetch={false}
                   >
                     <span>{label}</span>
-                    {count > 0 &&
+                    {count !== undefined && count > 0 &&
                       <span>({count})</span>}
                   </LinkWithLoaderBackground>)}
               </div>

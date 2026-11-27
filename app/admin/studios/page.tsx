@@ -5,7 +5,7 @@ import { deleteMediaStudioGloballyFormAction } from '@/media/actions';
 import { pathForAdminStudioEdit } from '@/app/path';
 
 export default async function AdminStudiosPage() {
-  const studios = await getUniqueStudiosWithMeta().catch(() => []);
+  const studios = await getUniqueStudiosWithMeta();
 
   return (
     <AppGrid

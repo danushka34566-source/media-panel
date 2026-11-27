@@ -1121,12 +1121,21 @@ export const getUniqueFocalLengths = async () =>
       })))
   , 'getUniqueFocalLengths');
 
-const getMediaList = async (options: MediaQueryOptions = {}) =>
+export type MediaPage = {
+  photos: Media[]
+  hasMore: boolean
+};
+
+const getMediaListResult = (
+  options: MediaQueryOptions = {},
+  includeLookahead = false,
+) =>
   safelyQuery(async () => {
     const shouldMergeVirtualVideos = optionsSupportVirtualStorageVideos(options);
+    const pageLimit = includeLookahead ? options.limit : undefined;
     const dbOptions = shouldMergeVirtualVideos
       ? { ...options, limit: 10000, offset: 0 }
-      : options;
+      : pageLimit === undefined ? options : { ...options, limit: pageLimit + 1 };
     const sql = ['SELECT p.* FROM media p'];
     const values = [] as Primitive[];
 
@@ -1156,15 +1165,24 @@ const getMediaList = async (options: MediaQueryOptions = {}) =>
     sql.push(limitAndOffset);
     values.push(...limitAndOffsetValues);
 
-    const dbMedia = await query(sql.join(' '), values)
-      .then(({ rows }) =>
-        dedupeMediaByStorageKey(parseMediaRowsSafely(rows as MediaDb[], 'getMedia')));
+    const { rows } = await query<MediaDb>(sql.join(' '), values);
+    // Parsing and deduplication can remove rows from a full database page.
+    // Keep the lookahead outside the displayed page and use it to advance
+    // the source offset even if no cards survived in that page.
+    const hasRawLookahead = !shouldMergeVirtualVideos && pageLimit !== undefined;
+    const pageRows = hasRawLookahead ? rows.slice(0, pageLimit) : rows;
+    const dbMedia = dedupeMediaByStorageKey(
+      parseMediaRowsSafely(pageRows, 'getMedia'),
+    );
     const hydratedDbMedia = dbOptions.includeMissingStorageStatus
       ? await attachMissingStorageStatus(dbMedia)
       : dbMedia;
 
     if (!shouldMergeVirtualVideos) {
-      return hydratedDbMedia;
+      return {
+        photos: hydratedDbMedia,
+        hasMore: hasRawLookahead && rows.length > pageLimit,
+      };
     }
 
     const dbUrls = new Set(hydratedDbMedia.map(({ url }) => url));
@@ -1175,15 +1193,24 @@ const getMediaList = async (options: MediaQueryOptions = {}) =>
         .filter(photo => virtualMediaMatchesOptions(photo, options)))
       .catch(() => [] as Media[]);
 
-    return applyLimitAndOffset(
-      sortMediaForOptions([...hydratedDbMedia, ...virtualMedia], options),
-      options,
-    );
+    const sorted = sortMediaForOptions([...hydratedDbMedia, ...virtualMedia], options);
+    return {
+      photos: applyLimitAndOffset(sorted, options),
+      hasMore: pageLimit !== undefined &&
+        sorted.length > (options.offset ?? 0) + pageLimit,
+    };
   },
   'getMedia',
   // Seemingly necessary to pass `options` for expected cache behavior
   options,
   );
+
+const getMediaList = async (options: MediaQueryOptions = {}) =>
+  (await getMediaListResult(options)).photos;
+
+export const getMediaPage = (
+  options: MediaQueryOptions & { limit: number },
+): Promise<MediaPage> => getMediaListResult(options, true);
 
 export const getMediaNearId = async (
   photoId: string,

@@ -7,6 +7,7 @@ import {
 } from '@/auth/server';
 import type { Session } from 'next-auth';
 import { redirect } from 'next/navigation';
+import { after } from 'next/server';
 import { revalidatePath, revalidateTag } from 'next/cache';
 import {
   generateAuthSecret,
@@ -17,6 +18,8 @@ import {
   KEY_CREDENTIALS_SUCCESS,
   KEY_2FA_REQUIRED,
   KEY_2FA_CODE_SENT,
+  KEY_2FA_CODE_AVAILABLE,
+  SIGNUP_VERIFICATION_REQUESTED,
   buildTwoFactorResponse,
   type TwoFactorMethod,
 } from '.';
@@ -25,7 +28,8 @@ import {
   createInitialSuperAdmin,
   createVerificationCode,
   createSmsVerificationCode,
-  clearLoginVerificationChallenge,
+  completeLoginVerificationChallenge,
+  completeProfileEmailChange,
   deleteUser,
   findUserByEmail,
   findUserById,
@@ -57,6 +61,10 @@ import {
 import { SORT_BY_OPTIONS, type SortBy } from '@/media/sort';
 import { canManageRole, hasCapability, isUserRole } from './permissions';
 import {
+  createLocalAuditUser,
+  isLocalAuthBypassEnabled,
+} from './local-audit-bypass';
+import {
   PATH_ADMIN,
   PATH_ADMIN_USERS,
   PATH_PROFILE,
@@ -76,15 +84,71 @@ import {
   clearGoogleSuperAdminSetup,
 } from './google-setup';
 import {
+  GOOGLE_LINK_CALLBACK, beginGoogleAccountLink, clearGoogleAccountLink,
+} from './google-link';
+import {
   isDatabaseQuotaExceededError,
   normalizeDatabaseErrorMessage,
 } from '@/db/errors';
 import { isGoogleAuthConfigured } from './config';
 import { getSiteAccessSettingsForAuthorization } from './site-access';
+import { getAuthCallbackPath } from './redirects';
+import { isVerifiedSession } from './session';
+import { VerificationCodeCooldownError } from './login-verification';
 
 const requireGoogleAuth = () => {
   if (!isGoogleAuthConfigured()) {
     throw new Error('Google sign-in is not configured');
+  }
+};
+
+const sendLoginCode = async (
+  user: AppUser,
+  method: 'email' | 'sms',
+  available: TwoFactorMethod[],
+) => {
+  try {
+    if (method === 'sms') {
+      if (!user.mobileVerified || !user.mobileNumber) {
+        return buildTwoFactorResponse(
+          KEY_2FA_REQUIRED,
+          available[0],
+          available,
+          'Add and verify a mobile number first.',
+        );
+      }
+      const sms = await createSmsVerificationCode(user.id, user.mobileNumber, 'login');
+      await sendSmsVerificationCode({ ...sms, userId: user.id, purpose: 'login' });
+    } else {
+      const code = await createVerificationCode(user.id, user.email, 'login');
+      await sendVerificationEmail({
+        userId: user.id,
+        email: user.email,
+        name: user.name,
+        code,
+        purpose: 'login',
+      });
+    }
+    return buildTwoFactorResponse(KEY_2FA_CODE_SENT, method, available);
+  } catch (error) {
+    if (error instanceof VerificationCodeCooldownError) {
+      return buildTwoFactorResponse(
+        KEY_2FA_CODE_AVAILABLE,
+        method,
+        available,
+        `A previous code may still work. ${error.message}`,
+      );
+    }
+    const alternative = available.length > 1
+      ? ' You can also choose another verification method.'
+      : '';
+    const channel = method === 'sms' ? 'SMS' : 'email';
+    return buildTwoFactorResponse(
+      KEY_2FA_REQUIRED,
+      method,
+      available,
+      `Could not send the ${channel} code. Wait a minute and try again.${alternative}`,
+    );
   }
 };
 
@@ -121,47 +185,9 @@ export const signInAction = async (
         requestedTwoFactorMethod || preferred
       ) as TwoFactorMethod;
       if (!twoFactorCode) {
-        if (twoFactorMethod === 'sms') {
-          if (!dbUser.mobileVerified || !dbUser.mobileNumber) {
-            return buildTwoFactorResponse(
-              KEY_2FA_REQUIRED,
-              preferred,
-              available,
-            );
-          }
-          const sms = await createSmsVerificationCode(
-            dbUser.id,
-            dbUser.mobileNumber,
-            'login',
-          );
-          await sendSmsVerificationCode({
-            ...sms,
-            userId: dbUser.id,
-            purpose: 'login',
-          });
-          return buildTwoFactorResponse(
-            KEY_2FA_CODE_SENT,
-            twoFactorMethod,
-            available,
-          );
-        }
-        if (twoFactorMethod === 'email') {
-          const code = await createVerificationCode(
-            dbUser.id,
-            dbUser.email,
-            'login',
-          );
-          await sendVerificationEmail({
-            userId: dbUser.id,
-            email: dbUser.email,
-            name: dbUser.name,
-            code,
-            purpose: 'login',
-          });
-          return buildTwoFactorResponse(
-            KEY_2FA_CODE_SENT,
-            twoFactorMethod,
-            available,
+        if (twoFactorMethod === 'sms' || twoFactorMethod === 'email') {
+          return sendLoginCode(
+            dbUser, twoFactorMethod, available,
           );
         }
         return buildTwoFactorResponse(
@@ -191,12 +217,11 @@ export const signInAction = async (
         errorText: `${error}`,
         error,
       });
-      // Rethrow non-redirect errors
-      throw error;
+      return 'Sign in is temporarily unavailable. Please try again.';
     }
   }
-  const callbackUrl = formValue(formData, KEY_CALLBACK_URL);
-  if (callbackUrl.startsWith('/') && !callbackUrl.startsWith('//')) {
+  const callbackUrl = getAuthCallbackPath(formValue(formData, KEY_CALLBACK_URL));
+  if (callbackUrl) {
     redirect(callbackUrl);
   }
   return KEY_CREDENTIALS_SUCCESS;
@@ -245,63 +270,64 @@ export const setupSuperAdminAction = async (
   }
 };
 
-export const getSetupRequiredAction = async () => !(await hasActiveSuperAdmin());
+export const getSetupRequiredAction = async () =>
+  isLocalAuthBypassEnabled() ? false : !(await hasActiveSuperAdmin());
 
 export const getWideGridPreferenceAction = async () => {
+  if (isLocalAuthBypassEnabled()) { return false; }
   const session = await auth();
-  const userId = session?.user?.id;
-  if (!userId) { return null; }
-  const user = await findUserById(userId);
+  if (!isVerifiedSession(session)) { return null; }
+  const user = await findUserById(session.user.id);
   return user?.wideGridEnabled ?? null;
 };
 
 export const setWideGridPreferenceAction = async (enabled: boolean) => {
+  if (isLocalAuthBypassEnabled()) { return; }
   if (typeof enabled !== 'boolean') {
     throw new Error('Invalid grid preference');
   }
   const session = await auth();
-  const userId = session?.user?.id;
-  if (!userId) { return; }
-  await updateUser(userId, { wideGridEnabled: enabled });
+  if (!isVerifiedSession(session)) { return; }
+  await updateUser(session.user.id, { wideGridEnabled: enabled });
 };
 
 export const getVideoPreviewPreferenceAction = async () => {
+  if (isLocalAuthBypassEnabled()) { return 'smart'; }
   const session = await auth();
-  const userId = session?.user?.id;
-  if (!userId) { return null; }
-  const user = await findUserById(userId);
+  if (!isVerifiedSession(session)) { return null; }
+  const user = await findUserById(session.user.id);
   return user?.videoPreviewMode ?? 'smart';
 };
 
 export const setVideoPreviewPreferenceAction = async (mode: VideoPreviewMode) => {
+  if (isLocalAuthBypassEnabled()) { return; }
   if (!['off', 'smart', 'all'].includes(mode)) {
     throw new Error('Invalid video preview preference');
   }
   const session = await auth();
-  const userId = session?.user?.id;
-  if (!userId) { return; }
-  await updateUser(userId, { videoPreviewMode: mode });
+  if (!isVerifiedSession(session)) { return; }
+  await updateUser(session.user.id, { videoPreviewMode: mode });
 };
 
 const isSortBy = (value: unknown): value is SortBy =>
   SORT_BY_OPTIONS.some(option => option.sortBy === value);
 
 export const getMediaSortPreferenceAction = async () => {
+  if (isLocalAuthBypassEnabled()) { return null; }
   const session = await auth();
-  const userId = session?.user?.id;
-  if (!userId) { return null; }
-  const user = await findUserById(userId);
+  if (!isVerifiedSession(session)) { return null; }
+  const user = await findUserById(session.user.id);
   return isSortBy(user?.mediaSortBy) ? user.mediaSortBy : null;
 };
 
 export const setMediaSortPreferenceAction = async (sortBy: SortBy) => {
+  if (isLocalAuthBypassEnabled()) { return; }
   if (!isSortBy(sortBy)) {
     throw new Error('Invalid media sort preference');
   }
   const session = await auth();
-  const userId = session?.user?.id;
-  if (!userId) { return; }
-  await updateUser(userId, { mediaSortBy: sortBy });
+  if (!isVerifiedSession(session)) { return; }
+  await updateUser(session.user.id, { mediaSortBy: sortBy });
 };
 
 export const logClientAuthUpdate = async (data: Session | null | undefined) =>
@@ -342,15 +368,25 @@ export const signUpAction = async (
     }
 
     const user = await createUser({ name, email, username, password });
-    const code = await createVerificationCode(user.id, user.email, 'signup');
-    await sendVerificationEmail({
-      userId: user.id,
-      email: user.email,
-      name: user.name,
-      code,
-      purpose: 'signup',
-    });
-    redirect(`/verify-email?email=${encodeURIComponent(user.email)}`);
+    let deliverySucceeded = false;
+    try {
+      const code = await createVerificationCode(user.id, user.email, 'signup');
+      await sendVerificationEmail({
+        userId: user.id,
+        email: user.email,
+        name: user.name,
+        code,
+        purpose: 'signup',
+      });
+      deliverySucceeded = true;
+    } catch {
+      // Keep the new account recoverable even when code creation or email
+      // delivery fails. The verification page can issue a fresh code later.
+    }
+    redirect(
+      `/verify-email?email=${encodeURIComponent(user.email)}` +
+      `&sent=${deliverySucceeded ? '1' : '0'}`,
+    );
   } catch (error) {
     if (`${error}`.includes('NEXT_REDIRECT')) { throw error; }
     return errorMessage(error, 'Unable to create account');
@@ -366,7 +402,7 @@ export const verifyEmailAction = async (
     const email = formValue(formData, 'email').toLowerCase();
     const code = formValue(formData, 'code');
     const userId = await verifyCode(email, code, 'signup');
-    await updateUser(userId, { emailVerified: true });
+    await updateUser(userId, { emailVerified: true }, email);
     await signIn('credentials', {
       email,
       password: formValue(formData, 'password'),
@@ -376,6 +412,38 @@ export const verifyEmailAction = async (
   } catch (error) {
     if (`${error}`.includes('NEXT_REDIRECT')) { throw error; }
     return errorMessage(error, 'Unable to verify email');
+  }
+};
+
+export const resendSignUpVerificationAction = async (
+  _prevState: string | undefined,
+  formData: FormData,
+) => {
+  try {
+    if (!(await hasActiveSuperAdmin())) { redirect(PATH_SETUP); }
+    const email = formValue(formData, 'email').toLowerCase();
+    if (!isEmail(email)) { return 'Enter a valid email address'; }
+    // Lookup and delivery happen after the same public response for all emails.
+    after(async () => {
+      try {
+        const user = await findUserByEmail(email);
+        if (!user || user.email_verified || user.status !== 'active') { return; }
+        const code = await createVerificationCode(user.id, user.email, 'signup');
+        await sendVerificationEmail({
+          userId: user.id,
+          email: user.email,
+          name: user.name,
+          code,
+          purpose: 'signup',
+        });
+      } catch {
+        // A throttled or failed send must not disclose account state.
+      }
+    });
+    return SIGNUP_VERIFICATION_REQUESTED;
+  } catch (error) {
+    if (`${error}`.includes('NEXT_REDIRECT')) { throw error; }
+    return errorMessage(error, 'Unable to send a verification code');
   }
 };
 
@@ -420,7 +488,7 @@ export const confirmPasswordResetAction = async (
     await updateUser(userId, {
       password,
       emailVerified: true,
-    });
+    }, email);
     redirect(PATH_SIGN_IN);
   } catch (error) {
     if (`${error}`.includes('NEXT_REDIRECT')) { throw error; }
@@ -428,9 +496,13 @@ export const confirmPasswordResetAction = async (
   }
 };
 
-export const signInWithGoogleAction = async () => {
+export const signInWithGoogleAction = async (formData: FormData) => {
   requireGoogleAuth();
-  await signIn('google', { redirectTo: PATH_ROOT });
+  const callbackUrl = getAuthCallbackPath(
+    formValue(formData, KEY_CALLBACK_URL),
+  ) ?? PATH_ROOT;
+  await clearGoogleAccountLink();
+  await signIn('google', { redirectTo: callbackUrl });
 };
 
 export const setupWithGoogleAction = async () => {
@@ -447,8 +519,16 @@ export const setupWithGoogleAction = async () => {
 };
 
 export const linkGoogleAccountAction = async () => {
+  const user = await getCurrentUser();
+  if (!user?.emailVerified) { throw new Error('Verify your email address first'); }
   requireGoogleAuth();
-  await signIn('google', { redirectTo: PATH_PROFILE });
+  await beginGoogleAccountLink(user.id, user.email);
+  try {
+    await signIn('google', { redirectTo: GOOGLE_LINK_CALLBACK });
+  } catch (error) {
+    if (!`${error}`.includes('NEXT_REDIRECT')) { await clearGoogleAccountLink(); }
+    throw error;
+  }
 };
 
 export const unlinkGoogleAccountAction = async (
@@ -492,12 +572,22 @@ export const completePendingSignInVerificationAction = async (
   formData: FormData,
 ) => {
   try {
-    const user = await getCurrentUser();
     const session = await auth();
-    if (!user || !session?.user?.twoFactorPending) {
+    if (!session?.user?.id || !session.user.twoFactorPending ||
+      session.user.status !== 'active') {
       return 'No pending login verification';
     }
-    const twoFactorCode = formValue(formData, 'twoFactorCode');
+    const user = await findUserById(session.user.id);
+    const currentSession = await auth();
+    if (!user || currentSession?.user?.id !== user.id ||
+      !currentSession.user.twoFactorPending) {
+      return 'No pending login verification';
+    }
+    const shouldResendTwoFactorCode =
+      formValue(formData, 'intent') === 'resend-2fa';
+    const twoFactorCode = shouldResendTwoFactorCode
+      ? ''
+      : formValue(formData, 'twoFactorCode');
     const available: TwoFactorMethod[] = [
       ...(user.totpEnabled ? ['authenticator' as const] : []),
       'email',
@@ -510,43 +600,9 @@ export const completePendingSignInVerificationAction = async (
       formValue(formData, 'twoFactorMethod') || preferred
     ) as TwoFactorMethod;
     if (!twoFactorCode) {
-      if (twoFactorMethod === 'sms') {
-        if (!user.mobileVerified || !user.mobileNumber) {
-          return 'Add and verify a mobile number first';
-        }
-        const sms = await createSmsVerificationCode(
-          user.id,
-          user.mobileNumber,
-          'login',
-        );
-        await sendSmsVerificationCode({
-          ...sms,
-          userId: user.id,
-          purpose: 'login',
-        });
-        return buildTwoFactorResponse(
-          KEY_2FA_CODE_SENT,
-          twoFactorMethod,
-          available,
-        );
-      }
-      if (twoFactorMethod === 'email') {
-        const code = await createVerificationCode(
-          user.id,
-          user.email,
-          'login',
-        );
-        await sendVerificationEmail({
-          userId: user.id,
-          email: user.email,
-          name: user.name,
-          code,
-          purpose: 'login',
-        });
-        return buildTwoFactorResponse(
-          KEY_2FA_CODE_SENT,
-          twoFactorMethod,
-          available,
+      if (twoFactorMethod === 'sms' || twoFactorMethod === 'email') {
+        return sendLoginCode(
+          user, twoFactorMethod, available,
         );
       }
       return buildTwoFactorResponse(
@@ -578,11 +634,17 @@ export const completePendingSignInVerificationAction = async (
         return 'Verification code is invalid';
       }
     }
-    await clearLoginVerificationChallenge(
+    const challengeNonce = user.loginVerificationNonce;
+    if (!challengeNonce || !(await completeLoginVerificationChallenge(
       user.id,
-      user.loginVerificationNonce,
+      challengeNonce,
+    ))) {
+      return 'This sign-in verification expired. Please sign in again.';
+    }
+    const callbackUrl = getAuthCallbackPath(
+      formValue(formData, KEY_CALLBACK_URL),
     );
-    redirect(user.role === 'user' ? PATH_ROOT : PATH_ADMIN);
+    redirect(callbackUrl ?? (user.role === 'user' ? PATH_ROOT : PATH_ADMIN));
   } catch (error) {
     if (`${error}`.includes('NEXT_REDIRECT')) { throw error; }
     return errorMessage(error, 'Unable to complete login verification');
@@ -590,12 +652,12 @@ export const completePendingSignInVerificationAction = async (
 };
 
 export const getUsersAction = async () =>
-  runAsAdmin(actor => actor.role === 'superadmin'
+  isLocalAuthBypassEnabled() ? [] : runAsAdmin(actor => actor.role === 'superadmin'
     ? getAllUsers()
     : getUsersPage(100, 0, ['user']).then(page => page.users));
 
 export const getUsersPageAction = async (limit: number, offset: number) =>
-  runAsAdmin(actor => getUsersPage(
+  isLocalAuthBypassEnabled() ? { users: [], total: 0 } : runAsAdmin(actor => getUsersPage(
     limit,
     offset,
     actor.role === 'superadmin' ? undefined : ['user'],
@@ -621,7 +683,7 @@ const parseUserSearch = (value: string) => {
 };
 
 export const searchUsersCommandAction = async (value: string) =>
-  runAsAdmin(actor => {
+  isLocalAuthBypassEnabled() ? [] : runAsAdmin(actor => {
     const { role, search } = parseUserSearch(value);
     const roles: UserRole[] = actor.role === 'superadmin'
       ? role ? [role] : ['superadmin', 'admin', 'user']
@@ -630,20 +692,16 @@ export const searchUsersCommandAction = async (value: string) =>
   });
 
 const getCurrentUser = async () => {
+  if (isLocalAuthBypassEnabled()) { return createLocalAuditUser(); }
   const session = await auth();
-  if (!session?.user) { throw new Error('Unauthorized'); }
-  if (session.user.id) {
-    const user = await findUserById(session.user.id);
-    if (user) { return user; }
-  }
-  if (session.user.email) {
-    const row = await findUserByEmail(session.user.email);
-    if (row) { return findUserById(row.id); }
-  }
-  return undefined;
+  if (!isVerifiedSession(session)) { throw new Error('Unauthorized'); }
+  return findUserById(session.user.id);
 };
 
-export const getCurrentUserAction = async () => getCurrentUser();
+export const getCurrentUserAction = async () =>
+  isLocalAuthBypassEnabled()
+    ? createLocalAuditUser()
+    : getCurrentUser();
 
 const getActiveUserWithCapability = async (
   capability: Parameters<typeof hasCapability>[1],
@@ -666,8 +724,9 @@ export const getPersonalFavoriteAction = async (mediaId: string) => {
 };
 
 export const getPersonalFavoriteIdsAction = async () => {
+  if (isLocalAuthBypassEnabled()) { return []; }
   const session = await auth();
-  if (!session?.user?.id) { throw new Error('Unauthorized'); }
+  if (!isVerifiedSession(session)) { throw new Error('Unauthorized'); }
   return getActiveUserFavoriteMediaIds(session.user.id);
 };
 
@@ -675,25 +734,59 @@ export const setPersonalFavoriteAction = async (
   mediaId: string,
   isFavorite: boolean,
 ) => {
+  if (isLocalAuthBypassEnabled()) { return isFavorite; }
   if (!mediaId) { throw new Error('Media id is required'); }
   const session = await auth();
-  if (!session?.user?.id) { throw new Error('Unauthorized'); }
+  if (!isVerifiedSession(session)) { throw new Error('Unauthorized'); }
   return setUserFavorite(session.user.id, mediaId, isFavorite);
 };
 
 const runAsAdmin = async <T>(callback: (actor: AppUser) => Promise<T>) => {
   const session = await auth();
-  if (!session?.user) { throw new Error('Unauthorized'); }
+  if (!isVerifiedSession(session)) { throw new Error('Unauthorized'); }
   if (!hasCapability(session.user.role, 'manage-users')) {
     throw new Error('Insufficient permissions');
   }
-  const actor = await getCurrentUser();
+  const actor = await findUserById(session.user.id);
   if (!actor || actor.status !== 'active') { throw new Error('Unauthorized'); }
   return callback(actor);
 };
 
-export const saveUserAction = async (formData: FormData) => {
-  await runAsAdmin(async actor => {
+const runAdminUserMutation = async (
+  action: 'save' | 'delete',
+  mutate: (actor: AppUser) => Promise<string | undefined>,
+): Promise<{ error: string } | void> => {
+  try {
+    const error = await runAsAdmin(mutate);
+    if (error) { return { error }; }
+  } catch (error) {
+    if (error instanceof Error) {
+      if (error.message === 'Unauthorized') {
+        return { error: 'Your session has expired. Sign in and try again.' };
+      }
+      if (error.message === 'Insufficient permissions' ||
+          error.message === 'User not found' ||
+          error.message ===
+            'The last active super admin cannot be removed, demoted, or disabled') {
+        return { error: error.message };
+      }
+      if ('code' in error && error.code === '23505' && 'constraint' in error) {
+        if (error.constraint === 'auth_users_email_key') {
+          return { error: 'That email address is already in use.' };
+        }
+        if (error.constraint === 'auth_users_username_key') {
+          return { error: 'That username is already in use.' };
+        }
+      }
+    }
+    return { error: `Unable to ${action} the user. Try again.` };
+  }
+  revalidatePath(PATH_ADMIN_USERS);
+  revalidateTag(AUTH_USERS_CACHE_TAG, 'max');
+};
+
+export const saveUserAction = async (formData: FormData) =>
+  runAdminUserMutation('save', async actor => {
     const id = formValue(formData, 'id');
     const name = formValue(formData, 'name');
     const email = formValue(formData, 'email').toLowerCase();
@@ -702,25 +795,31 @@ export const saveUserAction = async (formData: FormData) => {
     const role = formValue(formData, 'role') as UserRole;
     const status = formValue(formData, 'status') as UserStatus;
     const mobileInput = formValue(formData, 'mobileNumber');
-    const mobileNumber = mobileInput
-      ? normalizeSriLankaMobile(mobileInput)
-      : '';
-    if (!name || !email) { throw new Error('Name and email are required'); }
-    if (!isUserRole(role)) { throw new Error('Invalid role'); }
-    if (status !== 'active' && status !== 'disabled') {
-      throw new Error('Invalid account status');
+    let mobileNumber = '';
+    if (mobileInput) {
+      try {
+        mobileNumber = normalizeSriLankaMobile(mobileInput);
+      } catch {
+        return 'Enter a valid Sri Lankan mobile number';
+      }
     }
-    if (!isEmail(email)) { throw new Error('Enter a valid email address'); }
-    if (username && !isUsername(username)) { throw new Error('Invalid username'); }
+    if (!name || !email) { return 'Name and email are required'; }
+    if (!isUserRole(role)) { return 'Invalid role'; }
+    if (status !== 'active' && status !== 'disabled') {
+      return 'Invalid account status';
+    }
+    if (!isEmail(email)) { return 'Enter a valid email address'; }
+    if (username && !isUsername(username)) { return 'Invalid username'; }
     if (password && !isStrongPassword(password)) {
-      throw new Error('Password is not strong enough');
+      return 'Password must contain at least 8 characters, including ' +
+        'uppercase, lowercase, and a number.';
     }
     if (id) {
       const existingUser = await findUserById(id);
-      if (!existingUser) { throw new Error('User not found'); }
+      if (!existingUser) { return 'User not found'; }
       if (!canManageRole(actor.role, existingUser.role) ||
           !canManageRole(actor.role, role)) {
-        throw new Error('Insufficient permissions for this role');
+        return 'Insufficient permissions for this role';
       }
       const mobileChanged = existingUser.mobileNumber !== (mobileNumber || undefined);
       await updateUser(id, {
@@ -736,9 +835,9 @@ export const saveUserAction = async (formData: FormData) => {
       });
     } else {
       if (!canManageRole(actor.role, role)) {
-        throw new Error('Insufficient permissions for this role');
+        return 'Insufficient permissions for this role';
       }
-      if (!password) { throw new Error('Password is required for new users'); }
+      if (!password) { return 'Password is required for new users'; }
       await createUser({
         name,
         email,
@@ -753,23 +852,17 @@ export const saveUserAction = async (formData: FormData) => {
       });
     }
   });
-  revalidatePath(PATH_ADMIN_USERS);
-  revalidateTag(AUTH_USERS_CACHE_TAG, 'max');
-};
 
-export const deleteUserAction = async (formData: FormData) => {
-  await runAsAdmin(async actor => {
+export const deleteUserAction = async (formData: FormData) =>
+  runAdminUserMutation('delete', async actor => {
     if (!hasCapability(actor.role, 'delete')) {
-      throw new Error('Only a super admin can delete users');
+      return 'Only a super admin can delete users';
     }
     const id = formValue(formData, 'id');
-    if (!id) { throw new Error('User id is required'); }
-    if (id === actor.id) { throw new Error('You cannot delete your own account'); }
+    if (!id) { return 'User id is required'; }
+    if (id === actor.id) { return 'You cannot delete your own account'; }
     await deleteUser(id);
   });
-  revalidatePath(PATH_ADMIN_USERS);
-  revalidateTag(AUTH_USERS_CACHE_TAG, 'max');
-};
 
 export const setUserStatusAction = async (formData: FormData) => {
   await runAsAdmin(async actor => {
@@ -791,6 +884,57 @@ export const setUserStatusAction = async (formData: FormData) => {
   revalidateTag(AUTH_USERS_CACHE_TAG, 'max');
 };
 
+const getProfileEmailChangeError = async (user: AppUser, email: string) => {
+  if (user.googleLinked) { return 'Your email address is managed by Google'; }
+  if (!isEmail(email) || user.email === email) { return 'Enter a new email address'; }
+  if (await findUserByEmail(email)) { return 'This email address is already in use'; }
+};
+
+const sendProfileEmailChangeCode = async (user: AppUser, email: string) => {
+  const code = await createVerificationCode(user.id, email, 'email-change');
+  await sendVerificationEmail({
+    userId: user.id, email, name: user.name, code, purpose: 'email-change',
+  });
+};
+
+export const resendProfileEmailChangeCodeAction = async (
+  _state: string | undefined,
+  formData: FormData,
+) => {
+  try {
+    const user = await getCurrentUser();
+    if (!user) { return 'Sign in and try again'; }
+    const email = formValue(formData, 'email').toLowerCase();
+    const error = await getProfileEmailChangeError(user, email);
+    if (error) { return error; }
+    await sendProfileEmailChangeCode(user, email);
+    return 'SENT';
+  } catch (error) {
+    return errorMessage(error, 'Unable to send the verification code');
+  }
+};
+
+export const confirmProfileEmailChangeAction = async (
+  _state: string | undefined,
+  formData: FormData,
+) => {
+  try {
+    const user = await getCurrentUser();
+    if (!user) { return 'Sign in and try again'; }
+    const email = formValue(formData, 'email').toLowerCase();
+    const error = await getProfileEmailChangeError(user, email);
+    if (error) { return error; }
+    const code = formValue(formData, 'code');
+    await verifyCode(email, code, 'email-change', user.id);
+    await completeProfileEmailChange(user.id, user.email, email);
+    revalidatePath(PATH_PROFILE);
+    redirect(PATH_PROFILE);
+  } catch (error) {
+    if (`${error}`.includes('NEXT_REDIRECT')) { throw error; }
+    return errorMessage(error, 'Unable to verify the new email address');
+  }
+};
+
 export const saveProfileAction = async (
   _prevState: string | undefined,
   formData: FormData,
@@ -809,9 +953,13 @@ export const saveProfileAction = async (
     if (password && !isStrongPassword(password)) {
       return 'Password is not strong enough';
     }
+    const emailChanged = email !== user.email;
+    if (emailChanged) {
+      const error = await getProfileEmailChangeError(user, email);
+      if (error) { return error; }
+    }
     await updateUser(user.id, {
       ...(name !== user.name && { name }),
-      email,
       username,
       ...(!user.googleLinked && {
         profileImageUrl: profileImageUrl || null,
@@ -819,8 +967,15 @@ export const saveProfileAction = async (
       ...(password && { password }),
     });
     revalidatePath(PATH_PROFILE);
+    if (emailChanged) {
+      const sent = await sendProfileEmailChangeCode(user, email)
+        .then(() => '1', () => '0');
+      const params = new URLSearchParams({ email, sent, purpose: 'email-change' });
+      redirect(`/verify-email?${params}`);
+    }
     return 'SAVED';
   } catch (error) {
+    if (`${error}`.includes('NEXT_REDIRECT')) { throw error; }
     return errorMessage(error, 'Unable to save profile');
   }
 };

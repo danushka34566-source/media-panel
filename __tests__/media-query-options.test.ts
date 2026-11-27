@@ -17,4 +17,16 @@ describe('media query options', () => {
     expect(result.wheresValues).toEqual([['%alpha%', '%beta%']]);
     expect(result.lastValuesIndex).toBe(2);
   });
+
+  it('uses one latest upload lookup for both recent date limits', () => {
+    const result = getWheresFromOptions({ recent: true, studio: 'Studio' });
+    expect(result.wheres.replace(/\s+/g, ' ')).toBe([
+      'WHERE hidden IS NOT TRUE AND created_at >= (',
+      'SELECT MAX(created_at) - INTERVAL \'7 days\' FROM media',
+      'HAVING MAX(created_at) >= (now() - INTERVAL \'14 days\')',
+      ') AND studio=$1',
+    ].join(' '));
+    expect(result.wheresValues).toEqual(['Studio']);
+    expect(result.lastValuesIndex).toBe(2);
+  });
 });

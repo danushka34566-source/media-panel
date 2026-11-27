@@ -1,3 +1,14 @@
+// Upload-key validation does not depend on generated IDs; the ESM-only
+// runtime package is incidental to the module's import graph.
+jest.mock('nanoid', () => ({
+  customAlphabet: () => () => 'test-id',
+  nanoid: () => 'test-id',
+}));
+jest.mock('camelcase-keys', () => ({
+  __esModule: true,
+  default: (value: unknown) => value,
+}));
+
 import { isUploadPathnameValid } from '@/media/storage';
 
 describe('panel upload storage keys', () => {

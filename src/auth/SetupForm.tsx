@@ -37,14 +37,15 @@ export default function SetupForm({
       />
       {response && <ErrorNote>{response}</ErrorNote>}
       <form action={action} className="space-y-4">
-        <FieldsetWithStatus id="name" label="Name" value={name} onChange={setName} required />
-        <FieldsetWithStatus id="email" label="Email" type="email" value={email} onChange={setEmail} required />
-        <FieldsetWithStatus id="username" label="Username (optional)" value={username} onChange={setUsername} />
-        <FieldsetWithStatus id="password" label="Password" type="password" value={password} onChange={setPassword} required />
+        <FieldsetWithStatus id="name" label="Name" autoComplete="name" value={name} onChange={setName} required />
+        <FieldsetWithStatus id="email" label="Email" type="email" autoComplete="email" value={email} onChange={setEmail} required />
+        <FieldsetWithStatus id="username" label="Username (optional)" autoComplete="username" value={username} onChange={setUsername} />
+        <FieldsetWithStatus id="password" label="Password" type="password" autoComplete="new-password" value={password} onChange={setPassword} required />
         <FieldsetWithStatus
           id="confirmPassword"
           label="Confirm password"
           type="password"
+          autoComplete="new-password"
           value={confirmPassword}
           onChange={setConfirmPassword}
           required

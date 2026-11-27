@@ -11,6 +11,7 @@ const WIDTH_CLASS_NARROW  = 'w-[36px]';
 export default function SwitcherItem({
   icon,
   title,
+  ariaLabel,
   href,
   hrefRef,
   className: classNameProp,
@@ -25,6 +26,7 @@ export default function SwitcherItem({
 }: {
   icon: ReactNode
   title?: string
+  ariaLabel?: string
   href?: string
   hrefRef?: RefObject<HTMLAnchorElement | null>
   className?: string
@@ -55,27 +57,43 @@ export default function SwitcherItem({
 
   const renderIcon = () => noPadding
     ? icon
-    : <div className={clsx(
+    : <span className={clsx(
       'w-[28px] h-[24px]',
       'flex items-center justify-center',
     )}>
       {icon}
-    </div>;
+    </span>;
+
+  const label = ariaLabel ?? (
+    typeof tooltip?.content === 'string' ? tooltip.content : undefined
+  );
 
   const content = href
     ? <LinkWithIconLoader {...{
       href,
       ref: hrefRef,
       title,
+      'aria-label': label,
       onClick,
       className,
       prefetch,
       icon: renderIcon(),
       loader: showLoader ? <Spinner /> : undefined,
     }} />
-    : <div {...{ title, onClick, className }}>
-      {renderIcon()}
-    </div>;
+    : onClick
+      ? <button
+        type="button"
+        aria-label={label}
+        {...{ title, className }}
+        onClick={event => {
+          // Keep keyboard focus on the action when the tooltip wraps it.
+          if (event.detail === 0) { event.stopPropagation(); }
+          onClick();
+        }}
+      >
+        {renderIcon()}
+      </button>
+      : <div {...{ title, className }}>{renderIcon()}</div>;
 
   return (
     tooltip

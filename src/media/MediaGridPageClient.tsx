@@ -18,6 +18,7 @@ export default function MediaGridPageClient({
   photos,
   photosCount,
   photosCountWithExcludes,
+  initialHasMore,
   sortBy,
   sortWithPriority,
   ...categories
@@ -25,6 +26,7 @@ export default function MediaGridPageClient({
   photos: Media[]
   photosCount: number
   photosCountWithExcludes: number
+  initialHasMore?: boolean
   sortBy: SortBy
   sortWithPriority: boolean
 }) {
@@ -60,6 +62,7 @@ export default function MediaGridPageClient({
         cacheKey={`page-${PATH_GRID_INFERRED}`}
         photos={photos}
         count={photosCount}
+        initialHasMore={initialHasMore}
         sortBy={sortBy}
         sortWithPriority={sortWithPriority}
         excludeFromFeeds

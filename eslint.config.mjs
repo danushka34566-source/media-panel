@@ -12,6 +12,9 @@ const eslintConfig = defineConfig([
     '.next/**',
     'out/**',
     'build/**',
+    '**/.wrangler/**',
+    '**/.wrangler-dry-*/**',
+    '**/.cf-dryrun/**',
     'next-env.d.ts',
   ]), {
     plugins: {

@@ -5,9 +5,11 @@ import { KEY_MEDIA } from '@/media/cache';
 export const getDataForCategoriesCached = unstable_cache(
   getDataForCategories,
   [KEY_MEDIA],
+  { tags: [KEY_MEDIA] },
 );
 
 export const getCountsForCategoriesCached = unstable_cache(
   getCountsForCategories,
   [KEY_MEDIA],
+  { tags: [KEY_MEDIA] },
 );

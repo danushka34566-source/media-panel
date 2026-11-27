@@ -24,7 +24,7 @@ describe('backend status polling state', () => {
     );
 
     expect(isBackendStatusTransient(timedOut, 6_000)).toBe(true);
-    expect(getBackendStatusSnapshot(timedOut)?.pending).toBe(4);
+    expect(getBackendStatusSnapshot(timedOut, 6_000)?.pending).toBe(4);
   });
 
   it('preserves registration queue details through a transient probe failure', () => {
@@ -52,7 +52,7 @@ describe('backend status polling state', () => {
       6_000,
     );
 
-    const snapshot = getBackendStatusSnapshot(timedOut);
+    const snapshot = getBackendStatusSnapshot(timedOut, 6_000);
     expect(snapshot?.registrationQueue?.registering).toBe(1);
     expect(snapshot?.registrationJobs?.[0]?.title).toBe('oldest-file.mp4');
   });

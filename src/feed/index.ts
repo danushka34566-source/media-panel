@@ -19,7 +19,7 @@ export const getFeedQueryOptions = ({
   isGrid: boolean,
   sortBy?: SortBy,
   sortWithPriority?: boolean,
-}): MediaQueryOptions => ({
+}): MediaQueryOptions & { limit: number } => ({
   ...FEED_BASE_QUERY_OPTIONS,
   sortBy,
   sortWithPriority,

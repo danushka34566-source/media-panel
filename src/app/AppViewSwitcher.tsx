@@ -278,7 +278,7 @@ export default function AppViewSwitcher({
   }, []);
   
   const onKeyDown = useCallback((e: KeyboardEvent) => {
-    if (!e.metaKey) {
+    if (!e.metaKey && !e.ctrlKey) {
       switch (e.key.toLocaleUpperCase()) {
         case KEY_COMMANDS.full:
           if (pathname !== PATH_FULL_INFERRED) { refHrefFull.current?.click(); }
@@ -303,6 +303,7 @@ export default function AppViewSwitcher({
   const renderItemFull =
     <SwitcherItem
       icon={<IconFull includeTitle={false} />}
+      ariaLabel={appText.nav.full}
       href={pathname === pathFull ? undefined : pathFull}
       hrefRef={refHrefFull}
       active={currentSelection === 'full'}
@@ -324,6 +325,7 @@ export default function AppViewSwitcher({
           variant={isWideGrid ? 'wide' : 'regular'}
         />
       </motion.span>}
+      ariaLabel={appText.nav.grid}
       href={currentSelection === 'grid' ? undefined : pathGrid}
       hrefRef={refHrefGrid}
       active={currentSelection === 'grid'}
@@ -361,6 +363,7 @@ export default function AppViewSwitcher({
           >
             <IconSearch includeTitle={false} />
           </motion.span>}
+          ariaLabel={appText.nav.search}
           onClick={() => {
             setIsSearchOpening(true);
             setIsCommandKOpen?.(true);
@@ -410,6 +413,8 @@ export default function AppViewSwitcher({
         </AnimatePresence>
       </Switcher>
       <motion.div
+        inert={!showSortControl}
+        aria-hidden={!showSortControl}
         initial={animate ? { opacity: 0, width: '0' } : false}
         animate={{ opacity: 1, width: showSortControl ? 'auto' : '0' }}
         transition={{ duration: 0.2, ease: 'easeInOut' }}
@@ -445,6 +450,9 @@ export default function AppViewSwitcher({
                 !isSortedByDefault && '*:bg-medium *:text-main!',
               )}
               href={pathSortToggle}
+              ariaLabel={isAscending
+                ? appText.sort.viewNewest
+                : appText.sort.viewOldest}
               icon={<IconSort
                 sort={isAscending ? 'asc' : 'desc'}
                 className="translate-x-[0.5px] translate-y-px"

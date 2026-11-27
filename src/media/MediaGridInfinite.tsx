@@ -64,6 +64,7 @@ export default function MediaGridInfinite({
           photos: combineUniqueMedia(initialPhotos ?? [], photos),
           ...categories,
           sortBy,
+          query,
           canStart,
           onLastMediaVisible,
         }} />}

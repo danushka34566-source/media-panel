@@ -163,12 +163,12 @@ export const getWheresFromOptions = (
     wheresValues.push(maximumAspectRatio);
   }
   if (recent) {
-    // Newest upload must be within past 2 weeks
-    // eslint-disable-next-line max-len
-    wheres.push('(SELECT MAX(created_at) FROM media) >= (now() - INTERVAL \'14 days\')');
-    // Selects must be within 1 week of newest upload
-    // eslint-disable-next-line max-len
-    wheres.push('created_at >= (SELECT MAX(created_at) - INTERVAL \'7 days\' FROM media)');
+    // Return no cutoff if the newest upload is more than two weeks old.
+    wheres.push(`created_at >= (
+      SELECT MAX(created_at) - INTERVAL '7 days'
+      FROM media
+      HAVING MAX(created_at) >= (now() - INTERVAL '14 days')
+    )`);
   }
   if (year) {
     wheres.push(`EXTRACT(YEAR FROM taken_at) = $${valuesIndex++}`);

@@ -6,13 +6,13 @@ import {
 } from '@/media/loading-policy';
 
 describe('full page loading policy', () => {
-  it('starts with a small payload and appends compact batches', () => {
-    expect(INFINITE_SCROLL_FULL_INITIAL).toBe(4);
-    expect(INFINITE_SCROLL_FULL_MULTIPLE).toBe(6);
+  it('uses the current full-feed batch sizes outside development', () => {
+    expect(INFINITE_SCROLL_FULL_INITIAL).toBe(24);
+    expect(INFINITE_SCROLL_FULL_MULTIPLE).toBe(24);
   });
 
-  it('loads the next batch and images shortly before they are needed', () => {
-    expect(FULL_LIST_LOAD_AHEAD_VIEWPORTS).toBe(1.5);
-    expect(FULL_IMAGE_LOAD_AHEAD_VIEWPORTS).toBe(2);
+  it('warms the full list and poster images ahead of the viewport', () => {
+    expect(FULL_LIST_LOAD_AHEAD_VIEWPORTS).toBe(4);
+    expect(FULL_IMAGE_LOAD_AHEAD_VIEWPORTS).toBe(5);
   });
 });

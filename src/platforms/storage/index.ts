@@ -354,11 +354,17 @@ export const copyFile = (
   }
 };
 
-export const deleteFile = (url: string) => {
-  const { fileName } = getFileNamePartsFromStorageUrl(url);
-  switch (storageTypeFromUrl(url)) {
+export const deleteFile = (url: string, verifiedKey?: string) => {
+  const storageType = storageTypeFromUrl(url);
+  if (verifiedKey !== undefined &&
+      verifiedKey !== getStorageKeyFromUrl(url, storageType)) {
+    throw new Error('The storage key does not match the object URL.');
+  }
+  switch (storageType) {
     case 'cloudflare-r2':
-      return cloudflareR2Delete(fileName);
+      return cloudflareR2Delete(
+        verifiedKey ?? getFileNamePartsFromStorageUrl(url).fileName,
+      );
     case 'drive':
       return driveDelete(url);
   }
@@ -503,15 +509,25 @@ export const testStorageConnection = (
   }
 };
 
-const getStorageKeyFromUrl = (url: string, storageType: StorageType) => {
+export const getStorageKeyFromUrl = (
+  url: string,
+  storageType: StorageType = storageTypeFromUrl(url),
+) => {
+  const [urlWithoutQuery] = url.split('?');
   if (storageType === 'drive') {
+    if (!DRIVE_STORAGE_OBJECT_BASE_URL ||
+        (urlWithoutQuery !== DRIVE_STORAGE_OBJECT_BASE_URL &&
+          !urlWithoutQuery.startsWith(`${DRIVE_STORAGE_OBJECT_BASE_URL}/`))) {
+      throw new Error('URL is not from configured Drive storage');
+    }
     return driveKeyFromUrl(url);
   }
-  const [urlWithoutQuery] = url.split('?');
   const baseUrl = [
     CLOUDFLARE_R2_BASE_URL_PUBLIC,
     CLOUDFLARE_R2_BASE_URL_PRIVATE,
-  ].find(base => base && urlWithoutQuery.startsWith(base));
+  ].find(base => base && (
+    urlWithoutQuery === base || urlWithoutQuery.startsWith(`${base}/`)
+  ));
   if (!baseUrl) {
     throw new Error('URL is not from configured Cloudflare R2 storage');
   }

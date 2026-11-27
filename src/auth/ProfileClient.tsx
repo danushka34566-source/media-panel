@@ -30,6 +30,7 @@ import SriLankaMobileInput, {
 } from '@/components/SriLankaMobileInput';
 import type { AppUser } from './users';
 import { useAppState } from '@/app/AppState';
+import { toastSuccess } from '@/toast';
 import {
   confirmTotpSetupAction,
   disableTotpAction,
@@ -85,9 +86,11 @@ function SectionTitle({
 export default function ProfileClient({
   user,
   googleSignInEnabled = false,
+  googleLinkUnmatched = false,
 }: {
   user: AppUser
   googleSignInEnabled?: boolean
+  googleLinkUnmatched?: boolean
 }) {
   const { videoPreviewMode = 'smart', setVideoPreviewMode } = useAppState();
   const router = useRouter();
@@ -105,6 +108,10 @@ export default function ProfileClient({
   );
   const [mobileCode, setMobileCode] = useState('');
   const [isEditingMobile, setIsEditingMobile] = useState(false);
+  const [mobileRequestError, setMobileRequestError] = useState<string>();
+  const [mobileVerificationNumber, setMobileVerificationNumber] =
+    useState<string>();
+  const [mobileVerifyResponse, setMobileVerifyResponse] = useState<string>();
   const [totpCode, setTotpCode] = useState('');
   const [totpSetup, setTotpSetup] = useState<{
     secret: string
@@ -116,16 +123,64 @@ export default function ProfileClient({
   const [isPending, startTransition] = useTransition();
   const fileRef = useRef<HTMLInputElement>(null);
 
-  const [profileResponse, profileAction] =
-    useActionState(saveProfileAction, undefined);
-  const [mobileRequestResponse, mobileRequestAction] =
-    useActionState(requestMobileVerificationAction, undefined);
-  const [mobileVerifyResponse, mobileVerifyAction] =
-    useActionState(verifyMobileAction, undefined);
+  const [profileResponse, profileAction] = useActionState(
+    async (state: string | undefined, formData: FormData) => {
+      const response = await saveProfileAction(state, formData);
+      if (response === 'SAVED') {
+        setPassword('');
+        toastSuccess('Profile saved');
+      }
+      return response;
+    },
+    undefined,
+  );
   const [twoFactorResponse, twoFactorAction] =
     useActionState(setTwoFactorAction, undefined);
   const [unlinkResponse, unlinkAction] =
     useActionState(unlinkGoogleAccountAction, undefined);
+
+  const clearMobileVerification = () => {
+    setMobileCode('');
+    setMobileRequestError(undefined);
+    setMobileVerificationNumber(undefined);
+    setMobileVerifyResponse(undefined);
+  };
+
+  const [, mobileRequestAction, mobileRequestPending] = useActionState(
+    async (_state: undefined, formData: FormData) => {
+      setMobileRequestError(undefined);
+      const response = await requestMobileVerificationAction(undefined, formData);
+      if (response.startsWith('SENT:')) {
+        setMobileVerificationNumber(response.slice('SENT:'.length));
+        setMobileVerifyResponse(undefined);
+        setMobileCode('');
+      } else {
+        setMobileRequestError(response);
+      }
+      return undefined;
+    },
+    undefined,
+  );
+
+  const [, mobileVerifyAction, mobileVerifyPending] = useActionState(
+    async (_state: undefined, formData: FormData) => {
+      const response = await verifyMobileAction(undefined, formData);
+      if (response === 'SAVED') {
+        clearMobileVerification();
+        setIsEditingMobile(false);
+      } else {
+        setMobileVerifyResponse(response);
+      }
+      return undefined;
+    },
+    undefined,
+  );
+
+  const removeVerifiedMobileAction = async () => {
+    await removeMobileAction();
+    clearMobileVerification();
+    setMobileNumber('');
+  };
 
   const totpAction = async (formData: FormData) => {
     const response = await confirmTotpSetupAction(undefined, formData);
@@ -152,14 +207,12 @@ export default function ProfileClient({
   useEffect(() => {
     if (
       profileResponse === 'SAVED' ||
-      mobileVerifyResponse === 'SAVED' ||
       twoFactorResponse === 'SAVED' ||
       unlinkResponse === 'SAVED'
     ) {
       router.refresh();
     }
   }, [
-    mobileVerifyResponse,
     profileResponse,
     router,
     twoFactorResponse,
@@ -176,18 +229,9 @@ export default function ProfileClient({
 
   const showError = (response?: string) =>
     response && response !== 'SAVED' && !response.startsWith('SENT:');
-  const mobileVerificationNumber = mobileRequestResponse?.startsWith('SENT:')
-    ? mobileRequestResponse.slice('SENT:'.length)
-    : mobileNumber;
-  const isMobileVerified =
-    user.mobileVerified || mobileVerifyResponse === 'SAVED';
-  const verifiedMobileNumber = mobileVerifyResponse === 'SAVED'
-    ? mobileVerificationNumber
-    : user.mobileNumber;
-  const showMobileSetup =
-    !isMobileVerified ||
-    isEditingMobile ||
-    mobileNumber !== sriLankaMobileDigits(verifiedMobileNumber);
+  const isMobileVerified = user.mobileVerified;
+  const showMobileSetup = !isMobileVerified || isEditingMobile;
+  const mobilePending = mobileRequestPending || mobileVerifyPending;
   const showTotpSetup = !isTotpEnabled || Boolean(totpSetup);
 
   return (
@@ -255,7 +299,6 @@ export default function ProfileClient({
 
       <div className="grid items-start gap-4 lg:grid-cols-2">
         <div className="space-y-4">
-          {(user.googleLinked || googleSignInEnabled) &&
           <Container centered={false} className="items-stretch rounded-2xl bg-content shadow-sm">
             <SectionTitle
               icon={<FiPlay size={16} />}
@@ -279,7 +322,7 @@ export default function ProfileClient({
                   <span className="font-medium text-main">{label}</span>
                 </label>)}
             </div>
-          </Container>}
+          </Container>
           <Container centered={false} className="items-stretch rounded-2xl bg-content shadow-sm">
             <SectionTitle
               icon={<FiKey size={16} />}
@@ -310,6 +353,7 @@ export default function ProfileClient({
                 id="password"
                 label={user.hasPassword ? 'New password' : 'Create password'}
                 type="password"
+                autoComplete="new-password"
                 value={password}
                 onChange={setPassword}
                 note={user.hasPassword ? 'Leave blank to keep it' : 'Recommended'}
@@ -321,13 +365,13 @@ export default function ProfileClient({
               />
               <SubmitButtonWithStatus
                 className="justify-center sm:col-span-2"
-                onFormSubmitToastMessage="Profile saved"
               >
                 Save changes
               </SubmitButtonWithStatus>
             </form>
           </Container>
 
+          {(user.googleLinked || googleSignInEnabled) &&
           <Container centered={false} className="items-stretch rounded-2xl bg-content shadow-sm">
             <SectionTitle
               icon={<FiLink size={16} />}
@@ -362,6 +406,7 @@ export default function ProfileClient({
                       id="currentPassword"
                       label="Current password"
                       type="password"
+                      autoComplete="current-password"
                       value={currentPassword}
                       onChange={setCurrentPassword}
                     />
@@ -370,6 +415,7 @@ export default function ProfileClient({
                         id="newPassword"
                         label="Create password"
                         type="password"
+                        autoComplete="new-password"
                         value={newUnlinkPassword}
                         onChange={setNewUnlinkPassword}
                       />
@@ -377,6 +423,7 @@ export default function ProfileClient({
                         id="confirmPassword"
                         label="Confirm password"
                         type="password"
+                        autoComplete="new-password"
                         value={confirmUnlinkPassword}
                         onChange={setConfirmUnlinkPassword}
                       />
@@ -389,18 +436,27 @@ export default function ProfileClient({
                   </SubmitButtonWithStatus>
                 </form>
               </div>
-              : <div className="flex items-center justify-between gap-4 rounded-md border border-medium p-3">
-                <div>
-                  <div className="font-medium text-main">Google</div>
-                  <p className="text-sm text-dim">
-                    Add Google as another secure sign-in method.
-                  </p>
+              : <div className="space-y-3 rounded-md border border-medium p-3">
+                {googleLinkUnmatched && <ErrorNote>
+                  Choose a Google account with the same verified email as your profile.
+                </ErrorNote>}
+                <div className="flex items-center justify-between gap-4">
+                  <div>
+                    <div className="font-medium text-main">Google</div>
+                    <p className="text-sm text-dim">
+                      {user.emailVerified
+                        ? 'Link a Google account that uses your profile email.'
+                        : 'Verify your profile email before linking Google.'}
+                    </p>
+                  </div>
+                  <form action={linkGoogleAccountAction}>
+                    <SubmitButtonWithStatus disabled={!user.emailVerified}>
+                      Link Google
+                    </SubmitButtonWithStatus>
+                  </form>
                 </div>
-                <form action={linkGoogleAccountAction}>
-                  <SubmitButtonWithStatus>Link Google</SubmitButtonWithStatus>
-                </form>
               </div>}
-          </Container>
+          </Container>}
         </div>
 
         <div className="space-y-4">
@@ -441,17 +497,20 @@ export default function ProfileClient({
                 <div className="flex items-center justify-between rounded-md border border-medium p-3">
                   <div>
                     <div className="font-medium text-main">
-                      {verifiedMobileNumber}
+                      {user.mobileNumber}
                     </div>
                     <div className="text-sm text-dim">Verified mobile number</div>
                   </div>
                   <span className={statusClassName(true)}><FiCheck /> Verified</span>
                 </div>
                 <div className="flex flex-wrap gap-2">
-                  <LoaderButton onClick={() => setIsEditingMobile(true)}>
+                  <LoaderButton onClick={() => {
+                    setMobileNumber(sriLankaMobileDigits(user.mobileNumber));
+                    setIsEditingMobile(true);
+                  }}>
                     Change number
                   </LoaderButton>
-                  <form action={removeMobileAction}>
+                  <form action={removeVerifiedMobileAction}>
                     <SubmitButtonWithStatus
                       styleAs="link"
                       confirmText="Remove this verified mobile number?"
@@ -463,19 +522,36 @@ export default function ProfileClient({
               </div>
               : <div className="space-y-4">
                 <form action={mobileRequestAction} className="space-y-3">
-                  {showError(mobileRequestResponse) &&
-                    <ErrorNote>{mobileRequestResponse}</ErrorNote>}
+                  {mobileRequestError &&
+                    <ErrorNote>{mobileRequestError}</ErrorNote>}
                   <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
                     <SriLankaMobileInput
                       value={mobileNumber}
-                      onChange={setMobileNumber}
+                      onChange={value => {
+                        setMobileNumber(value);
+                        clearMobileVerification();
+                      }}
                       className="flex-1"
+                      readOnly={mobilePending}
+                      required
                     />
-                    <SubmitButtonWithStatus>Send code</SubmitButtonWithStatus>
+                    <SubmitButtonWithStatus disabled={mobilePending || mobileNumber.length !== 9}>
+                      {mobileVerificationNumber ? 'Resend code' : 'Send code'}
+                    </SubmitButtonWithStatus>
+                    {isMobileVerified &&
+                      <LoaderButton disabled={mobilePending} onClick={() => {
+                        clearMobileVerification();
+                        setIsEditingMobile(false);
+                      }}>
+                        Cancel
+                      </LoaderButton>}
                   </div>
                 </form>
-                {(mobileRequestResponse?.startsWith('SENT:') || mobileCode) &&
+                {mobileVerificationNumber &&
                   <form action={mobileVerifyAction} className="space-y-3">
+                    <p role="status" className="text-sm text-dim">
+                      Code sent to {mobileVerificationNumber}.
+                    </p>
                     {showError(mobileVerifyResponse) &&
                       <ErrorNote>{mobileVerifyResponse}</ErrorNote>}
                     <input
@@ -485,15 +561,19 @@ export default function ProfileClient({
                     />
                     <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
                       <FieldsetWithStatus
-                        id="code"
+                        id="mobileCode"
+                        name="code"
                         label="6-digit code"
+                        inputMode="numeric"
+                        autoComplete="one-time-code"
+                        readOnly={mobilePending}
                         value={mobileCode}
                         onChange={value => setMobileCode(
                           value.replace(/\D/g, '').slice(0, 6),
                         )}
                         className="flex-1"
                       />
-                      <SubmitButtonWithStatus disabled={mobileCode.length < 6}>
+                      <SubmitButtonWithStatus disabled={mobilePending || mobileCode.length < 6}>
                         Verify
                       </SubmitButtonWithStatus>
                     </div>

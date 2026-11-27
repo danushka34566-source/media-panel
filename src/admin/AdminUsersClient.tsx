@@ -2,8 +2,12 @@
 
 import {
   Fragment,
+  type FormEvent,
   useCallback,
   useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
   useTransition,
 } from 'react';
 import { useRouter } from 'next/navigation';
@@ -23,7 +27,8 @@ import AppGrid from '@/components/AppGrid';
 import AdminTable from '@/admin/AdminTable';
 import Modal from '@/components/Modal';
 import UserAvatar from '@/components/UserAvatar';
-import SubmitButtonWithStatus from '@/components/SubmitButtonWithStatus';
+import LoaderButton from '@/components/primitives/LoaderButton';
+import ErrorNote from '@/components/ErrorNote';
 import { ADMIN_CREATE_USER_EVENT } from './users/events';
 import { toastSuccess, toastWarning } from '@/toast';
 import SriLankaMobileInput from '@/components/SriLankaMobileInput';
@@ -95,6 +100,8 @@ function UserStatusToggle({
   );
 }
 
+type UserEditorAction = 'save' | 'delete';
+
 function UserEditor({
   user,
   isCurrentUser,
@@ -107,16 +114,60 @@ function UserEditor({
   onClose: () => void
 }) {
   const router = useRouter();
-  const submit = useCallback(async (formData: FormData) => {
-    await saveUserAction(formData);
+  const editorInstance = useRef<symbol | undefined>(undefined);
+  const inFlight = useRef(false);
+  const [pendingAction, setPendingAction] = useState<UserEditorAction>();
+  const [failure, setFailure] = useState<{
+    action: UserEditorAction
+    message: string
+  }>();
+
+  useLayoutEffect(() => {
+    editorInstance.current = Symbol();
+    return () => { editorInstance.current = undefined; };
+  }, []);
+
+  const close = useCallback(() => {
+    editorInstance.current = undefined;
     onClose();
+  }, [onClose]);
+
+  const submit = async (
+    event: FormEvent<HTMLFormElement>,
+    action: UserEditorAction,
+  ) => {
+    event.preventDefault();
+    const submittedEditor = editorInstance.current;
+    if (!submittedEditor || inFlight.current) { return; }
+
+    // A fulfilled React form action resets uncontrolled fields, even when the
+    // action returns a validation error. Submit manually to retain the draft.
+    const formData = new FormData(event.currentTarget);
+    const submittedUrl = window.location.pathname + window.location.search;
+    inFlight.current = true;
+    setPendingAction(action);
+    setFailure(undefined);
+    let message: string | undefined;
+    try {
+      const mutation = action === 'save' ? saveUserAction : deleteUserAction;
+      message = (await mutation(formData))?.error;
+    } catch {
+      message = `Unable to ${action} the user. Try again.`;
+    } finally {
+      inFlight.current = false;
+      setPendingAction(undefined);
+    }
+    if (editorInstance.current !== submittedEditor ||
+        submittedUrl !== window.location.pathname + window.location.search) {
+      return;
+    }
+    if (message) {
+      setFailure({ action, message });
+      return;
+    }
+    close();
     router.refresh();
-  }, [onClose, router]);
-  const remove = useCallback(async (formData: FormData) => {
-    await deleteUserAction(formData);
-    onClose();
-    router.refresh();
-  }, [onClose, router]);
+  };
 
   const copyValue = useCallback(async (label: string, value: string) => {
     await navigator.clipboard.writeText(value);
@@ -125,7 +176,7 @@ function UserEditor({
 
   return (
     <Modal
-      onClose={onClose}
+      onClose={close}
       anchor="center"
       noPadding
       className={clsx(
@@ -162,7 +213,7 @@ function UserEditor({
           </div>
           <button
             type="button"
-            onClick={onClose}
+            onClick={close}
             className={clsx(
               'inline-flex size-8 min-h-0 items-center justify-center',
               'border-none p-0 shadow-none',
@@ -175,7 +226,11 @@ function UserEditor({
         </div>
 
         <div className="min-h-0 flex-1 overflow-y-auto">
-          <form action={submit} className="space-y-5 p-4 sm:p-5">
+          <form
+            method="post"
+            onSubmit={event => void submit(event, 'save')}
+            className="space-y-5 p-4 sm:p-5"
+          >
           {user && <input type="hidden" name="id" value={user.id} />}
 
           <section className="space-y-3">
@@ -335,13 +390,18 @@ function UserEditor({
               </div>
             </section>}
 
+          {failure?.action === 'save' &&
+            <ErrorNote>{failure.message}</ErrorNote>}
           <div className="flex items-center justify-end border-t border-medium pt-4">
-            <SubmitButtonWithStatus
+            <LoaderButton
+              type="submit"
+              isLoading={pendingAction === 'save'}
+              disabled={Boolean(pendingAction)}
               hideFocusOutline
               className="w-full justify-center shadow-none sm:w-auto"
             >
               {user ? 'Save changes' : 'Create user'}
-            </SubmitButtonWithStatus>
+            </LoaderButton>
           </div>
           </form>
 
@@ -357,10 +417,18 @@ function UserEditor({
                   : 'Deleting this user permanently removes their panel access.'}
               </p>
             </div>
-            <form action={remove} className="flex justify-end">
+            {failure?.action === 'delete' &&
+              <ErrorNote>{failure.message}</ErrorNote>}
+            <form
+              method="post"
+              onSubmit={event => void submit(event, 'delete')}
+              className="flex justify-end"
+            >
               <input type="hidden" name="id" value={user.id} />
-              <SubmitButtonWithStatus
-                disabled={isCurrentUser}
+              <LoaderButton
+                type="submit"
+                isLoading={pendingAction === 'delete'}
+                disabled={isCurrentUser || Boolean(pendingAction)}
                 confirmText={`Delete ${user.email}?`}
                 className={clsx(
                   'w-full justify-center border-red-300 text-red-600 sm:w-auto',
@@ -368,7 +436,7 @@ function UserEditor({
                 )}
               >
                 Delete user
-              </SubmitButtonWithStatus>
+              </LoaderButton>
             </form>
             </div>}
         </div>

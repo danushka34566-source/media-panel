@@ -9,7 +9,10 @@ import { PATH_ROOT, absolutePathForMedia, absolutePathForMediaImage } from '@/ap
 import MediaDetailPage from '@/media/MediaDetailPage';
 import { getMediaMetaCached } from '@/media/cache';
 import { MediaStringEntityHeader } from '@/media/MediaStringEntity';
-import { getStringEntityMediaNearIdCached } from '@/media/stringEntityPage';
+import {
+  getStringEntityMediaNearIdCached,
+  getStringEntityPath,
+} from '@/media/stringEntityPage';
 
 interface MediaCategoryProps {
   params: Promise<{ photoId: string, category: string }>
@@ -61,7 +64,7 @@ export default async function MediaCategoryPage({ params }: MediaCategoryProps) 
         <MediaStringEntityHeader
           kind="category"
           value={category}
-          path={`/category/${category}`}
+          path={getStringEntityPath('category', category)}
           photos={photos}
           selectedMedia={photo}
           indexNumber={indexNumber}

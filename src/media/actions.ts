@@ -16,6 +16,7 @@ import {
   updateMediaLibraryValueGlobally,
   type MediaLibraryValueType,
   getMedia,
+  getMediaPage,
   addTagsToMedia,
   getUniqueTags,
   deleteMediaRecipeGlobally,
@@ -33,12 +34,14 @@ import {
   getUniqueVideoContentTypes,
 } from '@/media/query';
 import { MediaQueryOptions, areOptionsSensitive } from '@/db';
+import { getEffectiveMediaSortOptions } from '@/media/sort/preference';
 import {
   MediaFormData,
 } from './form';
 import { redirect } from 'next/navigation';
 import {
   getMediaCached,
+  getMediaPageCached,
   revalidateAdminPaths,
   revalidateAllKeysAndPaths,
   revalidateCategoriesKey,
@@ -2587,6 +2590,16 @@ export const getMediaCachedAction = async (
   }
 };
 
+export const getMediaPageAction = async (
+  options: Parameters<typeof getMediaPage>[0],
+  useCachedMedia: boolean,
+) => {
+  const loadPage = () => (useCachedMedia ? getMediaPageCached : getMediaPage)(options);
+  return areOptionsSensitive(options)
+    ? runAuthenticatedAdminServerAction(loadPage)
+    : loadPage();
+};
+
 // Public actions
 
 export const searchMediaAction = async (
@@ -2594,13 +2607,12 @@ export const searchMediaAction = async (
   offset = 0,
   limit = 48,
 ) => {
-  const photos = await getMedia({ query, offset, limit: limit + 1 })
-    .catch(e => {
-      console.error('Could not query media', e);
-      return [] as Media[];
-    });
-  return {
-    photos: photos.slice(0, limit),
-    hasMore: photos.length > limit,
-  };
+  const sortOptions = await getEffectiveMediaSortOptions();
+  return getMediaPage({
+    ...sortOptions,
+    query,
+    offset,
+    limit,
+    excludeFromFeeds: true,
+  });
 };

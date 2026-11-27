@@ -30,7 +30,7 @@ export default async function UploadPage({ params, searchParams }: Params) {
   const title = (await searchParams)[PARAM_UPLOAD_TITLE];
   const originalFileNameParam = (await searchParams)[PARAM_UPLOAD_ORIGINAL_NAME];
   const originalFileName = typeof originalFileNameParam === 'string'
-    ? decodeURIComponent(originalFileNameParam)
+    ? originalFileNameParam
     : undefined;
 
   const [

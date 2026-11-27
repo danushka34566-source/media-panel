@@ -58,4 +58,11 @@ describe('private-site public routes', () => {
     expect(isPathAllowedWithoutSessionInPrivateMode('/sign-up-fake', true))
       .toBe(false);
   });
+
+  it('exempts only the exact login verification page in private mode', () => {
+    expect(isPathAllowedWithoutSessionInPrivateMode('/verify-login', false))
+      .toBe(true);
+    expect(isPathAllowedWithoutSessionInPrivateMode('/verify-login/other', false))
+      .toBe(false);
+  });
 });

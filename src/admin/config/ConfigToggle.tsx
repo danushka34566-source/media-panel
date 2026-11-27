@@ -8,15 +8,20 @@ export default function ConfigToggle({
   description,
   checked,
   onChange,
+  disabled,
 }: {
   name: string
   label: string
   description: string
   checked: boolean
   onChange: (checked: boolean) => void
+  disabled?: boolean
 }) {
   return (
-    <label className="grid min-h-14 cursor-pointer grid-cols-[minmax(0,1fr)_auto] items-center gap-x-4 py-3">
+    <label className={clsx(
+      'grid min-h-14 grid-cols-[minmax(0,1fr)_auto] items-center gap-x-4 py-3',
+      disabled ? 'opacity-60' : 'cursor-pointer',
+    )}>
       <span className="min-w-0 pr-2">
         <span className="block font-medium leading-5 text-main">{label}</span>
         <span className="mt-0.5 block text-sm leading-5 text-dim">
@@ -37,6 +42,7 @@ export default function ConfigToggle({
             role="switch"
             aria-label={label}
             checked={checked}
+            disabled={disabled}
             onChange={event => onChange(event.target.checked)}
             className="peer absolute size-px opacity-0"
           />

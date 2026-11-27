@@ -1,5 +1,4 @@
 import { INFINITE_SCROLL_GRID_INITIAL } from '@/media';
-import { getMedia } from '@/media/query';
 import { PATH_ROOT } from '@/app/path';
 import type { Metadata } from 'next';
 import { redirect } from 'next/navigation';
@@ -15,6 +14,7 @@ import {
 import { Album, generateMetaForAlbum } from '@/album';
 import { getMediaAlbumDataCached } from '@/album/data';
 
+const getAlbumFromSlugForPage = cache(getAlbumFromSlug);
 const getMediaAlbumDataCachedCached = cache((album: Album) =>
   getMediaAlbumDataCached({ album, limit: INFINITE_SCROLL_GRID_INITIAL}));
 
@@ -37,7 +37,7 @@ export async function generateMetadata({
 
   const albumSlug = decodeURIComponent(albumFromParams);
 
-  const album = await getAlbumFromSlug(albumSlug);
+  const album = await getAlbumFromSlugForPage(albumSlug);
 
   if (!album) { return {}; }
 
@@ -81,20 +81,23 @@ export default async function AlbumPage({
 
   const albumSlug = decodeURIComponent(albumFromParams);
 
-  const album = await getAlbumFromSlug(albumSlug);
+  const album = await getAlbumFromSlugForPage(albumSlug);
 
   if (!album) { redirect(PATH_ROOT); }
 
-  const photos = await getMedia({ album });
+  const [[photos, { count, dateRange }], tags] = await Promise.all([
 
-  const tags = await getTagsForAlbum(album.id);
+    getMediaAlbumDataCachedCached(album),
+    getTagsForAlbum(album.id),
+  ]);
 
   return (
     <AlbumOverview {...{
       album,
       photos,
       tags,
-      count: photos.length,
+      count,
+      dateRange,
     }} />
   );
 }

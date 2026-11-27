@@ -32,7 +32,9 @@ export default function useStickyNav(
       isNavSticky && 'sticky top-0 z-40 pointer-events-none',
     ),
     classNameStickyNav: clsx(
-      shouldHideStickyNav ? 'translate-y-[-100%]' : 'translate-y-0',
+      shouldHideStickyNav
+        ? 'translate-y-[-100%] focus-within:translate-y-0'
+        : 'translate-y-0',
       shouldAnimateStickyNav && 'transition-transform duration-200',
     ),
   }), [isNavSticky, shouldAnimateStickyNav, shouldHideStickyNav]);

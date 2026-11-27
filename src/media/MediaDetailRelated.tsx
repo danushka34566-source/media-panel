@@ -15,11 +15,13 @@ export default function MediaDetailRelated({
   photos,
   selectedMedia,
   sortBy,
+  query,
   ...categories
 }: {
   photos: Media[]
   selectedMedia?: Media
   sortBy?: SortBy
+  query?: string
 } & MediaSetCategory) {
   const waitsForMainPreview = Boolean(
     selectedMedia &&
@@ -41,6 +43,7 @@ export default function MediaDetailRelated({
     photos={photos}
     selectedMedia={selectedMedia}
     sortBy={sortBy}
+    query={query}
     {...categories}
     // The hero is the only priority image. Related posters stay mounted but
     // use normal native loading order; no small card competes with the main

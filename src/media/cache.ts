@@ -6,6 +6,7 @@ import {
 } from 'next/cache';
 import {
   getMedia,
+  getMediaPage,
   getUniqueCategories,
   getUniqueCameras,
   getUniquePerformers,
@@ -264,6 +265,16 @@ export function getMediaCached(
   )().then(parseCachedMediaItemsDates);
 }
 
+export const getMediaPageCached = (options: Parameters<typeof getMediaPage>[0]) =>
+  unstable_cache(
+    () => getMediaPage(options),
+    [KEY_MEDIA, 'page', ...getMediaCacheKeys(options)],
+    getCacheOptions(getMediaCacheTags(options)),
+  )().then(({ photos, hasMore }) => ({
+    photos: parseCachedMediaItemsDates(photos),
+    hasMore,
+  }));
+
 export const getMediaNearIdCached = (
   ...args: Parameters<typeof getMediaNearId>
 ) => {
@@ -298,19 +309,14 @@ export const getMediaNearIdCached = (
       const resolved = await resolveDetailPrimary(
         photoId,
         photos,
-        () => getMedia(photoId, options.hidden === 'only' ||
-          options.hidden === 'include'),
+        includeHidden => getMedia(photoId, includeHidden),
+        {
+          hidden: options.hidden,
+          // Processing can finish after the nearby set was cached.
+          shouldRefresh: photo => Boolean(getDisplayTranscodeStatus(photo)),
+        },
       );
-      const cachedPhoto = resolved.photo;
-      // Processing can finish after this nearby set was cached. Verify only
-      // non-ready video rows against the database before displaying status.
-      const freshPhoto = cachedPhoto && getDisplayTranscodeStatus(cachedPhoto)
-        ? await getMedia(photoId, true).catch(() => undefined)
-        : undefined;
-      const currentPhotos = freshPhoto
-        ? resolved.photos.map(photo => photo.id === photoId ? freshPhoto : photo)
-        : resolved.photos;
-      const photo = currentPhotos.find(({ id }) => id === photoId);
+      const { photo, photos: currentPhotos } = resolved;
       return {
         photo: photo ? parseCachedMediaDates(photo) : undefined,
         photos: parseCachedMediaItemsDates(currentPhotos),

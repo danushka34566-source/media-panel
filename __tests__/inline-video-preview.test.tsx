@@ -116,7 +116,7 @@ describe('inline video preview', () => {
     playSpy.mockRestore();
   });
 
-  it('recovers a stalled inactive decoder instead of blocking its slot', () => {
+  it('allows a slow transfer to continue while startup makes progress', () => {
     jest.useFakeTimers();
     const loadSpy = jest.spyOn(
       HTMLMediaElement.prototype,
@@ -129,9 +129,34 @@ describe('inline video preview', () => {
     />);
     const video = container.querySelector('video')!;
 
+    loadSpy.mockClear();
+    act(() => { jest.advanceTimersByTime(5000); });
+    fireEvent.progress(video);
     fireEvent.stalled(video);
+    act(() => { jest.advanceTimersByTime(6000); });
+    expect(loadSpy).not.toHaveBeenCalled();
     act(() => { jest.advanceTimersByTime(180); });
     expect(loadSpy).toHaveBeenCalled();
+
+    loadSpy.mockRestore();
+    jest.useRealTimers();
+  });
+
+  it('does not reload a preview that decodes before a scheduled retry', () => {
+    jest.useFakeTimers();
+    const loadSpy = jest.spyOn(HTMLMediaElement.prototype, 'load');
+    const { container } = render(<InlineVideoPreview
+      src="preview.mp4"
+      active={false}
+      onError={jest.fn()}
+    />);
+    const video = container.querySelector('video')!;
+
+    loadSpy.mockClear();
+    fireEvent.error(video);
+    fireEvent.loadedData(video);
+    act(() => { jest.advanceTimersByTime(180); });
+    expect(loadSpy).not.toHaveBeenCalled();
 
     loadSpy.mockRestore();
     jest.useRealTimers();

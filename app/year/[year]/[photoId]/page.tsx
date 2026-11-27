@@ -5,6 +5,7 @@ import {
 } from '@/media';
 import { Metadata } from 'next/types';
 import { redirect } from 'next/navigation';
+import { isValidMediaYear } from '@/year';
 import {
   PATH_ROOT,
   absolutePathForMedia,
@@ -31,6 +32,7 @@ export async function generateMetadata({
   params,
 }: MediaYearProps): Promise<Metadata> {
   const { photoId, year } = await params;
+  if (!isValidMediaYear(year)) { return {}; }
 
   const { photo } = await getMediaNearIdCachedCached(photoId, year);
 
@@ -64,6 +66,7 @@ export default async function MediaYearPage({
   params,
 }: MediaYearProps) {
   const { photoId, year } = await params;
+  if (!isValidMediaYear(year)) { redirect(PATH_ROOT); }
 
   const { photo, photos, photosGrid, indexNumber } =
     await getMediaNearIdCachedCached(photoId, year);

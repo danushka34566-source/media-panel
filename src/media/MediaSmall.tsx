@@ -16,7 +16,7 @@ import { IMAGE_WIDTH_SMALL } from '@/components/image';
 import Link from 'next/link';
 import { clsx } from 'clsx/lite';
 import { pathForMedia } from '@/app/path';
-import { useRef, useState } from 'react';
+import { useRef, useState, type MouseEventHandler } from 'react';
 import useVisibility from '@/utility/useVisibility';
 import { LuPlay } from 'react-icons/lu';
 import useVideoPreviewLifecycle from './video-preview-lifecycle';
@@ -25,18 +25,22 @@ import useVideoPreviewRecovery from './useVideoPreviewRecovery';
 
 export default function MediaSmall({
   photo,
+  href,
   selected,
   className,
   prefetch = false,
+  onClick,
   onVisible,
   thumbnailAspectRatio,
   enableVideoPreview = true,
   ...categories
 }: {
   photo: Media
+  href?: string
   selected?: boolean
   className?: string
   prefetch?: boolean
+  onClick?: MouseEventHandler<HTMLAnchorElement>
   onVisible?: () => void
   thumbnailAspectRatio?: number
   enableVideoPreview?: boolean
@@ -80,7 +84,8 @@ export default function MediaSmall({
   return (
     <Link
       ref={ref}
-      href={pathForMedia({ photo, ...categories })}
+      href={href ?? pathForMedia({ photo, ...categories })}
+      onClick={onClick}
       className={clsx(
         className,
         'active:brightness-75',
@@ -142,6 +147,7 @@ export default function MediaSmall({
                 videoRecovery.onLoadedData();
               }}
               onCanPlay={() => videoRecovery.onCanPlay()}
+              onProgress={videoRecovery.onProgress}
               onPlaying={() => videoRecovery.onPlaying()}
               onStalled={() => videoRecovery.onStalled()}
               onError={() => videoRecovery.onError()}

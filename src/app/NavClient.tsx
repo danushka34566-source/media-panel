@@ -12,6 +12,7 @@ import {
   PATH_ADMIN_MEDIA,
   PATH_ADMIN_CONFIGURATION,
   PATH_SIGN_IN,
+  getCanonicalAdminMediaPath,
   getEscapePath,
   PATH_FAVORITES,
   PATH_PROFILE,
@@ -75,7 +76,9 @@ export default function NavClient({
   const backFallback = getEscapePath(pathname) ?? (
     ['/sign-up', '/verify-email', '/password-reset'].includes(pathname) ? PATH_SIGN_IN :
       pathname.startsWith(PATH_ADMIN_CONFIGURATION + '/') ? PATH_ADMIN_CONFIGURATION :
-        isPathAdmin(pathname) && pathname !== PATH_ADMIN_MEDIA ? PATH_ADMIN_MEDIA : PATH_ROOT
+        isPathAdmin(pathname) &&
+        getCanonicalAdminMediaPath(pathname) !== PATH_ADMIN_MEDIA
+          ? PATH_ADMIN_MEDIA : PATH_ROOT
   );
 
   const {

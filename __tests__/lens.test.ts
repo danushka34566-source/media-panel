@@ -1,5 +1,14 @@
 /* eslint-disable max-len */
-import { formatLensText, Lens } from '@/lens';
+import { getEscapePath, pathForLens, pathForMedia } from '@/app/path';
+import {
+  formatLensText,
+  getLensFromParams,
+  getLensMediaFromParams,
+  Lens,
+  lensFromRouteSegments,
+} from '@/lens';
+
+jest.mock('../src/tag', () => ({ TAG_PRIVATE: 'private' }));
 
 const IPHONE_15_PRO_FRONT: Lens = { make: 'Apple', model: 'iPhone 15 Pro front TrueDepth camera 2.69mm f/1.9' };
 const IPHONE_15_PRO_BACK_WIDE: Lens = { make: 'Apple', model: 'iPhone 15 Pro back triple camera 6.765mm f/2.2' };
@@ -14,6 +23,25 @@ const PIXEL_8_PRO_BACK_NO_MAKE: Lens = { model: 'Pixel 8 Pro back camera 6.9mm f
 const PIXEL_6A_BACK: Lens = { make: 'Google', model: 'Pixel 6a back camera 2.35mm f/2.2' };
 
 describe('Lens', () => {
+  it('round-trips Unicode lens links through overview and detail params', async () => {
+    const lens = { make: '光学', model: '小型 35mm' };
+    const parent = pathForLens(lens);
+    const detail = pathForMedia({ photo: 'UsKSGcbt', lens });
+    const [, , make, model, photoId] = detail.split('/');
+
+    expect(parent).toBe(`/lens/${encodeURIComponent('光学')}/${encodeURIComponent('小型-35mm')}`);
+    expect(getEscapePath(detail)).toBe(parent);
+    await expect(getLensFromParams(Promise.resolve({ make, model })))
+      .resolves.toEqual({ make: '光学', model: '小型-35mm' });
+    await expect(getLensMediaFromParams(Promise.resolve({ make, model, photoId })))
+      .resolves.toEqual({ make: '光学', model: '小型-35mm', photoId: 'UsKSGcbt' });
+  });
+
+  it('uses decoded image-route parameters without applying page decoding twice', () => {
+    expect(lensFromRouteSegments({ make: '-', model: '小型%35mm' }))
+      .toEqual({ model: '小型%35mm' });
+  });
+
   describe('correctly formats', () => {
     it('iPhone lenses', () => {
       expect(formatLensText(IPHONE_15_PRO_FRONT)).toBe('15 Pro front');

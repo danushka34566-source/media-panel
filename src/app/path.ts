@@ -79,6 +79,7 @@ const PATH_RECENTS_DYNAMIC              = `${PREFIX_RECENTS}/[photoId]`;
 // Renamed route: use /admin/media instead of /admin/photos
 export const PATH_ADMIN_MEDIA          = `${PATH_ADMIN}/media`;
 export const PATH_ADMIN_MEDIA_UPDATES  = `${PATH_ADMIN_MEDIA}/updates`;
+const PATH_ADMIN_MEDIA_LEGACY          = `${PATH_ADMIN}/photos`;
 export const PATH_ADMIN_PHOTOS          = PATH_ADMIN_MEDIA;
 export const PATH_ADMIN_PHOTOS_UPDATES  = PATH_ADMIN_MEDIA_UPDATES;
 export const PATH_ADMIN_UPLOADS         = `${PATH_ADMIN}/uploads`;
@@ -162,6 +163,7 @@ export const PATHS_TO_CACHE = [
 type MediaPathParams  = { photo: MediaOrMediaId } & MediaSetCategory & {
   showRecipe?: boolean
   sortBy?: import('@/media/sort').SortBy
+  query?: string
 };
 
 const getMediaId = (photoOrMediaId: MediaOrMediaId) =>
@@ -235,6 +237,7 @@ export const pathForMedia = ({
   focal,
   recipe,
   sortBy,
+  query,
 }: MediaPathParams) => {
   // Default to root (no trailing slash) to avoid generating //{id}
   let prefix = '';
@@ -270,7 +273,11 @@ export const pathForMedia = ({
   }
 
   const path = `${prefix}/${getMediaId(photo)}`;
-  return sortBy ? `${path}?sort=${encodeURIComponent(sortBy)}` : path;
+  const params = new URLSearchParams();
+  if (sortBy) { params.set('sort', sortBy); }
+  if (query && !prefix) { params.set('query', query); }
+  const search = params.toString();
+  return search ? `${path}?${search}` : path;
 };
 
 export const pathForYear = (year: string) =>
@@ -279,10 +286,13 @@ export const pathForYear = (year: string) =>
 export const pathForCamera = ({ make, model }: Camera) =>
   `${PREFIX_CAMERA}/${parameterize(make)}/${parameterize(model)}`;
 
-export const pathForLens = ({ make, model }: Lens) =>
-  make
-    ? `${PREFIX_LENS}/${parameterize(make)}/${parameterize(model)}`
-    : `${PREFIX_LENS}/${MISSING_FIELD}/${parameterize(model)}`;
+export const pathForLens = ({ make, model }: Lens) => {
+  const makeSegment = make
+    ? encodeURIComponent(parameterize(make))
+    : MISSING_FIELD;
+  const modelSegment = encodeURIComponent(parameterize(model));
+  return `${PREFIX_LENS}/${makeSegment}/${modelSegment}`;
+};
 
 export const pathForAlbum = (album: AlbumOrAlbumSlug) =>
   `${PREFIX_ALBUM}/${getAlbumSlug(album)}`;
@@ -291,22 +301,25 @@ export const pathForTag = (tag: string) =>
   `${PREFIX_TAG}/${tag}`;
 
 export const pathForCategory = (category: string) =>
-  `${PREFIX_CATEGORY}/${category}`;
+  `${PREFIX_CATEGORY}/${encodeURIComponent(category)}`;
 
 export const pathForStudio = (studio: string) =>
-  `${PREFIX_STUDIO}/${studio}`;
+  `${PREFIX_STUDIO}/${encodeURIComponent(studio)}`;
 
 export const pathForPerformer = (performer: string) =>
-  `${PREFIX_PERFORMER}/${performer}`;
+  `${PREFIX_PERFORMER}/${encodeURIComponent(performer)}`;
 
 export const pathForContentType = (contentType: string) =>
-  `${PREFIX_CONTENT_TYPE}/${contentType}`;
+  `${PREFIX_CONTENT_TYPE}/${encodeURIComponent(contentType)}`;
 
 export const pathForSearch = (query: string) => {
   const params = new URLSearchParams();
   params.set('query', query);
   return `${PATH_SEARCH}?${params.toString()}`;
 };
+
+export const getMediaSearchQuery = (value: string | string[] | undefined) =>
+  (Array.isArray(value) ? value[0] : value)?.trim() || undefined;
 
 export const pathForRecipe = (recipe: string) =>
   `${PREFIX_RECIPE}/${recipe}`;
@@ -591,11 +604,16 @@ export const isPathSignIn = (pathname?: string) =>
 export const isPathAdmin = (pathname?: string) =>
   checkPathPrefix(pathname, PATH_ADMIN);
 
+export const getCanonicalAdminMediaPath = (pathname = '') =>
+  checkPathPrefix(pathname, PATH_ADMIN_MEDIA_LEGACY)
+    ? PATH_ADMIN_MEDIA + pathname.slice(PATH_ADMIN_MEDIA_LEGACY.length)
+    : pathname;
+
 export const isPathTopLevelAdmin = (pathname?: string) =>
-  PATHS_ADMIN.some(path => path === pathname);
+  PATHS_ADMIN.some(path => path === getCanonicalAdminMediaPath(pathname));
 
 export const isPathAdminMedia = (pathname?: string) =>
-  checkPathPrefix(pathname, PATH_ADMIN_MEDIA);
+  checkPathPrefix(getCanonicalAdminMediaPath(pathname), PATH_ADMIN_MEDIA);
 
 export const isPathAdminInsights = (pathname?: string) =>
   checkPathPrefix(pathname, PATH_ADMIN_INSIGHTS);

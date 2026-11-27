@@ -1,5 +1,6 @@
 import {
   downloadFileFromBrowser,
+  getLocalPagePath,
   makeUrlAbsolute,
   removeUrlProtocol,
   shortenUrl,
@@ -19,6 +20,29 @@ const URL_SHORT_3 = 'example.com/final-path';
 const URL_SHORT_4 = 'www.example.com';
 
 describe('URL', () => {
+  it.each([
+    'https://outside.invalid/path',
+    '//outside.invalid/path',
+    '/\\outside.invalid/path',
+    '/%5Coutside.invalid/path',
+    '/%2foutside.invalid/path',
+    '/%255Coutside.invalid/path',
+    '/%09%2foutside.invalid/path',
+    '/folder/..//outside.invalid/path',
+    ['/', '/profile'],
+  ].map(value => [value]))('rejects an invalid return destination %p', value => {
+    expect(getLocalPagePath(value)).toBeUndefined();
+  });
+
+  it.each([
+    '/',
+    '/admin/photos?page=4#library',
+    '/category/Summer%2FTrips%20%231/photo',
+    '/search?query=50%25%20off',
+  ])('preserves the local return destination %s', value => {
+    expect(getLocalPagePath(value)).toBe(value);
+  });
+
   it('downloads from the temporary direct storage URL', async () => {
     const directUrl = 'https://storage.example/signed-object';
     const fetchMock = jest.spyOn(global, 'fetch').mockResolvedValue({

@@ -36,6 +36,7 @@ import {
   pathForFocalLength,
   pathForLens,
   pathForMedia,
+  pathForSearch,
   pathForPerformer,
   pathForRecipe,
   pathForStudio,
@@ -55,7 +56,7 @@ import { useAppState } from '@/app/AppState';
 import { searchMediaAction } from '@/media/actions';
 import { RiToolsFill } from 'react-icons/ri';
 import { searchUsersCommandAction } from '@/auth/actions';
-import { getKeywordsForMedia, titleForMedia, type Media } from '@/media';
+import { titleForMedia, type Media } from '@/media';
 import MediaDate from '@/media/MediaDate';
 import MediaSmall from '@/media/MediaSmall';
 import {
@@ -109,6 +110,7 @@ import IconAlbum from '@/components/icons/IconAlbum';
 import { formatMediaStringEntity } from '@/media/MediaStringEntity';
 import UserAvatar from '@/components/UserAvatar';
 import IconGrid from '@/components/icons/IconGrid';
+import { stopCommandItemActivation } from './command-interaction';
 
 const DIALOG_TITLE = 'Global Command-K Menu';
 const DIALOG_DESCRIPTION = 'For searching photos, views, and settings';
@@ -117,6 +119,7 @@ const LISTENER_KEYDOWN = 'keydown';
 const MINIMUM_QUERY_LENGTH = 2;
 const SEARCH_DEBOUNCE_MS = 250;
 const SEARCH_MEDIA_PAGE_SIZE = 48;
+const MAX_AUTOMATIC_SEARCH_PAGES = 3;
 
 const MAX_HEIGHT = '20rem';
 
@@ -300,8 +303,14 @@ export default function CommandKClient({
   const [mediaSearchResults, setMediaSearchResults] = useState<Media[]>([]);
   const [hasMoreMediaSearchResults, setHasMoreMediaSearchResults] =
     useState(false);
+  const [searchError, setSearchError] = useState(false);
+  const [hasMoreSearchError, setHasMoreSearchError] = useState(false);
+  const [searchRetryCount, setSearchRetryCount] = useState(0);
+  const [actionError, setActionError] = useState(false);
   const searchRequestIdRef = useRef(0);
-  const isLoadingMoreMediaRef = useRef(false);
+  const isMediaSearchInFlightRef = useRef(false);
+  const automaticSearchPageCountRef = useRef(0);
+  const mediaSearchOffsetRef = useRef(0);
 
   const { setTheme } = useTheme();
 
@@ -326,11 +335,29 @@ export default function CommandKClient({
     return () => document.removeEventListener(LISTENER_KEYDOWN, down);
   }, [setIsOpen]);
 
-  // Search is an external server action; loading state intentionally begins
-  // when the debounced request is launched.
+  // Invalidate the prior response before the debounced search runs. Returning
+  // to the prior query within the debounce still starts a fresh request.
   /* eslint-disable react-hooks/set-state-in-effect */
   useEffect(() => {
-    if (queryDebounced.length >= MINIMUM_QUERY_LENGTH && !isPending) {
+    searchRequestIdRef.current += 1;
+    isMediaSearchInFlightRef.current = false;
+    mediaSearchOffsetRef.current = 0;
+    setQueriedSections([]);
+    setMediaSearchResults([]);
+    setHasMoreMediaSearchResults(false);
+    setSearchError(false);
+    setHasMoreSearchError(false);
+    setActionError(false);
+    setIsLoading(queryLive.length >= MINIMUM_QUERY_LENGTH);
+  }, [queryLive]);
+
+  useEffect(() => {
+    if (
+      isOpen &&
+      !isPending &&
+      queryLive === queryDebounced &&
+      queryDebounced.length >= MINIMUM_QUERY_LENGTH
+    ) {
       const requestId = ++searchRequestIdRef.current;
       setIsLoading(true);
       if (isUserSearch) {
@@ -341,10 +368,7 @@ export default function CommandKClient({
             if (
               requestId !== searchRequestIdRef.current ||
               !isOpenRef.current
-            ) {
-              setQueriedSections([]);
-              return;
-            }
+            ) { return; }
             const roleSections = [
               ['superadmin', 'Super admins'],
               ['admin', 'Admins'],
@@ -384,6 +408,7 @@ export default function CommandKClient({
             if (requestId !== searchRequestIdRef.current) { return; }
             console.error(error);
             setQueriedSections([]);
+            setSearchError(true);
           })
           .finally(() => {
             if (requestId === searchRequestIdRef.current) {
@@ -393,12 +418,15 @@ export default function CommandKClient({
         return;
       }
       setQueriedSections([]);
+      isMediaSearchInFlightRef.current = true;
+      automaticSearchPageCountRef.current = 0;
       searchMediaAction(queryDebounced, 0, SEARCH_MEDIA_PAGE_SIZE)
         .then(({ photos, hasMore }) => {
           if (
             requestId !== searchRequestIdRef.current ||
             !isOpenRef.current
           ) { return; }
+          mediaSearchOffsetRef.current = SEARCH_MEDIA_PAGE_SIZE;
           setMediaSearchResults(photos);
           setHasMoreMediaSearchResults(hasMore);
         })
@@ -407,41 +435,23 @@ export default function CommandKClient({
           console.error(e);
           setMediaSearchResults([]);
           setHasMoreMediaSearchResults(false);
+          setSearchError(true);
         })
         .finally(() => {
           if (requestId === searchRequestIdRef.current) {
+            isMediaSearchInFlightRef.current = false;
             setIsLoading(false);
           }
         });
     }
-  }, [queryDebounced, isPending, isUserSearch, appText]);
-  /* eslint-enable react-hooks/set-state-in-effect */
-
-  // Reset stale asynchronous results as soon as the live query changes.
-  /* eslint-disable react-hooks/set-state-in-effect */
-  useEffect(() => {
-    // Invalidate an older server response immediately when the user types;
-    // waiting for the debounce allowed slow results for a previous query to
-    // overwrite a newer one and made matching rows appear inconsistent.
-    searchRequestIdRef.current += 1;
-    isLoadingMoreMediaRef.current = false;
-    if (queryLive === '') {
-      setQueriedSections([]);
-      setMediaSearchResults([]);
-      setHasMoreMediaSearchResults(false);
-      setIsLoading(false);
-    } else if (queryLive.length >= MINIMUM_QUERY_LENGTH) {
-      setQueriedSections([]);
-      setMediaSearchResults([]);
-      setHasMoreMediaSearchResults(false);
-      setIsLoading(true);
-    } else {
-      setQueriedSections([]);
-      setMediaSearchResults([]);
-      setHasMoreMediaSearchResults(false);
-      setIsLoading(false);
-    }
-  }, [queryLive]);
+  }, [
+    queryDebounced,
+    queryLive,
+    isOpen,
+    isPending,
+    isUserSearch,
+    searchRetryCount,
+  ]);
   /* eslint-enable react-hooks/set-state-in-effect */
 
   // Closing the command menu clears its transient search session.
@@ -449,74 +459,158 @@ export default function CommandKClient({
   useEffect(() => {
     if (!isOpen) {
       searchRequestIdRef.current += 1;
-      isLoadingMoreMediaRef.current = false;
+      isMediaSearchInFlightRef.current = false;
+      mediaSearchOffsetRef.current = 0;
       setQueryLiveRaw('');
       setQueriedSections([]);
       setMediaSearchResults([]);
       setHasMoreMediaSearchResults(false);
+      setSearchError(false);
+      setHasMoreSearchError(false);
+      setActionError(false);
       setIsLoading(false);
     }
   }, [isOpen]);
   /* eslint-enable react-hooks/set-state-in-effect */
 
-  const mediaQueriedSections = useMemo<CommandKSection[]>(() =>
-    mediaSearchResults.length > 0
-      ? [{
-        heading: 'Media',
-        accessory: <IconMedia size={14} />,
-        items: mediaSearchResults.map(photo => ({
-          label: titleForMedia(photo),
-          explicitKey: photo.id,
-          keywords: getKeywordsForMedia(photo),
-          annotation: <MediaDate {...{ photo, timezone: undefined }} />,
-          accessory: <MediaSmall photo={photo} />,
-          path: pathForMedia({ photo }),
-        })),
-      }]
-      : [],
-  [mediaSearchResults]);
-
-  const loadMoreMediaSearchResults = useCallback(() => {
+  const mediaQueriedSections = useMemo<CommandKSection[]>(() => {
     if (
+      queryLive !== queryDebounced ||
+      queryDebounced.length < MINIMUM_QUERY_LENGTH
+    ) { return []; }
+
+    return [{
+      heading: 'Media',
+      accessory: <IconMedia size={14} />,
+      items: [
+        ...mediaSearchResults.map(photo => {
+          const path = pathForMedia({ photo, query: queryDebounced });
+          return {
+            label: titleForMedia(photo),
+            explicitKey: photo.id,
+            // The server handles punctuation and metadata matching.
+            keywords: [queryDebounced],
+            annotation: <MediaDate photo={photo} timezone={undefined} />,
+            accessory: <MediaSmall
+              photo={photo}
+              href={path}
+              onClick={event => {
+                const isModifiedClick = event.button !== 0 || event.metaKey ||
+                  event.ctrlKey || event.shiftKey || event.altKey;
+                if (isModifiedClick) {
+                  event.stopPropagation();
+                } else {
+                  // Let the enclosing command handle ordinary navigation.
+                  event.preventDefault();
+                }
+              }}
+            />,
+            path,
+          };
+        }),
+        {
+          label: `See all results for “${queryDebounced}”`,
+          explicitKey: 'all-media-search-results',
+          keywords: [queryDebounced, 'search all results'],
+          path: pathForSearch(queryDebounced),
+        },
+      ],
+    }];
+  }, [mediaSearchResults, queryDebounced, queryLive]);
+
+  const loadMoreMediaSearchResults = useCallback((
+    source: 'user' | 'automatic' | 'retry' = 'user',
+  ) => {
+    const automatically = source === 'automatic';
+    if (
+      !isOpen ||
+      isPending ||
       isUserSearch ||
       queryLive !== queryDebounced ||
       !hasMoreMediaSearchResults ||
-      isLoadingMoreMediaRef.current
+      (hasMoreSearchError && source !== 'retry') ||
+      isMediaSearchInFlightRef.current ||
+      (automatically &&
+        automaticSearchPageCountRef.current >= MAX_AUTOMATIC_SEARCH_PAGES)
     ) { return; }
     const requestId = searchRequestIdRef.current;
-    isLoadingMoreMediaRef.current = true;
+    isMediaSearchInFlightRef.current = true;
+    if (automatically) { automaticSearchPageCountRef.current += 1; }
+    setSearchError(false);
+    setHasMoreSearchError(false);
     setIsLoading(true);
+    const offset = mediaSearchOffsetRef.current;
     searchMediaAction(
       queryDebounced,
-      mediaSearchResults.length,
+      offset,
       SEARCH_MEDIA_PAGE_SIZE,
     ).then(({ photos, hasMore }) => {
       if (
         requestId !== searchRequestIdRef.current ||
         !isOpenRef.current
       ) { return; }
+      mediaSearchOffsetRef.current = offset + SEARCH_MEDIA_PAGE_SIZE;
       setMediaSearchResults(current => {
-        const seenIds = new Set(current.map(photo => photo.id));
-        return current.concat(photos.filter(photo => !seenIds.has(photo.id)));
+        const seenStorageUrls = new Set(current.map(photo =>
+          photo.url.toLowerCase(),
+        ));
+        return current.concat(photos.filter(photo => {
+          const storageUrl = photo.url.toLowerCase();
+          if (seenStorageUrls.has(storageUrl)) { return false; }
+          seenStorageUrls.add(storageUrl);
+          return true;
+        }));
       });
       setHasMoreMediaSearchResults(hasMore);
     }).catch(error => {
       if (requestId === searchRequestIdRef.current) {
         console.error(error);
+        setSearchError(true);
+        setHasMoreSearchError(true);
       }
     }).finally(() => {
       if (requestId === searchRequestIdRef.current) {
-        isLoadingMoreMediaRef.current = false;
+        isMediaSearchInFlightRef.current = false;
         setIsLoading(false);
       }
     });
   }, [
     hasMoreMediaSearchResults,
+    hasMoreSearchError,
+    isOpen,
+    isPending,
     isUserSearch,
-    mediaSearchResults.length,
     queryDebounced,
     queryLive,
   ]);
+
+  useEffect(() => {
+    if (!hasMoreMediaSearchResults || isLoading || hasMoreSearchError) { return; }
+    const frame = window.requestAnimationFrame(() => {
+      const list = refScroll.current;
+      // Short or filtered pages can leave the list at its scroll limit.
+      if (list && list.clientHeight > 0 &&
+        list.scrollHeight - list.scrollTop <= list.clientHeight + 1) {
+        loadMoreMediaSearchResults('automatic');
+      }
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [
+    hasMoreMediaSearchResults,
+    hasMoreSearchError,
+    isLoading,
+    loadMoreMediaSearchResults,
+    mediaSearchResults,
+  ]);
+
+  const retrySearch = useCallback(() => {
+    setSearchError(false);
+    if (hasMoreSearchError && !isUserSearch) {
+      loadMoreMediaSearchResults('retry');
+    } else {
+      setSearchRetryCount(count => count + 1);
+    }
+  }, [hasMoreSearchError, isUserSearch, loadMoreMediaSearchResults]);
 
   const recent = recents[0];
   const recentsStatus = useMemo(() => {
@@ -1169,8 +1263,27 @@ export default function CommandKClient({
             <Command.Empty className="mt-1 px-2 text-dim text-[0.9rem] pb-0.5">
               {isLoading
                 ? appText.cmdk.searching
-                : appText.cmdk.noResults}
+                : searchError
+                  ? 'Unable to load search results.'
+                  : appText.cmdk.noResults}
             </Command.Empty>
+            {(searchError || actionError) && <div
+              role="alert"
+              className="flex flex-wrap items-center justify-between gap-2 px-2 text-sm text-error"
+            >
+              <span>{actionError
+                ? 'Unable to complete that command.'
+                : 'Unable to load search results.'}</span>
+              {searchError && <button
+                type="button"
+                className="underline underline-offset-3"
+                disabled={isLoading}
+                onClick={retrySearch}
+                onKeyDown={stopCommandItemActivation}
+              >
+                Try again
+              </button>}
+            </div>}
             {(quickAccessSection.items.length > 0
               ? [quickAccessSection]
               : [])
@@ -1219,19 +1332,31 @@ export default function CommandKClient({
                       keywords={keywords}
                       onSelect={() => {
                         if (action) {
-                          const result = action();
+                          setActionError(false);
+                          shouldCloseAfterWaiting.current = false;
+                          let result: void | boolean | Promise<void | boolean>;
+                          try {
+                            result = action();
+                          } catch (error) {
+                            console.error(error);
+                            setActionError(true);
+                            return;
+                          }
                           if (result instanceof Promise) {
                             setKeyWaiting(key);
                             setIsWaitingForAction(true);
                             result.then(shouldClose => {
                               shouldCloseAfterWaiting.current =
                                 shouldClose === true;
+                            }).catch(error => {
+                              console.error(error);
+                              shouldCloseAfterWaiting.current = false;
+                              setActionError(true);
+                            }).finally(() => {
                               setIsWaitingForAction(false);
                             });
-                           } else {
-                             if (result !== false && !path) {
-                               setIsOpen?.(false);
-                             }
+                          } else if (result !== false && !path) {
+                            setIsOpen?.(false);
                           }
                         }
                         if (path) {
@@ -1260,6 +1385,15 @@ export default function CommandKClient({
                 {footer}
               </div>}
           </div>
+          {hasMoreMediaSearchResults && !hasMoreSearchError && <button
+            type="button"
+            className="mb-3 ml-5 text-sm hover:underline disabled:opacity-50"
+            disabled={isLoading || isPending}
+            onClick={() => loadMoreMediaSearchResults()}
+            onKeyDown={stopCommandItemActivation}
+          >
+            {appText.utility.loadMore}
+          </button>}
         </Command.List>
       </Modal>
     </Command.Dialog>

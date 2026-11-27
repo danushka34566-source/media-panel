@@ -26,6 +26,7 @@ export default function MediaLink({
   loaderType = 'spinner',
   onNavigateStart,
   sortBy,
+  query,
   ...categories
 }: {
   ref?: RefObject<HTMLAnchorElement | null>
@@ -39,6 +40,7 @@ export default function MediaLink({
   loaderType?: 'spinner' | 'badge'
   onNavigateStart?: () => void
   sortBy?: SortBy
+  query?: string
 } & MediaSetCategory) {
   const { setNextMediaAnimation } = useAppState();
   const router = useRouter();
@@ -49,7 +51,7 @@ export default function MediaLink({
     Omit<ComponentProps<typeof LinkWithStatus>, 'children'> |
     undefined = photo
       ? (() => {
-        const href = pathForMedia({ photo, sortBy, ...categories });
+        const href = pathForMedia({ photo, sortBy, query, ...categories });
         return {
           ref: anchorRef,
           className,

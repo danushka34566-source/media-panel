@@ -23,7 +23,10 @@ export default function AuthCodeField({
   return (
     <div className="w-full space-y-2 text-center">
       <label htmlFor={id} className="block text-center">{label}</label>
-      {description && <p className="text-center text-sm text-medium">{description}</p>}
+      {description &&
+        <p id={`${id}-description`} className="text-center text-sm text-medium">
+          {description}
+        </p>}
       <div className="group relative mx-auto flex w-fit max-w-full items-center gap-2">
         {[0, 1].map(group => <div key={group} className="auth-code-group flex">
           {[0, 1, 2].map(slot => {
@@ -43,14 +46,13 @@ export default function AuthCodeField({
           id={id}
           name={id}
           type="text"
-          aria-label={label}
+          aria-describedby={description ? `${id}-description` : undefined}
           value={value}
           onChange={event => onChange(
             event.target.value.replace(/\D/g, '').slice(0, 6),
           )}
           inputMode="numeric"
           autoComplete="one-time-code"
-          maxLength={6}
           readOnly={pending}
           className="absolute inset-0 z-10 h-full w-full cursor-text opacity-0"
         />

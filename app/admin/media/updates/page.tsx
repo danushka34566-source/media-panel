@@ -5,8 +5,7 @@ import { getMediaInNeedOfUpdate } from '@/media/query';
 export const maxDuration = 60;
 
 export default async function AdminUpdatesPage() {
-  const photos = await getMediaInNeedOfUpdate()
-    .catch(() => []);
+  const photos = await getMediaInNeedOfUpdate();
 
   return (
     <AdminMediaUpdateClient {...{

@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, type ReactNode } from 'react';
+import { useFormStatus } from 'react-dom';
 import type { TwoFactorMethod } from '.';
 
 export default function AuthVerificationMethodPicker({
@@ -17,6 +18,7 @@ export default function AuthVerificationMethodPicker({
   children: ReactNode
 }) {
   const [showMethods, setShowMethods] = useState(false);
+  const { pending } = useFormStatus();
 
   return <>
     <input type="hidden" name={name} value={method} />
@@ -27,9 +29,10 @@ export default function AuthVerificationMethodPicker({
           {availableMethods.map(option => <button
             key={option}
             type="button"
+            disabled={pending}
             className="auth-flow-button w-full justify-center"
             onClick={() => {
-              onChange(option);
+              if (option !== method) { onChange(option); }
               setShowMethods(false);
             }}
           >
@@ -38,11 +41,19 @@ export default function AuthVerificationMethodPicker({
               : option === 'sms' ? 'SMS verification code' : 'Email verification code'}
           </button>)}
         </div>
+        <button
+          type="button"
+          className="auth-method-link mx-auto block text-sm underline underline-offset-4"
+          onClick={() => setShowMethods(false)}
+        >
+          Back to verification
+        </button>
       </div>
       : <>
         {children}
         {availableMethods.length > 1 && <button
           type="button"
+          disabled={pending}
           className="auth-method-link mx-auto block text-sm underline underline-offset-4"
           onClick={() => setShowMethods(true)}
         >

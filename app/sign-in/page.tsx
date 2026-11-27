@@ -10,21 +10,28 @@ import AuthPageShell from '@/auth/AuthPageShell';
 import { hasActiveSuperAdmin } from '@/auth/users';
 import { isGoogleAuthConfigured } from '@/auth/config';
 import { getSiteAccessSettingsForAuthorization } from '@/auth/site-access';
+import { KEY_CALLBACK_URL } from '@/auth';
+import { getAuthCallbackPath, pathForAuthCallback } from '@/auth/redirects';
+import { isLocalAuthBypassRequested } from '@/auth/local-audit-bypass';
 
-export default async function SignInPage() {
+export default async function SignInPage({ searchParams }: {
+  searchParams: Promise<Record<string, string | string[] | undefined>>
+}) {
+  if (isLocalAuthBypassRequested()) { redirect(PATH_ROOT); }
   if (!(await hasActiveSuperAdmin())) { redirect(PATH_SETUP); }
   const session = await auth();
 
   const activeUser = session?.user?.status === 'active' ? session.user : undefined;
 
-  if (activeUser?.twoFactorPending) {
-    redirect(PATH_VERIFY_LOGIN);
-  }
-
   if (activeUser) {
-    redirect(activeUser.role === 'admin' || activeUser.role === 'superadmin'
+    const callback = getAuthCallbackPath((await searchParams)[KEY_CALLBACK_URL]);
+    if (activeUser.twoFactorPending) {
+      redirect(pathForAuthCallback(PATH_VERIFY_LOGIN, callback));
+    }
+    const fallback = activeUser.role === 'admin' || activeUser.role === 'superadmin'
       ? PATH_ADMIN
-      : PATH_ROOT);
+      : PATH_ROOT;
+    redirect(callback ?? fallback);
   }
 
   const [appText, siteAccessSettings] = await Promise.all([

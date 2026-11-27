@@ -1,59 +1,52 @@
 import AdminAppConfigurationClient from './AdminAppConfigurationClient';
 import { APP_CONFIGURATION } from '@/app/config';
 import { testConnectionsAction } from '@/admin/actions';
-import { generateAuthSecret } from '@/auth';
-import { getProcessingSettingsSafe } from '@/processing/settings';
+import { getProcessingSettings } from '@/processing/settings';
 import {
-  getProcessingConnectionSettingsResolutionSafe,
+  getProcessingConnectionSettingsResolution,
 } from '@/processing/connection-settings';
-import { getSiteAccessSettingsSafe } from '@/auth/site-access';
-import { getApplicationSettingsSafe } from '@/app/application-settings';
+import { getSiteAccessSettings } from '@/auth/site-access';
+import { getApplicationSettings } from '@/app/application-settings';
 
 export default async function AdminAppConfigurationServer({
+  secret,
   simplifiedView,
 }: {
+  secret: string
   simplifiedView?: boolean
 }) {
   const [
     connectionErrors,
-    secret,
     processingSettings,
     processingConnectionSettings,
     siteAccessSettings,
     applicationSettings,
   ] = await Promise.all([
-    testConnectionsAction().catch(() => ({})),
-    generateAuthSecret(),
-    getProcessingSettingsSafe(),
-    getProcessingConnectionSettingsResolutionSafe(),
-    getSiteAccessSettingsSafe(),
-    getApplicationSettingsSafe(),
+    testConnectionsAction().catch(() => undefined),
+    getProcessingSettings().catch(() => undefined),
+    getProcessingConnectionSettingsResolution().catch(() => undefined),
+    getSiteAccessSettings().catch(() => undefined),
+    getApplicationSettings().catch(() => undefined),
   ]);
 
   return (
     <AdminAppConfigurationClient {...{
       ...APP_CONFIGURATION,
-      isStaticallyOptimized: Object.values(applicationSettings).some(Boolean),
-      areMediaStaticallyOptimized: applicationSettings.staticMediaPages,
-      areMediaOGImagesStaticallyOptimized:
-        applicationSettings.staticMediaOgImages,
-      areMediaCategoriesStaticallyOptimized:
-        applicationSettings.staticMediaCategories,
-      areMediaCategoryOgImagesStaticallyOptimized:
-        applicationSettings.staticMediaCategoryOgImages,
-      ...connectionErrors,
+      isStaticallyOptimized: applicationSettings
+        ? Object.values(applicationSettings).some(Boolean)
+        : APP_CONFIGURATION.isStaticallyOptimized,
+      connectionErrors,
       secret,
       processingSettings,
-      processingConnectionSettings: {
-        // Only show values explicitly saved in the panel. The effective
-        // runtime connection may still use environment fallbacks below.
+      processingConnectionSettings: processingConnectionSettings && {
+        // Show the saved URL and the effective presence of each masked key.
         orchestratorBaseUrl:
           processingConnectionSettings.stored.orchestratorBaseUrl,
         hasOrchestratorSecret: Boolean(
-          processingConnectionSettings.stored.orchestratorSharedSecret,
+          processingConnectionSettings.effective.orchestratorSharedSecret,
         ),
         hasProcessorSecret: Boolean(
-          processingConnectionSettings.stored.processorSharedSecret,
+          processingConnectionSettings.effective.processorSharedSecret,
         ),
         isConfigured: Boolean(
           processingConnectionSettings.effective.orchestratorBaseUrl &&

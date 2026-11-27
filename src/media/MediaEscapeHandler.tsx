@@ -2,14 +2,19 @@
 
 import { getEscapePath } from '@/app/path';
 import { useRouter, usePathname } from 'next/navigation';
-import { useCallback } from 'react';
+import { useCallback, useEffect } from 'react';
 import useEscapeHandler from '../utility/useEscapeHandler';
-import { goBackOrReplace } from '@/utility/back-navigation';
+import {
+  ensureLegacyHistoryTracking,
+  goBackOrReplace,
+} from '@/utility/back-navigation';
 
 export default function MediaEscapeHandler() {
   const router = useRouter();
  
   const pathname = usePathname();
+
+  useEffect(ensureLegacyHistoryTracking, []);
 
   const escapePath = getEscapePath(pathname);
 

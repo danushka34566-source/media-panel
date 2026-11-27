@@ -1,6 +1,14 @@
+import {
+  getCanonicalAdminMediaPath,
+  getMediaSearchQuery,
+  isPathMedia,
+  pathForSearch,
+  PATH_ROOT,
+} from '@/app/path';
+
 function browserNavigation() {
   return (window as Window & {
-    navigation?: {
+    navigation?: EventTarget & {
       currentEntry: Pick<NavigationHistoryEntry, 'index' | 'key'> | null
       entries(): Pick<NavigationHistoryEntry, 'url'>[]
     }
@@ -18,9 +26,44 @@ const previousUrlKey = 'mediaPanelPreviousUrl';
 const previousEntryKey = 'mediaPanelPreviousEntryKey';
 const entryKey = 'mediaPanelEntryKey';
 const replacedUrlPrefix = 'media-panel:history-replaced:';
+const legacyEntryChangeEvent = 'media-panel:history-entry-change';
+let hasInitializedLegacyHistory = false;
 
 export function currentHistoryKey(): string | undefined {
   return browserNavigation()?.currentEntry?.key || history.state?.[entryKey];
+}
+
+export function ensureLegacyHistoryTracking() {
+  if (hasInitializedLegacyHistory || browserNavigation()) { return; }
+  trackLegacyHistory();
+  hasInitializedLegacyHistory = true;
+}
+
+export function subscribeToHistoryEntryChanges(onChange: () => void) {
+  const navigation = browserNavigation();
+  let subscribed = true;
+  const notify = () => {
+    // Next updates history from an insertion effect. Let that commit settle
+    // before a subscriber schedules a React update for the new entry.
+    queueMicrotask(() => { if (subscribed) { onChange(); } });
+  };
+
+  if (navigation) {
+    navigation.addEventListener('currententrychange', notify);
+  } else {
+    window.addEventListener(legacyEntryChangeEvent, notify);
+    window.addEventListener('popstate', notify);
+  }
+
+  return () => {
+    subscribed = false;
+    if (navigation) {
+      navigation.removeEventListener('currententrychange', notify);
+    } else {
+      window.removeEventListener(legacyEntryChangeEvent, notify);
+      window.removeEventListener('popstate', notify);
+    }
+  };
 }
 
 export function trackLegacyHistory() {
@@ -32,12 +75,15 @@ export function trackLegacyHistory() {
   if (!history.state?.[entryKey]) {
     replace({ ...history.state, [entryKey]: newEntryKey() }, '');
   }
-  history.pushState = (state, title, url) => push({
-    ...state,
-    [previousUrlKey]: location.href,
-    [previousEntryKey]: history.state?.[entryKey],
-    [entryKey]: newEntryKey(),
-  }, title, url);
+  history.pushState = (state, title, url) => {
+    push({
+      ...state,
+      [previousUrlKey]: location.href,
+      [previousEntryKey]: history.state?.[entryKey],
+      [entryKey]: newEntryKey(),
+    }, title, url);
+    window.dispatchEvent(new Event(legacyEntryChangeEvent));
+  };
   history.replaceState = (state, title, url) => {
     const before = location.href;
     const key = history.state?.[entryKey] ?? newEntryKey();
@@ -49,6 +95,7 @@ export function trackLegacyHistory() {
     }, title, url);
     if (location.href !== before) {
       try { sessionStorage.setItem(replacedUrlPrefix + key, location.href); } catch {}
+      window.dispatchEvent(new Event(legacyEntryChangeEvent));
     }
   };
 }
@@ -64,6 +111,19 @@ function legacyPreviousUrl() {
   return state?.[previousUrlKey];
 }
 
+export function resolveBackFallbackHref(
+  fallbackHref: string,
+  pathname: string,
+  queryParam: string | null,
+  matchPath: boolean | 'exact' = false,
+) {
+  if (matchPath || fallbackHref !== PATH_ROOT || !isPathMedia(pathname)) {
+    return fallbackHref;
+  }
+  const query = getMediaSearchQuery(queryParam ?? undefined);
+  return query ? pathForSearch(query) : fallbackHref;
+}
+
 export function goBackOrReplace(
   router: Router, fallbackHref: string, matchPath: boolean | 'exact' = false,
 ) {
@@ -74,12 +134,18 @@ export function goBackOrReplace(
   const previous = previousUrl ? new URL(previousUrl, location.href) : undefined;
   const fallback = new URL(fallbackHref, location.href);
   if (previous?.origin === location.origin && (!matchPath || (
-    previous.pathname === fallback.pathname &&
+    getCanonicalAdminMediaPath(previous.pathname) ===
+      getCanonicalAdminMediaPath(fallback.pathname) &&
     ((!fallback.search && matchPath !== 'exact') || previous.search === fallback.search) &&
     ((!fallback.hash && matchPath !== 'exact') || previous.hash === fallback.hash)
   ))) {
     router.back();
-  } else {
-    router.replace(fallbackHref);
+    return;
   }
+  router.replace(resolveBackFallbackHref(
+    fallbackHref,
+    location.pathname,
+    new URLSearchParams(location.search).get('query'),
+    matchPath,
+  ));
 }

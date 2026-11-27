@@ -41,6 +41,7 @@ const NumberSetting = ({
         name={name}
         min={min}
         max={max}
+        required
         defaultValue={defaultValue}
         className={clsx(
           'h-9 min-w-0 grow rounded-lg border-medium bg-main px-3',
@@ -194,9 +195,12 @@ export default function ProcessingConfigurationForm({
       <ConfigToggle
         name="processorOnlyRegistration"
         label="Processor-only registration"
-        description="When enabled, only an online backend processor can register uploads; the Worker will not register them."
+        description={processorRegistrationEnabled
+          ? 'Allow only online backend processors to register uploads.'
+          : 'Enable processor registration to use this option.'}
         checked={processorOnlyRegistration && processorRegistrationEnabled}
         onChange={setProcessorOnlyRegistration}
+        disabled={!processorRegistrationEnabled}
       />
       <ConfigToggle
         name="videoProcessingEnabled"
@@ -295,7 +299,7 @@ export default function ProcessingConfigurationForm({
         'sm:flex-row sm:items-center sm:justify-between',
       )}
     >
-      <span className={clsx(
+      <span role="status" className={clsx(
         'min-h-5 text-sm',
         state.error ? 'text-red-600' : 'text-dim',
       )}>

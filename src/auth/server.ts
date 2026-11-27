@@ -5,6 +5,9 @@ import {
   PATH_ACCESS_DENIED,
   PATH_OG,
   PATH_OG_SAMPLE,
+  PATH_PROFILE,
+  PATH_ROOT,
+  PATH_SIGN_IN,
   PATH_SETUP,
   PATH_VERIFY_LOGIN,
   PREFIX_TAG,
@@ -28,6 +31,10 @@ import {
   verifyCode,
   verifySmsCode,
 } from './users';
+import { getLoginVerificationNonceState } from './login-verification';
+import { KEY_CALLBACK_URL } from './index';
+import { getAuthCallbackPath, pathForAuthCallback } from './redirects';
+import { isVerifiedSession } from './session';
 import { verifyTotpCodeWithCounter } from './totp';
 import {
   isDatabaseQuotaExceededError,
@@ -39,8 +46,13 @@ import {
   isGoogleSuperAdminSetup,
 } from './google-setup';
 import { isGoogleAuthConfigured } from './config';
+import { clearGoogleAccountLink, getGoogleAccountLink } from './google-link';
 import { getSiteAccessSettingsForAuthorization } from './site-access';
 import { isPathAllowedWithoutSessionInPrivateMode } from './site-access-routes';
+import {
+  createLocalAuditSession,
+  isLocalAuthBypassRequested,
+} from './local-audit-bypass';
 const toAuthUser = (user: AppUser): User & {
   id: string
   role: string
@@ -56,12 +68,7 @@ const toAuthUser = (user: AppUser): User & {
 
 const SESSION_MAX_AGE_SECONDS = 2 * 24 * 60 * 60;
 
-export const {
-  handlers: { GET, POST },
-  signIn,
-  signOut,
-  auth,
-} = NextAuth({
+const nextAuth = NextAuth({
   // Public mode keeps a normal, finite session; private mode additionally
   // enforces the client-side 30-minute inactivity timeout.
   session: {
@@ -133,7 +140,19 @@ export const {
       if (account?.provider !== 'google') { return true; }
       const email = profile?.email;
       const googleSub = profile?.sub;
-      if (!email || !googleSub) { return false; }
+      const link = await getGoogleAccountLink();
+      if (link !== undefined) {
+        const session = link && await auth();
+        if (link && email?.trim().toLowerCase() === link.email &&
+            googleSub && profile?.email_verified === true &&
+            isVerifiedSession(session) && session.user.id === link.userId &&
+            session.user.email?.trim().toLowerCase() === link.email) {
+          return true;
+        }
+        await clearGoogleAccountLink();
+        return `${PATH_PROFILE}?googleLink=unmatched`;
+      }
+      if (!email || !googleSub || profile?.email_verified !== true) { return false; }
       if (!(await hasActiveSuperAdmin())) {
         return isGoogleSuperAdminSetup();
       }
@@ -156,6 +175,8 @@ export const {
           token.loginVerificationNonce = undefined;
         }
         if (account?.provider === 'google' && profile?.sub && profile.email) {
+          const link = await getGoogleAccountLink();
+          if (link === null) { throw new Error('Google account linking expired'); }
           const allowInitialSuperAdmin = await isGoogleSuperAdminSetup();
           const { newRegistrationsEnabled } = allowInitialSuperAdmin
             ? { newRegistrationsEnabled: true }
@@ -169,7 +190,9 @@ export const {
               : undefined,
             allowInitialSuperAdmin,
             allowNewUser: newRegistrationsEnabled,
+            expectedLinkUserId: link?.userId,
           });
+          if (link) { await clearGoogleAccountLink(); }
           if (allowInitialSuperAdmin) {
             await clearGoogleSuperAdminSetup();
           }
@@ -204,13 +227,26 @@ export const {
           token.name = appUser.name;
           token.email = appUser.email;
           token.picture = appUser.profileImageUrl;
-          token.twoFactorPending = Boolean(
-            token.loginVerificationNonce &&
-            appUser.loginVerificationNonce === token.loginVerificationNonce,
+          const nonceState = getLoginVerificationNonceState(
+            typeof token.loginVerificationNonce === 'string'
+              ? token.loginVerificationNonce
+              : undefined,
+            appUser.loginVerificationNonce,
           );
-          if (!token.twoFactorPending) {
+          if (nonceState === 'superseded') {
+            token.id = undefined;
+            token.sub = undefined;
+            token.role = undefined;
+            token.status = undefined;
+            token.name = undefined;
+            token.email = undefined;
+            token.picture = undefined;
+            token.twoFactorPending = false;
             token.loginVerificationNonce = undefined;
+            return token;
           }
+          token.twoFactorPending = nonceState === 'pending';
+          if (nonceState !== 'pending') { token.loginVerificationNonce = undefined; }
         }
         return token;
       } catch (error) {
@@ -234,19 +270,66 @@ export const {
       return session;
     },
     async authorized({ auth, request }) {
-      const { pathname } = request.nextUrl;
+      const { pathname, search } = request.nextUrl;
+      const aliasUrl = (path: string) => {
+        const url = new URL(request.nextUrl.href);
+        url.pathname = path;
+        return url;
+      };
+      const photoAlias = pathname.match(/^\/photos\/([^/]+)$/);
+      const photoAliasDestination = photoAlias?.[1]
+        ? `/${photoAlias[1]}`
+        : undefined;
+      const tagAlias = pathname.match(/^\/t\/([^/]+)$/);
+      const tagAliasDestination = tagAlias?.[1]
+        ? `${PREFIX_TAG}/${tagAlias[1]}`
+        : undefined;
+
+      if (isLocalAuthBypassRequested()) {
+        if (pathname === PATH_ADMIN) {
+          return Response.redirect(aliasUrl(PATH_ADMIN_PHOTOS));
+        }
+        if (pathname === PATH_OG) {
+          return Response.redirect(aliasUrl(PATH_OG_SAMPLE));
+        }
+        if (photoAliasDestination) {
+          if (photoAliasDestination === PATH_ADMIN ||
+              photoAliasDestination.startsWith(`${PATH_ADMIN}/`) ||
+              photoAliasDestination === '/api' ||
+              photoAliasDestination.startsWith('/api/')) {
+            return Response.json(
+              { error: 'Admin pages are disabled in local audit mode' },
+              { status: 403 },
+            );
+          }
+          return NextResponse.rewrite(aliasUrl(photoAliasDestination));
+        }
+        if (tagAliasDestination) {
+          if (tagAliasDestination === `${PREFIX_TAG}/private` ||
+              tagAliasDestination.startsWith(`${PREFIX_TAG}/private/`)) {
+            return Response.json(
+              { error: 'Private media is unavailable in local audit mode' },
+              { status: 403 },
+            );
+          }
+          return NextResponse.rewrite(aliasUrl(tagAliasDestination));
+        }
+        return true;
+      }
 
       if (pathname !== PATH_SETUP && !(await hasActiveSuperAdmin())) {
         return Response.redirect(new URL(PATH_SETUP, request.nextUrl));
       }
 
       const siteAccess = await getSiteAccessSettingsForAuthorization();
+      const authorizationPath = photoAliasDestination ??
+        tagAliasDestination ?? pathname;
       const isPrivateModePublicPath =
         isPathAllowedWithoutSessionInPrivateMode(
-          pathname,
+          authorizationPath,
           siteAccess.newRegistrationsEnabled,
         );
-      const isUrlProtected = isPathProtected(pathname) || (
+      const isUrlProtected = isPathProtected(authorizationPath) || (
         siteAccess.siteVisibility === 'private' &&
         !isPrivateModePublicPath
       );
@@ -254,19 +337,29 @@ export const {
         auth?.user?.id && auth.user.status === 'active',
       );
       const isPendingTwoFactor = Boolean(auth?.user?.twoFactorPending);
-      const isAdminPath = pathname.startsWith('/admin');
-      const isVerifyLoginPath = pathname.startsWith(PATH_VERIFY_LOGIN);
+      const isAdminPath = authorizationPath === PATH_ADMIN ||
+        authorizationPath.startsWith(`${PATH_ADMIN}/`);
+      const isVerifyLoginPath = pathname === PATH_VERIFY_LOGIN;
       const isAdmin = hasCapability(auth?.user?.role, 'edit');
+      const callback = pathname === PATH_SIGN_IN || isVerifyLoginPath
+        ? getAuthCallbackPath(request.nextUrl.searchParams.get(KEY_CALLBACK_URL))
+        : getAuthCallbackPath(`${pathname}${search}`);
       if (isPendingTwoFactor && !isVerifyLoginPath) {
         return pathname.startsWith('/api/')
           ? Response.json(
             { error: 'Sign-in verification required' },
             { status: 401 },
           )
-          : Response.redirect(new URL(PATH_VERIFY_LOGIN, request.nextUrl));
+          : Response.redirect(new URL(
+            pathForAuthCallback(PATH_VERIFY_LOGIN, callback),
+            request.nextUrl,
+          ));
       }
       if (isUserLoggedIn && !isPendingTwoFactor && isVerifyLoginPath) {
-        return Response.redirect(new URL(PATH_ADMIN, request.nextUrl));
+        const fallback = auth?.user?.role === 'user'
+          ? PATH_ROOT
+          : PATH_ADMIN;
+        return Response.redirect(new URL(callback ?? fallback, request.nextUrl));
       }
       if (isAdminPath && isUserLoggedIn && !isAdmin) {
         return Response.redirect(new URL(PATH_ACCESS_DENIED, request.nextUrl));
@@ -275,29 +368,25 @@ export const {
         isAdminPath ? isAdmin : isUserLoggedIn
       );
       if (!isAllowed) {
-        return pathname.startsWith('/api/')
-          ? Response.json({ error: 'Unauthorized' }, { status: 401 })
-          : false;
+        if (pathname.startsWith('/api/')) {
+          return Response.json({ error: 'Unauthorized' }, { status: 401 });
+        }
+        return Response.redirect(new URL(
+          pathForAuthCallback(PATH_SIGN_IN, callback),
+          request.nextUrl,
+        ));
       }
       if (pathname === PATH_ADMIN) {
-        return Response.redirect(new URL(PATH_ADMIN_PHOTOS, request.nextUrl));
+        return Response.redirect(aliasUrl(PATH_ADMIN_PHOTOS));
       }
       if (pathname === PATH_OG) {
-        return Response.redirect(new URL(PATH_OG_SAMPLE, request.nextUrl));
+        return Response.redirect(aliasUrl(PATH_OG_SAMPLE));
       }
-      const photoAlias = pathname.match(/^\/photos\/(.+)$/);
-      if (photoAlias?.[1]) {
-        return NextResponse.rewrite(new URL(
-          `/${photoAlias[1]}`,
-          request.nextUrl,
-        ));
+      if (photoAliasDestination) {
+        return NextResponse.rewrite(aliasUrl(photoAliasDestination));
       }
-      const tagAlias = pathname.match(/^\/t\/(.+)$/);
-      if (tagAlias?.[1]) {
-        return NextResponse.rewrite(new URL(
-          `${PREFIX_TAG}/${tagAlias[1]}`,
-          request.nextUrl,
-        ));
+      if (tagAliasDestination) {
+        return NextResponse.rewrite(aliasUrl(tagAliasDestination));
       }
       return true;
     },
@@ -307,13 +396,26 @@ export const {
   },
 });
 
+export const {
+  handlers: { GET, POST },
+  signIn,
+  signOut,
+} = nextAuth;
+
+const nextAuthAuth = nextAuth.auth;
+export const auth = ((...args: unknown[]) => {
+  if (isLocalAuthBypassRequested() && args.length === 0) {
+    return Promise.resolve(createLocalAuditSession());
+  }
+  return Reflect.apply(nextAuthAuth, undefined, args);
+}) as typeof nextAuthAuth;
+
 export const runAuthenticatedAdminServerAction = async <T>(
   callback: () => T,
   capability: AuthCapability = 'edit',
 ): Promise<T> => {
   const session = await auth();
-  const isAllowed = hasCapability(session?.user?.role, capability);
-  if (isAllowed && session?.user?.status === 'active') {
+  if (isVerifiedSession(session) && hasCapability(session.user.role, capability)) {
     return callback();
   } else {
     throw new Error('Unauthorized server action request');

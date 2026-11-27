@@ -2,8 +2,9 @@
 
 import { revalidatePath } from 'next/cache';
 import { PATH_ADMIN_CONFIGURATION } from '@/app/path';
+import { getLoginVerificationEmailError } from './email-delivery';
 import { runAuthenticatedAdminServerAction } from './server';
-import { saveSiteAccessSettings } from './site-access';
+import { getSiteAccessSettings, saveSiteAccessSettings } from './site-access';
 import { parseSiteAccessSettings } from './site-access-schema';
 
 export type SiteAccessSettingsActionState = {
@@ -23,6 +24,11 @@ export const saveSiteAccessSettingsAction = async (
         loginVerificationRequired:
           formData.has('loginVerificationRequired'),
       });
+      if (settings.loginVerificationRequired &&
+          !(await getSiteAccessSettings()).loginVerificationRequired) {
+        const error = await getLoginVerificationEmailError();
+        if (error) { return { error }; }
+      }
       await saveSiteAccessSettings(settings);
       revalidatePath(PATH_ADMIN_CONFIGURATION);
       return { saved: true };

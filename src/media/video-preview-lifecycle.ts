@@ -7,6 +7,7 @@ import {
   useId,
   useRef,
   useState,
+  useSyncExternalStore,
 } from 'react';
 
 type DeviceCapabilities = {
@@ -38,7 +39,7 @@ type PreviewEntry = {
 
 type NavigatorWithCapabilities = Navigator & {
   deviceMemory?: number
-  connection?: { saveData?: boolean }
+  connection?: Partial<EventTarget> & { saveData?: boolean }
 }
 
 const entries = new Map<string, PreviewEntry>();
@@ -75,10 +76,53 @@ const getPreviewRect = (
 };
 
 const getReducedMotionQuery = () =>
-  reducedMotionQuery ??= window.matchMedia('(prefers-reduced-motion: reduce)');
+  reducedMotionQuery ??= typeof window === 'undefined'
+    ? undefined
+    : window.matchMedia?.('(prefers-reduced-motion: reduce)');
+
+const subscribeToReducedMotion = (callback: () => void) => {
+  const query = getReducedMotionQuery();
+  if (!query) { return () => {}; }
+  if (query.addEventListener) {
+    query.addEventListener('change', callback);
+    return () => query.removeEventListener('change', callback);
+  }
+  query.addListener?.(callback);
+  return () => query.removeListener?.(callback);
+};
+
+const subscribeToNothing = () => () => {};
+const getConnection = () => typeof navigator === 'undefined'
+  ? undefined
+  : (navigator as NavigatorWithCapabilities).connection;
+const subscribeToPreviewPreferences = (callback: () => void) => {
+  const unsubscribeMotion = subscribeToReducedMotion(callback);
+  const connection = getConnection();
+  connection?.addEventListener?.('change', callback);
+  return () => {
+    unsubscribeMotion();
+    connection?.removeEventListener?.('change', callback);
+  };
+};
+const allowPriorityPreview = () => canAutoplayGeneratedVideoPreview({
+  reducedMotion: Boolean(getReducedMotionQuery()?.matches),
+  saveData: Boolean(getConnection()?.saveData),
+});
+const deferPriorityPreview = () => false;
+
+// Browser motion and connection settings are unknown on the server. Wait for
+// the client snapshot before enabling priority video previews.
+export const usePriorityVideoPreviewAllowed = (enabled: boolean) =>
+  useSyncExternalStore(
+    enabled ? subscribeToPreviewPreferences : subscribeToNothing,
+    enabled ? allowPriorityPreview : deferPriorityPreview,
+    deferPriorityPreview,
+  );
 
 const getCoarsePointerQuery = () =>
-  coarsePointerQuery ??= window.matchMedia('(pointer: coarse)');
+  coarsePointerQuery ??= typeof window === 'undefined'
+    ? undefined
+    : window.matchMedia?.('(pointer: coarse)');
 
 export const canAutoplayGeneratedVideoPreview = ({
   reducedMotion,
@@ -116,11 +160,11 @@ export const shouldSuspendVideoPreviews = ({
 const getCurrentDeviceCapabilities = (): DeviceCapabilities => {
   const navigatorWithCapabilities = navigator as NavigatorWithCapabilities;
   return {
-    reducedMotion: getReducedMotionQuery().matches,
-    saveData: Boolean(navigatorWithCapabilities.connection?.saveData),
+    reducedMotion: Boolean(getReducedMotionQuery()?.matches),
+    saveData: Boolean(getConnection()?.saveData),
     deviceMemory: navigatorWithCapabilities.deviceMemory,
     hardwareConcurrency: navigator.hardwareConcurrency,
-    isMobile: getCoarsePointerQuery().matches ||
+    isMobile: getCoarsePointerQuery()?.matches ||
       window.innerWidth < 768,
   };
 };
@@ -416,7 +460,8 @@ export const setFullVideoPlaybackActive = (isActive: boolean) => {
   updateActivePreviews();
 };
 
-const addMediaQueryListener = (query: MediaQueryList) => {
+const addMediaQueryListener = (query?: MediaQueryList) => {
+  if (!query) { return; }
   if (query.addEventListener) {
     query.addEventListener('change', onVisibilityOrCapabilityChange);
   } else {
@@ -446,6 +491,7 @@ const attachGlobalListeners = () => {
   window.addEventListener('pagehide', onPageHide);
   window.addEventListener('pageshow', onPageShow);
   window.addEventListener('focus', onPageShow);
+  getConnection()?.addEventListener?.('change', onVisibilityOrCapabilityChange);
   addMediaQueryListener(getReducedMotionQuery());
   addMediaQueryListener(getCoarsePointerQuery());
 };
@@ -472,6 +518,7 @@ const detachGlobalListeners = () => {
   document.removeEventListener('fullscreenchange', onFullscreenChange);
   document.removeEventListener('freeze', onPageHide);
   document.removeEventListener('resume', onPageShow);
+  getConnection()?.removeEventListener?.('change', onVisibilityOrCapabilityChange);
   window.removeEventListener('pagehide', onPageHide);
   window.removeEventListener('pageshow', onPageShow);
   window.removeEventListener('focus', onPageShow);

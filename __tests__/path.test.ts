@@ -1,7 +1,11 @@
 import {
   getEscapePath,
+  getMediaSearchQuery,
   getPathComponents,
+  getCanonicalAdminMediaPath,
   doesPathOfferSort,
+  isPathAdminMedia,
+  isPathTopLevelAdmin,
   isPathCamera,
   isPathCameraMedia,
   isPathFilm,
@@ -13,8 +17,16 @@ import {
   isPathTag,
   isPathTagMedia,
   pathForAdminMediaEdit,
+  pathForCategory,
+  pathForContentType,
+  pathForMedia,
+  pathForPerformer,
+  pathForStudio,
 } from '@/app/path';
 import { TAG_PRIVATE } from '@/tag';
+import { isValidMediaYear } from '@/year';
+
+jest.mock('../src/tag', () => ({ TAG_PRIVATE: 'private' }));
 
 const PHOTO_ID            = 'UsKSGcbt';
 const TAG                 = 'tag-name';
@@ -51,6 +63,59 @@ const PATH_FOCAL_LENGTH             = `/focal/${FOCAL_LENGTH_STRING}`;
 const PATH_FOCAL_LENGTH_PHOTO       = `${PATH_FOCAL_LENGTH}/${PHOTO_ID}`;
  
 describe('Paths', () => {
+  it.each(['2026', '-44'])('accepts an integer archive year %s', year => {
+    expect(isValidMediaYear(year)).toBe(true);
+  });
+
+  it.each(['recent', '2026-11', '2e3', '1'.repeat(30)])(
+    'rejects an invalid archive year %s before querying media', year => {
+      expect(isValidMediaYear(year)).toBe(false);
+    },
+  );
+
+  it.each([
+    ['/admin/photos', '/admin/media', true],
+    ['/admin/photos/updates', '/admin/media/updates', true],
+    ['/admin/photos/abc/edit', '/admin/media/abc/edit', false],
+  ] as const)('recognizes the legacy media library route %s', (
+    alias, canonical, topLevel,
+  ) => {
+    expect(getCanonicalAdminMediaPath(alias)).toBe(canonical);
+    expect(isPathAdminMedia(alias)).toBe(true);
+    expect(isPathTopLevelAdmin(alias)).toBe(topLevel);
+    expect(getCanonicalAdminMediaPath('/admin/photoshoot')).toBe('/admin/photoshoot');
+  });
+
+  it.each([
+    ['category', '/category', pathForCategory],
+    ['studio', '/studio', pathForStudio],
+    ['performer', '/performer', pathForPerformer],
+    ['contentType', '/content-type', pathForContentType],
+  ] as const)('preserves punctuation in %s links', (key, prefix, makePath) => {
+    const value = 'R&D / Studio #1? 100%';
+    const parent = makePath(value);
+    const detail = pathForMedia({ photo: PHOTO_ID, [key]: value });
+    const url = new URL(detail, 'https://media.example');
+
+    expect(parent).toBe(`${prefix}/${encodeURIComponent(value)}`);
+    expect(url.pathname).toBe(`${parent}/${PHOTO_ID}`);
+    expect(url.search + url.hash).toBe('');
+    expect(getEscapePath(url.pathname)).toBe(parent);
+  });
+
+  it('keeps the search query and sort together on root detail links', () => {
+    const query = getMediaSearchQuery(['  R&D / Studio #1 + rain  ', 'ignored']);
+    const path = pathForMedia({ photo: PHOTO_ID, sortBy: 'createdAtAsc', query });
+    const url = new URL(path, 'https://media.example');
+
+    expect(url.pathname).toBe(PATH_PHOTO);
+    expect(url.searchParams.get('sort')).toBe('createdAtAsc');
+    expect(url.searchParams.get('query')).toBe('R&D / Studio #1 + rain');
+    expect(url.hash).toBe('');
+    expect(pathForMedia({ photo: PHOTO_ID, tag: TAG, query })).toBe(PATH_TAG_PHOTO);
+    expect(getMediaSearchQuery('   ')).toBeUndefined();
+  });
+
   it.each([
     ['/recents', { recent: true }],
     ['/year/2025', { year: '2025' }],

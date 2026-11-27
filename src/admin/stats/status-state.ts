@@ -111,4 +111,9 @@ export const isBackendStatusTransient = (
 
 export const getBackendStatusSnapshot = (
   state: BackendStatusState,
-) => state.latest || state.lastConnected;
+  now = Date.now(),
+) => state.latest?.configured === false
+  ? undefined
+  : isBackendStatusTransient(state, now)
+    ? state.lastConnected
+    : state.latest || state.lastConnected;

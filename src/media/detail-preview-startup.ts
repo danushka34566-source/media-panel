@@ -16,7 +16,7 @@ export const beginDetailPreviewStartup = (mediaId: string) => {
 };
 
 export const completeDetailPreviewStartup = (mediaId: string) => {
-  if (currentMediaId !== mediaId) { return; }
+  if (currentMediaId !== mediaId || isCurrentPreviewPrepared) { return; }
   isCurrentPreviewPrepared = true;
   dispatchState();
 };

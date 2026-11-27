@@ -6,7 +6,6 @@ import {
   getPreviousMedia,
 } from '.';
 import { MediaSetCategory } from '../category';
-import MediaLarge from './MediaLarge';
 import AppGrid from '@/components/AppGrid';
 import MediaDetailRelated from './MediaDetailRelated';
 import TagHeader from '@/tag/TagHeader';
@@ -17,7 +16,7 @@ import PrivateHeader from '@/tag/PrivateHeader';
 import FocalLengthHeader from '@/focal/FocalLengthHeader';
 import MediaHeader from './MediaHeader';
 import RecipeHeader from '@/recipe/RecipeHeader';
-import { ReactNode } from 'react';
+import { Suspense, use, type ReactNode } from 'react';
 import LensHeader from '@/lens/LensHeader';
 import { AI_CONTENT_GENERATION_ENABLED } from '@/app/config';
 import YearHeader from '@/year/YearHeader';
@@ -27,12 +26,29 @@ import { pathForMedia } from '@/app/path';
 import MediaDetailScrollReset from './MediaDetailScrollReset';
 import type { SortBy } from './sort';
 import MediaDetailStatusRefresh from './MediaDetailStatusRefresh';
+import MediaDetailHero from './MediaDetailHero';
+
+type DetailNavigation = {
+  photos: Media[]
+  photosGrid?: Media[]
+  sortBy?: SortBy
+  query?: string
+};
+
+function DeferredNavigationSection({ navigation, render }: {
+  navigation: Promise<DetailNavigation>
+  render: (value: DetailNavigation) => ReactNode
+}) {
+  return render(use(navigation));
+}
 
 export default function MediaDetailPage({
   photo,
   photos,
   photosGrid,
   sortBy,
+  query,
+  detailNavigation,
   recent,
   year,
   camera,
@@ -57,6 +73,8 @@ export default function MediaDetailPage({
   photos: Media[]
   photosGrid?: Media[]
   sortBy?: SortBy
+  query?: string
+  detailNavigation?: Promise<DetailNavigation>
   indexNumber?: number
   count?: number
   dateRange?: MediaDateRangePostgres
@@ -157,8 +175,6 @@ export default function MediaDetailPage({
     />;
   }
 
-  const previousMedia = getPreviousMedia(photo, photos);
-  const nextMedia = getNextMedia(photo, photos);
   const categoryPathParams = {
     recent,
     year,
@@ -174,12 +190,40 @@ export default function MediaDetailPage({
     recipe,
     focal,
   };
-  const swipePreviousPath = previousMedia
-    ? pathForMedia({ photo: previousMedia, sortBy, ...categoryPathParams })
-    : undefined;
-  const swipeNextPath = nextMedia
-    ? pathForMedia({ photo: nextMedia, sortBy, ...categoryPathParams })
-    : undefined;
+  const getSwipePaths = ({ photos, sortBy, query }: DetailNavigation) => {
+    const previousMedia = getPreviousMedia(photo, photos);
+    const nextMedia = getNextMedia(photo, photos);
+    const pathOptions = { sortBy, query, ...categoryPathParams };
+    return {
+      swipePreviousPath: previousMedia
+        ? pathForMedia({ photo: previousMedia, ...pathOptions })
+        : undefined,
+      swipeNextPath: nextMedia
+        ? pathForMedia({ photo: nextMedia, ...pathOptions })
+        : undefined,
+    };
+  };
+  const renderTitleHeader = ({ photos, sortBy, query }: DetailNavigation) =>
+    <MediaHeader
+      selectedMedia={photo}
+      photos={photos}
+      sortBy={sortBy}
+      query={query}
+      recipe={recipe}
+      hasAiTextGeneration={AI_CONTENT_GENERATION_ENABLED}
+    />;
+  const renderRelated = ({ photos, photosGrid, sortBy, query }: DetailNavigation) =>
+    <MediaDetailRelated
+      photos={photosGrid ?? photos}
+      selectedMedia={photo}
+      sortBy={sortBy}
+      query={query}
+      {...categoryPathParams}
+    />;
+  const initialNavigation = { photos, photosGrid, sortBy, query };
+  const heroProps = detailNavigation
+    ? { deferredSwipePaths: detailNavigation.then(getSwipePaths) }
+    : getSwipePaths(initialNavigation);
 
   return (
     <div>
@@ -190,13 +234,14 @@ export default function MediaDetailPage({
       <MediaDetailScrollReset />
       <AppGrid
         className="mt-1.5 mb-6"
-        contentMain={customHeader ?? <MediaHeader
-          selectedMedia={photo}
-          photos={photos}
-          sortBy={sortBy}
-          recipe={recipe}
-          hasAiTextGeneration={AI_CONTENT_GENERATION_ENABLED}
-        />}
+        contentMain={customHeader ?? (detailNavigation
+          ? <Suspense fallback={renderTitleHeader(initialNavigation)}>
+            <DeferredNavigationSection
+              navigation={detailNavigation}
+              render={renderTitleHeader}
+            />
+          </Suspense>
+          : renderTitleHeader(initialNavigation))}
       />
       <AnimateItems
         className="md:mb-8"
@@ -204,7 +249,7 @@ export default function MediaDetailPage({
         fade={false}
         removeTransformAfterAnimation
         items={[
-          <MediaLarge
+          <MediaDetailHero
             key={photo.id}
             photo={photo}
             album={album}
@@ -245,17 +290,16 @@ export default function MediaDetailPage({
             shouldShareFocalLength={focal !== undefined}
             includeFavoriteInAdminMenu={includeFavoriteInAdminMenu}
             showAdminKeyCommands
-            swipePreviousPath={swipePreviousPath}
-            swipeNextPath={swipeNextPath}
+            {...heroProps}
           />,
         ]}
       />
-      <MediaDetailRelated
-        photos={photosGrid ?? photos}
-        selectedMedia={photo}
-        sortBy={sortBy}
-        {...categoryPathParams}
-      />
+      {detailNavigation ? <Suspense>
+        <DeferredNavigationSection
+          navigation={detailNavigation}
+          render={renderRelated}
+        />
+      </Suspense> : renderRelated(initialNavigation)}
     </div>
   );
 }

@@ -1,49 +1,38 @@
 import { generateOgImageMetaForMedia } from '@/media';
 import MediaEmptyState from '@/media/MediaEmptyState';
 import { Metadata } from 'next/types';
-import { getMedia } from '@/media/query';
 import { cache } from 'react';
 import MediaGridPage from '@/media/MediaGridPage';
 import { getDataForCategoriesCached } from '@/category/cache';
-import { getMediaMetaCached } from '@/media/cache';
-import { SortProps } from '@/media/sort';
+import { getMediaPageCached, getMediaMetaCached } from '@/media/cache';
+import type { SortBy, SortProps } from '@/media/sort';
 import { getSortOptionsFromParams } from '@/media/sort/path';
-import { FEED_META_QUERY_OPTIONS, getFeedQueryOptions } from '@/feed';
-import { MediaQueryOptions } from '@/db';
+import { getFeedQueryOptions } from '@/feed';
 
 export const maxDuration = 60;
 
-const getMediaCached = cache((options: MediaQueryOptions) =>
-  getMedia(getFeedQueryOptions({
-    isGrid: true,
-    ...options,
-  })));
+const getMediaPage = cache((sortBy: SortBy, sortWithPriority: boolean) =>
+  getMediaPageCached(getFeedQueryOptions({ isGrid: true, sortBy, sortWithPriority })));
 
 export async function generateMetadata({
   params,
 }: SortProps): Promise<Metadata> {
-  const sortOptions = await getSortOptionsFromParams(params);
-  const photos = await getMediaCached(sortOptions)
-    .catch(() => []);
+  const { sortBy, sortWithPriority } = await getSortOptionsFromParams(params);
+  const { photos } = await getMediaPage(sortBy, sortWithPriority)
+    .catch(() => ({ photos: [], hasMore: false }));
   return generateOgImageMetaForMedia(photos);
 }
 
 export default async function GridPage({ params }: SortProps) {
   const sortOptions = await getSortOptionsFromParams(params);
   const [
-    photos,
-    photosCount,
+    { photos, hasMore },
     photosCountWithExcludes,
     categories,
   ] = await Promise.all([
-    getMediaCached(sortOptions)
-      .catch(() => []),
-    getMediaMetaCached(FEED_META_QUERY_OPTIONS)
-      .then(({ count }) => count)
-      .catch(() => 0),
+    getMediaPage(sortOptions.sortBy, sortOptions.sortWithPriority),
     getMediaMetaCached()
-      .then(({ count }) => count)
-      .catch(() => 0),
+      .then(({ count }) => count),
     getDataForCategoriesCached(),
   ]);
 
@@ -52,8 +41,9 @@ export default async function GridPage({ params }: SortProps) {
       ? <MediaGridPage
         {...{
           photos,
-          photosCount,
+          photosCount: hasMore ? photos.length + 1 : photos.length,
           photosCountWithExcludes,
+          initialHasMore: hasMore,
           ...sortOptions,
           ...categories,
         }}

@@ -34,6 +34,7 @@ export default function MediaHeader({
   hasAiTextGeneration,
   includeShareButton,
   sortBy,
+  query,
   ...categories
 }: {
   photos: Media[]
@@ -49,6 +50,7 @@ export default function MediaHeader({
   hasAiTextGeneration: boolean
   includeShareButton?: boolean
   sortBy?: SortBy
+  query?: string
 } & MediaSetCategory) {
   const { isGridHighDensity } = useAppState();
 
@@ -76,6 +78,7 @@ export default function MediaHeader({
       photos,
       hasAiTextGeneration,
       sortBy,
+      query,
       ...categories,
     }} />;
 

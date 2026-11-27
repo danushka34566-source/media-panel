@@ -28,6 +28,7 @@ import { rememberMediaScrollPosition } from './useMediaScrollRestoration';
 export default function MediaMedium({
   photo,
   sortBy: sortByProp,
+  query,
   selected,
   priority,
   prefetch,
@@ -47,6 +48,7 @@ export default function MediaMedium({
 }: {
   photo: Media
   sortBy?: import('./sort').SortBy
+  query?: string
   selected?: boolean
   priority?: boolean
   prefetch?: boolean
@@ -67,7 +69,7 @@ export default function MediaMedium({
   const router = useRouter();
   const pathname = usePathname();
   const sortBy = sortByProp ?? getFeedSortByFromPath(pathname);
-  const href = pathForMedia({ photo, sortBy, ...categories });
+  const href = pathForMedia({ photo, sortBy, query, ...categories });
   const [isHovered, setIsHovered] = useState(false);
   const [videoFailedMediaId, setVideoFailedMediaId] = useState<string>();
   const [posterFailedMediaId, setPosterFailedMediaId] = useState<string>();

@@ -1,27 +1,21 @@
 import AppGrid from '@/components/AppGrid';
 import Container from '@/components/Container';
-import { PATH_ROOT } from '@/app/path';
+import { getMediaSearchQuery, PATH_ROOT } from '@/app/path';
 import MediaGridContainer from '@/media/MediaGridContainer';
 import { getMedia, getMediaMeta } from '@/media/query';
 import BackLink from '@/components/BackLink';
 import { getEffectiveMediaSortOptions } from '@/media/sort/preference';
+import { INFINITE_SCROLL_GRID_INITIAL } from '@/media';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
-
-const getQueryValue = (value: string | string[] | undefined) =>
-  typeof value === 'string'
-    ? value
-    : Array.isArray(value)
-      ? value[0]
-      : undefined;
 
 export default async function SearchPage({
   searchParams,
 }: {
   searchParams: Promise<Record<string, string | string[] | undefined>>
 }) {
-  const query = getQueryValue((await searchParams).query)?.trim() ?? '';
+  const query = getMediaSearchQuery((await searchParams).query);
 
   if (!query) {
     return (
@@ -49,8 +43,8 @@ export default async function SearchPage({
   } as const;
 
   const [photos, { count }] = await Promise.all([
-    getMedia(options).catch(() => []),
-    getMediaMeta(options).catch(() => ({ count: 0, dateRange: undefined })),
+    getMedia({ ...options, limit: INFINITE_SCROLL_GRID_INITIAL }),
+    getMediaMeta(options),
   ]);
 
   return (

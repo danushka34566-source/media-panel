@@ -50,6 +50,7 @@ export default function MediaPrevNextActions({
   className,
   hasAiTextGeneration,
   sortBy,
+  query,
   ...categories
 }: {
   photo?: Media
@@ -57,6 +58,7 @@ export default function MediaPrevNextActions({
   className?: string
   hasAiTextGeneration: boolean
   sortBy?: SortBy
+  query?: string
 } & MediaSetCategory) {
   const {
     canDelete,
@@ -112,7 +114,10 @@ export default function MediaPrevNextActions({
 
   const navigateToMediaEdit = useNavigateOrRunActionWithToast({
     pathOrAction: photo
-      ? pathForAdminMediaEdit(photo, pathname)
+      ? () => pathForAdminMediaEdit(
+        photo,
+        `${pathname}${window.location.search}`,
+      )
       : undefined,
     toastMessage: `Editing ${photoTitle} ...`,
   });
@@ -150,11 +155,11 @@ export default function MediaPrevNextActions({
   const nextMedia = photo ? getNextMedia(photo, photos) : undefined;
 
   const pathPrevious = previousMedia
-    ? pathForMedia({ photo: previousMedia, sortBy, ...categories })
+    ? pathForMedia({ photo: previousMedia, sortBy, query, ...categories })
     : undefined;
 
   const pathNext = nextMedia
-    ? pathForMedia({ photo: nextMedia, sortBy, ...categories })
+    ? pathForMedia({ photo: nextMedia, sortBy, query, ...categories })
     : undefined;
 
   const onKeyDown = useCallback((e: KeyboardEvent) => {
@@ -274,6 +279,7 @@ export default function MediaPrevNextActions({
           <MediaLink
             {...categories}
             sortBy={sortBy}
+            query={query}
             ref={refPrevious}
             photo={previousMedia}
             nextMediaAnimation={ANIMATION_RIGHT}
@@ -303,6 +309,7 @@ export default function MediaPrevNextActions({
           <MediaLink
             {...categories}
             sortBy={sortBy}
+            query={query}
             ref={refNext}
             photo={nextMedia}
             nextMediaAnimation={ANIMATION_LEFT}

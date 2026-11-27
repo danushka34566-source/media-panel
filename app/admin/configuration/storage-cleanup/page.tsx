@@ -10,6 +10,6 @@ export const dynamic = 'force-dynamic';
 export default async function StorageCleanupPage() {
   const session = await auth();
   if (!hasCapability(session?.user?.role, 'manage-configuration')) notFound();
-  const snapshot = await getStorageCleanupSnapshot();
+  const snapshot = await getStorageCleanupSnapshot().catch(() => undefined);
   return <AdminInfoPage><StorageCleanupClient initial={snapshot} /></AdminInfoPage>;
 }

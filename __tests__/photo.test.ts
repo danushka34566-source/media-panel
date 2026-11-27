@@ -1,3 +1,10 @@
+// This suite exercises URL/description helpers, not DB row conversion. Keep
+// the incidental ESM-only dependency out of Jest's CommonJS module loader.
+jest.mock('camelcase-keys', () => ({
+  __esModule: true,
+  default: (value: unknown) => value,
+}));
+
 import {
   descriptionForMedia,
   downloadFileNameForMedia,

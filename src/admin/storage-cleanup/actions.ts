@@ -2,12 +2,14 @@
 
 import { query } from '@/platforms/postgres';
 import {
-  deleteFile,
   getCurrentStorageInventoryPage,
   getFileNamePartsFromStorageUrl,
+  getStorageKeyFromUrl,
+  storageTypeFromUrl,
   type StorageListItem,
 } from '@/platforms/storage';
 import { runAuthenticatedAdminServerAction } from '@/auth/server';
+import { mapWithConcurrency } from '@/utility/concurrency';
 
 type MediaRow = {
   id: string
@@ -56,13 +58,30 @@ export type StorageCleanupSnapshot = {
   errors: string[]
   nextCursor?: string
   scannedObjects: number
+  deletionUnavailableReason: string
 };
+
+// The Drive gateway and Cloudflare R2 delete by key. A listing or HEAD check
+// can become stale before either provider executes that delete.
+const DELETION_UNAVAILABLE = 'The storage provider cannot verify the object ' +
+  'version during deletion. This audit is read-only.';
 
 const keyFromUrl = (url: string) => {
   try {
-    return getFileNamePartsFromStorageUrl(url).fileName;
+    return getStorageKeyFromUrl(url);
   } catch {
-    return '';
+    return getFileNamePartsFromStorageUrl(url).fileName;
+  }
+};
+
+const matchesStoredObject = (object: StorageListItem, storedUrl: string) => {
+  try {
+    const provider = storageTypeFromUrl(storedUrl);
+    return storageTypeFromUrl(object.url) === provider &&
+      getStorageKeyFromUrl(storedUrl, provider) === object.fileName &&
+      getStorageKeyFromUrl(object.url, provider) === object.fileName;
+  } catch {
+    return false;
   }
 };
 
@@ -75,31 +94,82 @@ const normalized = (value: string) => value
 const safeQuery = async <T extends import('pg').QueryResultRow>(sql: string): Promise<T[]> =>
   (await query<T>(sql)).rows;
 
-const buildSnapshot = async (prefix = '', cursor?: string): Promise<StorageCleanupSnapshot> => {
+const readOptionalAuditRows = async <T extends import('pg').QueryResultRow>(
+  table: 'registered_upload_file_map' | 'worker_registration_status' |
+    'upload_registration_hints' | 'media_deletion_queue',
+  columns: string,
+) => {
+  try {
+    return { rows: await safeQuery<T>(`SELECT ${columns} FROM ${table}`) };
+  } catch (error) {
+    if (!error || typeof error !== 'object' || !('code' in error) ||
+        error.code !== '42P01') { throw error; }
+    return { rows: [] as T[], missingTable: table };
+  }
+};
+
+const hasConsistentCopyTimestamps = (
+  source: StorageListItem,
+  canonical: StorageListItem,
+  registeredAt: MapRow['updated_at'],
+) => {
+  if (!source.uploadedAt || !canonical.uploadedAt || !registeredAt) {
+    return false;
+  }
+  const sourceTime = source.uploadedAt.getTime();
+  const canonicalTime = canonical.uploadedAt.getTime();
+  const registrationTime = new Date(registeredAt).getTime();
+  return sourceTime <= canonicalTime && canonicalTime <= registrationTime;
+};
+
+const getStorageItemByKey = async (key: string) => {
+  const seenCursors = new Set<string>();
+  let cursor: string | undefined;
+  while (true) {
+    const page = await getCurrentStorageInventoryPage(key, cursor);
+    const item = page.objects.find(object => object.fileName === key);
+    cursor = page.nextContinuationToken;
+    if (item || !cursor) { return item; }
+    if (seenCursors.has(cursor)) {
+      throw new Error('The storage inventory repeated a continuation token.');
+    }
+    seenCursors.add(cursor);
+  }
+};
+
+const buildSnapshot = async (
+  cursor?: string,
+): Promise<StorageCleanupSnapshot> => {
   const [inventory, media, maps, statuses, hints, deletions] = await Promise.all([
-    getCurrentStorageInventoryPage(prefix, cursor, 250),
+    getCurrentStorageInventoryPage('', cursor),
     safeQuery<MediaRow>(`
       SELECT id, url, title, poster_url, preview_url, hls_manifest_url
       FROM media
     `),
-    safeQuery<MapRow>(`
-      SELECT media_id, original_file_name, stored_file_name,
-        stored_url, source_url, updated_at
-      FROM registered_upload_file_map
-    `),
-    safeQuery<{ url: string; source_url?: string | null; media_id?: string | null; title?: string | null }>(`
-      SELECT url, source_url, media_id, title
-      FROM worker_registration_status
-    `),
-    safeQuery<{ url: string; original_file_name?: string | null; title?: string | null }>(`
-      SELECT url, original_file_name, title
-      FROM upload_registration_hints
-    `),
-    safeQuery<{ urls?: unknown; prefixes?: unknown; media_id?: string | null; title?: string | null }>(`
-      SELECT urls, prefixes, media_id, title
-      FROM media_deletion_queue
-    `),
+    readOptionalAuditRows<MapRow>(
+      'registered_upload_file_map',
+      'media_id, original_file_name, stored_file_name, stored_url, source_url, updated_at',
+    ),
+    readOptionalAuditRows<{
+      url: string
+      source_url?: string | null
+      media_id?: string | null
+      title?: string | null
+    }>('worker_registration_status', 'url, source_url, media_id, title'),
+    readOptionalAuditRows<{
+      url: string
+      original_file_name?: string | null
+      title?: string | null
+    }>('upload_registration_hints', 'url, original_file_name, title'),
+    readOptionalAuditRows<{
+      urls?: unknown
+      prefixes?: unknown
+      media_id?: string | null
+      title?: string | null
+    }>('media_deletion_queue', 'urls, prefixes, media_id, title'),
   ]);
+  const missingTables = [maps, statuses, hints, deletions]
+    .flatMap(result => result.missingTable ? [result.missingTable] : []);
 
   const relations = new Map<string, Relation[]>();
   const add = (key: string, relation: Relation) => {
@@ -130,12 +200,12 @@ const buildSnapshot = async (prefix = '', cursor?: string): Promise<StorageClean
       liveDerivativePrefixes.push({ prefix: `${sourceBase}-`, media: row });
     }
   });
-  const mapBySource = new Map<string, MapRow>();
+  const mapBySource = new Map<string, MapRow | undefined>();
   const inventoryByKey = new Map(inventory.objects.map(object => [object.fileName, object]));
-  maps.forEach(row => {
+  maps.rows.forEach(row => {
     const sourceKey = keyFromUrl(row.source_url);
     const canonicalKey = keyFromUrl(row.stored_url);
-    mapBySource.set(sourceKey, row);
+    mapBySource.set(sourceKey, mapBySource.has(sourceKey) ? undefined : row);
     add(sourceKey, { kind: 'source', label: `registered source: ${row.original_file_name}`, mediaId: row.media_id });
     add(canonicalKey, { kind: 'canonical', label: `canonical file: ${row.stored_file_name}`, mediaId: row.media_id });
     const title = normalized(row.original_file_name);
@@ -146,11 +216,11 @@ const buildSnapshot = async (prefix = '', cursor?: string): Promise<StorageClean
       title: mediaRow.title || undefined,
     }));
   });
-  statuses.forEach(row => {
+  statuses.rows.forEach(row => {
     add(keyFromUrl(row.url), { kind: 'worker', label: `worker status${row.media_id ? ` for ${row.media_id}` : ''}`, mediaId: row.media_id || undefined, title: row.title || undefined });
     if (row.source_url) add(keyFromUrl(row.source_url), { kind: 'worker', label: 'worker source status', mediaId: row.media_id || undefined, title: row.title || undefined });
   });
-  hints.forEach(row => add(keyFromUrl(row.url), { kind: 'hint', label: 'upload registration hint', title: row.title || row.original_file_name || undefined }));
+  hints.rows.forEach(row => add(keyFromUrl(row.url), { kind: 'hint', label: 'upload registration hint', title: row.title || row.original_file_name || undefined }));
   const deletionPrefixes: Array<{ prefix: string; relation: Relation }> = [];
   const addJsonKeys = (value: unknown, relation: Relation, asPrefix = false) => {
     const values = Array.isArray(value) ? value : [];
@@ -162,13 +232,25 @@ const buildSnapshot = async (prefix = '', cursor?: string): Promise<StorageClean
       }
     });
   };
-  deletions.forEach(row => {
+  deletions.rows.forEach(row => {
     const relation = { kind: 'deletion' as const, label: `deletion queue${row.media_id ? ` for ${row.media_id}` : ''}`, mediaId: row.media_id || undefined, title: row.title || undefined };
     addJsonKeys(row.urls, relation);
     addJsonKeys(row.prefixes, relation, true);
   });
 
-  const items = inventory.objects.map((object: StorageListItem): StorageCleanupItem => {
+  const replacementLookups = new Map<string, Promise<StorageListItem | undefined>>();
+  let replacementLookupFailed = false;
+  const getReplacement = (key: string) => {
+    const existing = replacementLookups.get(key);
+    if (existing) { return existing; }
+    const lookup = getStorageItemByKey(key);
+    replacementLookups.set(key, lookup);
+    return lookup;
+  };
+
+  const items = await mapWithConcurrency(inventory.objects, 4, async (
+    object: StorageListItem,
+  ): Promise<StorageCleanupItem> => {
     const key = object.fileName;
     const itemRelations = [...(relations.get(key) || [])];
     deletionPrefixes.forEach(({ prefix, relation }) => {
@@ -192,14 +274,27 @@ const buildSnapshot = async (prefix = '', cursor?: string): Promise<StorageClean
     });
     const map = mapBySource.get(key);
     const canonicalKey = map ? keyFromUrl(map.stored_url) : undefined;
-    const canonical = canonicalKey ? inventoryByKey.get(canonicalKey) : undefined;
     const activeMedia = map?.media_id ? mediaById.get(map.media_id) : undefined;
-    const isSourceCleanup = Boolean(
-      map && canonical && canonicalKey !== key &&
+    let canonical: StorageListItem | undefined;
+    if (
+      missingTables.length === 0 && map && canonicalKey && canonicalKey !== key &&
       activeMedia?.url === map.stored_url &&
+      matchesStoredObject(object, map.source_url) &&
       itemRelations.every(relation => relation.kind === 'source' || relation.kind === 'title') &&
-      object.sizeBytes !== undefined && canonical.sizeBytes !== undefined &&
-      object.sizeBytes === canonical.sizeBytes,
+      object.sizeBytes !== undefined
+    ) {
+      try {
+        canonical = inventoryByKey.get(canonicalKey) ??
+          await getReplacement(canonicalKey);
+      } catch {
+        replacementLookupFailed = true;
+      }
+    }
+    const isSourceCleanup = Boolean(
+      map && canonical && matchesStoredObject(canonical, map.stored_url) &&
+      canonical.sizeBytes !== undefined &&
+      object.sizeBytes === canonical.sizeBytes &&
+      hasConsistentCopyTimestamps(object, canonical, map.updated_at),
     );
     const generated = /(?:-poster|-preview|-stream|-sm|-md|-lg|-hls(?:-|\.)|-segment-)/i.test(key);
     const classification = isSourceCleanup
@@ -217,56 +312,51 @@ const buildSnapshot = async (prefix = '', cursor?: string): Promise<StorageClean
       canonicalKey: isSourceCleanup ? canonicalKey : undefined,
       canonicalSizeBytes: isSourceCleanup ? canonical?.sizeBytes : undefined,
       classification,
-      canDelete: classification === 'source-cleanup',
+      canDelete: false,
       reason: isSourceCleanup
-        ? `Verified source replacement ${canonicalKey} exists with the same byte size.`
+        ? `Registered replacement ${canonicalKey} matches the source size and copy timestamps.`
         : itemRelations.length > 0
           ? 'Linked to database or registration data; deletion is blocked.'
           : generated
             ? 'Generated artifact has no current media reference.'
             : 'No database or registration relationship was found.'
     };
-  }).sort((a, b) => Number(b.canDelete) - Number(a.canDelete) || a.key.localeCompare(b.key));
+  });
+  items.sort((a, b) =>
+    Number(b.classification === 'source-cleanup') -
+    Number(a.classification === 'source-cleanup') || a.key.localeCompare(b.key));
 
   return {
     checkedAt: new Date().toISOString(),
     provider: inventory.provider,
     totalObjects: inventory.objects.length,
     items,
-    errors: [],
+    errors: [
+      ...(missingTables.length ? [
+        `Cleanup is unavailable while audit tables are missing: ${missingTables.join(', ')}.`,
+      ] : []),
+      ...(replacementLookupFailed ? [
+        'Unable to verify some storage replacements. Refresh the audit to try again.',
+      ] : []),
+    ],
     nextCursor: inventory.nextContinuationToken,
     scannedObjects: inventory.objects.length,
+    deletionUnavailableReason: DELETION_UNAVAILABLE,
   };
 };
 
 export const getStorageCleanupSnapshot = async (cursor?: string) =>
-  runAuthenticatedAdminServerAction(() => buildSnapshot('', cursor), 'manage-configuration');
+  runAuthenticatedAdminServerAction(() => buildSnapshot(cursor), 'manage-configuration');
 
-export const deleteStorageCleanupItem = async (key: string) =>
-  runAuthenticatedAdminServerAction(async () => {
-    const snapshot = await buildSnapshot(key);
-    const item = snapshot.items.find(candidate => candidate.key === key);
-    if (!item || !item.canDelete) {
-      throw new Error('This object is linked or could not be safely verified.');
-    }
-    await deleteFile(item.url);
-    return { deleted: key };
+export const deleteStorageCleanupItem = async (_key: string) =>
+  runAuthenticatedAdminServerAction(() => {
+    throw new Error(DELETION_UNAVAILABLE);
   }, 'manage-configuration');
 
 export const deleteStorageCleanupItems = async (keys: string[]) =>
-  runAuthenticatedAdminServerAction(async () => {
-    const uniqueKeys = Array.from(new Set(keys)).slice(0, 50);
-    const deleted: string[] = [];
-    const skipped: string[] = [];
-    for (const key of uniqueKeys) {
-      const snapshot = await buildSnapshot(key);
-      const item = snapshot.items.find(candidate => candidate.key === key);
-      if (!item || !item.canDelete) {
-        skipped.push(key);
-        continue;
-      }
-      await deleteFile(item.url);
-      deleted.push(key);
-    }
-    return { deleted, skipped };
-  }, 'manage-configuration');
+  runAuthenticatedAdminServerAction(() => ({
+    deleted: [],
+    skipped: Array.from(new Set(keys)).slice(0, 50),
+    failed: [],
+    reason: DELETION_UNAVAILABLE,
+  }), 'manage-configuration');

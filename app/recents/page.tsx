@@ -1,4 +1,4 @@
-import { INFINITE_SCROLL_GRID_INITIAL, Media } from '@/media';
+import { INFINITE_SCROLL_GRID_INITIAL } from '@/media';
 import { generateMetaForRecents } from '@/recents/meta';
 import RecentsOverview from '@/recents/RecentsOverview';
 import { getMediaRecentsDataCached } from '@/recents/data';
@@ -9,15 +9,16 @@ import { redirect } from 'next/navigation';
 import { getAppText } from '@/i18n/state/server';
 
 const getMediaRecentsDataCachedCached = cache(() =>
-  getMediaRecentsDataCached({ limit: INFINITE_SCROLL_GRID_INITIAL })
-    .catch(() => [[] as Media[], { count: 0, dateRange: undefined}] as const),
+  getMediaRecentsDataCached({ limit: INFINITE_SCROLL_GRID_INITIAL }),
 );
 
 export async function generateMetadata(): Promise<Metadata> {
+  const data = await getMediaRecentsDataCachedCached().catch(() => undefined);
+  if (!data) { return {}; }
   const [
     photos,
     { count, dateRange },
-  ] = await getMediaRecentsDataCachedCached();
+  ] = data;
   
   if (photos.length === 0) { return {}; }
   
@@ -62,4 +63,4 @@ export default async function RecentsPage() {
       dateRange,
     }} />
   );
-} 
+}

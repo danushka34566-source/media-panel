@@ -5,7 +5,7 @@ import { deleteMediaPerformerGloballyFormAction } from '@/media/actions';
 import { pathForAdminPerformerEdit } from '@/app/path';
 
 export default async function AdminPerformersPage() {
-  const performers = await getUniquePerformersWithMeta().catch(() => []);
+  const performers = await getUniquePerformersWithMeta();
 
   return (
     <AppGrid

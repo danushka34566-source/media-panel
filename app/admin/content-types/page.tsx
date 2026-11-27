@@ -5,7 +5,7 @@ import { deleteMediaContentTypeGloballyFormAction } from '@/media/actions';
 import { pathForAdminContentTypeEdit } from '@/app/path';
 
 export default async function AdminContentTypesPage() {
-  const contentTypes = await getUniqueVideoContentTypesWithMeta().catch(() => []);
+  const contentTypes = await getUniqueVideoContentTypesWithMeta();
 
   return (
     <AppGrid

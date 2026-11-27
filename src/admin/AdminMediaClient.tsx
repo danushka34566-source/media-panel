@@ -14,6 +14,9 @@ import ResponsiveText from '@/components/primitives/ResponsiveText';
 import { useAppText } from '@/i18n/state/client';
 import SyncColorButton from '@/media/color/SyncColorButton';
 import AdminPagination from './AdminPagination';
+import ErrorNote from '@/components/ErrorNote';
+import { useRouter } from 'next/navigation';
+import { useTransition } from 'react';
 
 const pathForAdminMediaPage = (pageNumber: number) =>
   pageNumber <= 1
@@ -30,9 +33,9 @@ export default function AdminMediaClient({
   timezone,
   debugColorData,
 }: {
-  photos: Media[]
-  photosCount: number
-  photosCountNeedsSync: number
+  photos: Media[] | undefined
+  photosCount: number | undefined
+  photosCountNeedsSync: number | undefined
   hasAiTextGeneration: boolean
   pageNumber: number
   pageSize: number
@@ -40,18 +43,27 @@ export default function AdminMediaClient({
   debugColorData?: boolean
 }) {
   const { uploadState: { isUploading } } = useAppState();
-
   const appText = useAppText();
+  const router = useRouter();
+  const [isRefreshing, startRefresh] = useTransition();
+  const hasUpdates =
+    photosCountNeedsSync !== undefined && photosCountNeedsSync > 0;
+  const loadError = photos === undefined
+    ? 'Unable to load the media list.'
+    : [
+      photosCount === undefined && 'Media total unavailable.',
+      photosCountNeedsSync === undefined && 'Update count unavailable.',
+    ].filter(Boolean).join(' ');
 
   return (
     <AppGrid
       contentMain={
         <div className="space-y-4">
-          {(debugColorData || photosCountNeedsSync > 0) &&
+          {(debugColorData || hasUpdates) &&
           <div className="flex justify-end gap-4">
             {debugColorData &&
               <SyncColorButton />}
-            {photosCountNeedsSync > 0 &&
+            {hasUpdates &&
               <PathLoaderButton
                 path={PATH_ADMIN_MEDIA_UPDATES}
                 icon={<IconBroom
@@ -86,21 +98,32 @@ export default function AdminMediaClient({
                 </ResponsiveText>
               </PathLoaderButton>}
           </div>}
+          {loadError && <ErrorNote>
+            {loadError}{' '}
+            <button
+              type="button"
+              className="underline underline-offset-3"
+              disabled={isRefreshing}
+              onClick={() => startRefresh(() => router.refresh())}
+            >
+              {isRefreshing ? 'Retrying…' : 'Try again'}
+            </button>
+          </ErrorNote>}
           {/* Use custom spacing to address gap/space-y compatibility quirks */}
-          <div className="space-y-[6px] sm:space-y-[10px]">
+          {photos && <div className="space-y-[6px] sm:space-y-[10px]">
             <AdminMediaTable
               photos={photos}
               hasAiTextGeneration={hasAiTextGeneration}
               timezone={timezone}
               debugColorData={debugColorData}
             />
-            <AdminPagination
+            {photosCount !== undefined && <AdminPagination
               page={pageNumber}
               pageSize={pageSize}
               total={photosCount}
               hrefForPage={pathForAdminMediaPage}
-            />
-          </div>
+            />}
+          </div>}
         </div>}
     />
   );

@@ -15,6 +15,7 @@ export default function SriLankaMobileInput({
   label = 'Mobile number',
   className,
   required,
+  readOnly,
 }: {
   value?: string
   defaultValue?: string
@@ -23,6 +24,7 @@ export default function SriLankaMobileInput({
   label?: string
   className?: string
   required?: boolean
+  readOnly?: boolean
 }) {
   const isControlled = value !== undefined;
 
@@ -46,9 +48,10 @@ export default function SriLankaMobileInput({
           inputMode="numeric"
           autoComplete="tel-national"
           pattern="[0-9]{9}"
-          maxLength={9}
+          maxLength={isControlled ? undefined : 9}
           placeholder="7XXXXXXXX"
           required={required}
+          readOnly={readOnly}
           {...isControlled
             ? { value: sriLankaMobileDigits(value) }
             : { defaultValue: sriLankaMobileDigits(defaultValue) }}

@@ -4,21 +4,26 @@ import { PATH_ADMIN, PATH_ROOT, PATH_SIGN_IN } from '@/app/path';
 import { redirect } from 'next/navigation';
 import AuthPageShell from '@/auth/AuthPageShell';
 import { findUserById } from '@/auth/users';
-import type { TwoFactorMethod } from '@/auth';
+import { KEY_CALLBACK_URL, type TwoFactorMethod } from '@/auth';
+import { getAuthCallbackPath, pathForAuthCallback } from '@/auth/redirects';
 
-export default async function VerifyLoginPage() {
+export default async function VerifyLoginPage({
+  searchParams,
+}: {
+  searchParams: Promise<Record<string, string | string[] | undefined>>
+}) {
+  const callbackUrl = getAuthCallbackPath((await searchParams)[KEY_CALLBACK_URL]);
   const session = await auth();
 
   if (!session?.user?.id || session.user.status !== 'active') {
-    redirect(PATH_SIGN_IN);
+    redirect(pathForAuthCallback(PATH_SIGN_IN, callbackUrl));
   }
 
   if (!session.user.twoFactorPending) {
-    redirect(
-      session.user.role === 'admin' || session.user.role === 'superadmin'
-        ? PATH_ADMIN
-        : PATH_ROOT,
-    );
+    const fallback = session.user.role === 'admin' || session.user.role === 'superadmin'
+      ? PATH_ADMIN
+      : PATH_ROOT;
+    redirect(callbackUrl ?? fallback);
   }
 
   const user = session.user.id
@@ -38,6 +43,7 @@ export default async function VerifyLoginPage() {
       <CompleteSignInVerificationForm
         defaultMethod={defaultMethod}
         availableMethods={availableMethods}
+        callbackUrl={callbackUrl}
       />
     </AuthPageShell>
   );

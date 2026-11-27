@@ -4,16 +4,37 @@
  * independently before deciding that the detail route is unavailable.
  * A failed primary read must reject so the route can show its retry UI.
  */
-export const resolveDetailPrimary = async <T extends { id: string }>(
+export const resolveDetailPrimary = async <T extends { id: string, hidden?: boolean }>(
   photoId: string,
   nearbyPhotos: T[],
-  loadPrimary: () => Promise<T | undefined>,
+  loadPrimary: (includeHidden: boolean) => Promise<T | undefined>,
+  {
+    hidden = 'exclude',
+    shouldRefresh,
+  }: {
+    hidden?: 'exclude' | 'only' | 'include'
+    shouldRefresh?: (photo: T) => boolean
+  } = {},
 ) => {
   const nearbyPhoto = nearbyPhotos.find(photo => photo.id === photoId);
-  if (nearbyPhoto) {
+  if (nearbyPhoto && !shouldRefresh?.(nearbyPhoto)) {
     return { photo: nearbyPhoto, photos: nearbyPhotos };
   }
-  const photo = await loadPrimary();
+  const freshPhoto = await loadPrimary(hidden !== 'exclude').catch(error => {
+    if (nearbyPhoto) { return nearbyPhoto; }
+    throw error;
+  });
+  const photo = freshPhoto && (
+    hidden === 'include' || Boolean(freshPhoto.hidden) === (hidden === 'only')
+  ) ? freshPhoto : undefined;
+  if (nearbyPhoto) {
+    return {
+      photo,
+      photos: photo
+        ? nearbyPhotos.map(item => item.id === photoId ? photo : item)
+        : nearbyPhotos.filter(item => item.id !== photoId),
+    };
+  }
   return {
     photo,
     // Neighbours from a filtered set are not valid for an item that has

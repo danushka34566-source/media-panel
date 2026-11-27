@@ -4,14 +4,19 @@ import useSwrInfinite from 'swr/infinite';
 import { ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import AppGrid from '@/components/AppGrid';
 import Spinner from '@/components/Spinner';
-import { getMediaCachedAction, getMediaAction } from '@/media/actions';
+import { getMediaPageAction } from '@/media/actions';
 import { Media } from '.';
+import type { MediaPage } from './query';
 import { MediaSetCategory } from '../category';
 import { clsx } from 'clsx/lite';
 import useVisibility from '@/utility/useVisibility';
 import { SortBy } from './sort';
 import { SWR_KEYS } from '@/swr';
 import { useAppText } from '@/i18n/state/client';
+import {
+  hasMediaScrollAnchor,
+  useMediaFeedRestorationAnchor,
+} from './useMediaScrollRestoration';
 
 const SIZE_KEY_SEPARATOR = '__';
 const getSizeFromKey = (key: string) =>
@@ -21,9 +26,9 @@ const getSizeFromKey = (key: string) =>
 // saved page count alone makes SWR rebuild each page before the clicked card
 // exists, so scroll restoration visibly advances through the feed.
 const MAX_REMEMBERED_FEEDS = 8;
-const rememberedFeedPages = new Map<string, Media[][]>();
+const rememberedFeedPages = new Map<string, MediaPage[]>();
 
-const rememberFeedPages = (key: string, pages: Media[][]) => {
+const rememberFeedPages = (key: string, pages: MediaPage[]) => {
   if (pages.length === 0) { return; }
   rememberedFeedPages.delete(key);
   rememberedFeedPages.set(key, pages);
@@ -113,34 +118,39 @@ export default function InfiniteMediaScroll({
   const { utility } = useAppText();
 
   const keyGenerator = useCallback(
-    (size: number, prev: Media[]) => {
-      if (!hasStartedLoading || (prev && prev.length === 0)) { return null; }
+    (size: number, prev: MediaPage | null) => {
+      if (!hasStartedLoading || (prev && !prev.hasMore)) { return null; }
       return `${SWR_KEYS.INFINITE_MEDIA_SCROLL}-${feedKey}${SIZE_KEY_SEPARATOR}${size}`;
     }, [feedKey, hasStartedLoading]);
 
-  const fetcher = useCallback((
-    keyWithSize: string,
-    warmOnly?: boolean,
-  ) =>
-    (useCachedMedia ? getMediaCachedAction : getMediaAction)({
-      offset: initialOffset + getSizeFromKey(keyWithSize) * itemsPerPage,
-      sortBy, 
-      sortWithPriority,
-      excludeFromFeeds,
-      query,
-      excludeIds,
-      limit: itemsPerPage,
-      hidden: includeHiddenMedia ? 'include' : 'exclude',
-      includeMissingStorageStatus,
-      album, category, contentType, performer, recent, studio, year,
-      camera,
-      lens,
-      tag,
-      recipe,
-      film,
-      focal,
-    }, warmOnly)
-  , [
+  const fetcher = useCallback(async (keyWithSize: string) => {
+    const pageIndex = getSizeFromKey(keyWithSize);
+    try {
+      const page = await getMediaPageAction({
+        offset: initialOffset + pageIndex * itemsPerPage,
+        sortBy,
+        sortWithPriority,
+        excludeFromFeeds,
+        query,
+        excludeIds,
+        limit: itemsPerPage,
+        hidden: includeHiddenMedia ? 'include' : 'exclude',
+        includeMissingStorageStatus,
+        album, category, contentType, performer, recent, studio, year,
+        camera,
+        lens,
+        tag,
+        recipe,
+        film,
+        focal,
+      }, useCachedMedia);
+      failedPageIndicesRef.current.delete(pageIndex);
+      return page;
+    } catch (error) {
+      failedPageIndicesRef.current.add(pageIndex);
+      throw error;
+    }
+  }, [
     useCachedMedia,
     sortBy,
     sortWithPriority,
@@ -161,7 +171,7 @@ export default function InfiniteMediaScroll({
   ]);
 
   const { data, isLoading, isValidating, error, mutate, setSize } =
-    useSwrInfinite<Media[]>(
+    useSwrInfinite<MediaPage>(
       keyGenerator,
       fetcher,
       {
@@ -185,7 +195,9 @@ export default function InfiniteMediaScroll({
   const buttonContainerRef = useRef<HTMLDivElement>(null);
   const loadingPageRef = useRef(false);
   const queuedAdvanceRef = useRef(false);
+  const failedPageIndicesRef = useRef(new Set<number>());
   const [isMoreButtonVisible, setIsMoreButtonVisible] = useState(false);
+  const restorationAnchor = useMediaFeedRestorationAnchor(cacheKey);
   
   const isLoadingOrValidating = isLoading || isValidating;
   const loadAheadPx = typeof window === 'undefined'
@@ -193,21 +205,24 @@ export default function InfiniteMediaScroll({
     : Math.max(800, window.innerHeight * loadAheadViewports);
 
   const pages = useMemo(
-    () => (data ?? []).filter((page): page is Media[] => Array.isArray(page)),
+    () => (data ?? []).filter((page): page is MediaPage => Boolean(page)),
     [data],
   );
 
   useEffect(() => {
     if (restoreCachedPagesOnRemount && pages.length > 0) {
-      rememberFeedPages(feedKey, pages.map(page => [...page]));
+      rememberFeedPages(feedKey, pages.map(page => ({
+        ...page, photos: [...page.photos],
+      })));
     }
   }, [pages, restoreCachedPagesOnRemount, feedKey]);
 
   const renderedPages = useMemo(() => {
-    const seenIds = new Set<string>();
-    return pages.map(page => page.filter(photo => {
-      if (seenIds.has(photo.id)) { return false; }
-      seenIds.add(photo.id);
+    const seenStorageUrls = new Set<string>();
+    return pages.map(({ photos }) => photos.filter(photo => {
+      const storageUrl = photo.url.toLowerCase();
+      if (seenStorageUrls.has(storageUrl)) { return false; }
+      seenStorageUrls.add(storageUrl);
       return true;
     }));
   }, [pages]);
@@ -217,9 +232,13 @@ export default function InfiniteMediaScroll({
     : renderedPages,
   [coalescePages, renderedPages]);
 
-  const isFinished = useMemo(() =>
-    Boolean(pages.length > 0 && pages[pages.length - 1]!.length < itemsPerPage),
-  [pages, itemsPerPage]);
+  const isFinished = pages.at(-1)?.hasMore === false;
+  useEffect(() => {
+    if (!isFinished || error || isLoadingOrValidating) { return; }
+    window.dispatchEvent(new CustomEvent('media-feed-exhausted', {
+      detail: { cacheKey, feedKey, href: window.location.href },
+    }));
+  }, [cacheKey, feedKey, error, isFinished, isLoadingOrValidating]);
 
   const advance = useCallback(() => {
     if (
@@ -248,20 +267,22 @@ export default function InfiniteMediaScroll({
   }, [advance, error, isFinished, isLoadingOrValidating]);
 
   const retryFailedPage = useCallback(() => {
+    if (loadingPageRef.current) { return; }
     loadingPageRef.current = true;
     Promise.resolve(mutate(undefined, {
-      revalidate: (_page: Media[] | undefined, key: string) =>
-        getSizeFromKey(String(key)) === pages.length - 1,
-    } as any)).catch(() => undefined);
-  }, [mutate, pages.length]);
+      populateCache: false,
+      revalidate: (_page, key) =>
+        failedPageIndicesRef.current.has(getSizeFromKey(String(key))),
+    })).catch(() => undefined);
+  }, [mutate]);
 
   const revalidateMedia: RevalidateMedia = useCallback((
     photoId: string,
     revalidateRemainingMedia?: boolean,
   ) => mutate(data, {
-    revalidate: (_data: Media[], key: string) => {
-      const i = (data ?? []).findIndex(photos =>
-        photos.some(photo => photo.id === photoId));
+    revalidate: (_page: MediaPage | undefined, key: string) => {
+      const i = (data ?? []).findIndex(page =>
+        page?.photos.some(photo => photo.id === photoId));
       const size = getSizeFromKey(String(key));
       return revalidateRemainingMedia ? size >= i : size === i;
     },
@@ -283,22 +304,45 @@ export default function InfiniteMediaScroll({
     }
   }, [advance, isFinished, isMoreButtonVisible]);
 
+  useEffect(() => {
+    if (!restorationAnchor || error || isFinished || isLoadingOrValidating ||
+      hasMediaScrollAnchor(restorationAnchor)) { return; }
+    if (!hasStartedLoading) {
+      // Keep the feed loaded after the external anchor request is fulfilled.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setHasStartedLoading(true);
+    } else if (pages.length > 0 && !loadingPageRef.current) {
+      advance();
+    }
+  }, [
+    advance, error, hasStartedLoading, isFinished, isLoadingOrValidating,
+    pages.length, restorationAnchor,
+  ]);
+
   const renderMoreButton =
     <div ref={buttonContainerRef}>
       <button
         type="button"
-        onClick={() => error ? retryFailedPage() : advance()}
-        disabled={isLoading || isValidating}
+        onClick={() => {
+          if (!hasStartedLoading) {
+            setHasStartedLoading(true);
+          } else if (error) {
+            retryFailedPage();
+          } else {
+            advance();
+          }
+        }}
+        disabled={isLoadingOrValidating}
+        aria-busy={isLoadingOrValidating}
+        aria-label={isLoadingOrValidating ? utility.loadMore : undefined}
         className={clsx(
           'w-full flex justify-center',
           isLoadingOrValidating && 'subtle',
         )}
       >
-        {error
-          ? utility.tryAgain
-          : isLoadingOrValidating
-            ? <Spinner size={20} />
-            : utility.loadMore}
+        {isLoadingOrValidating
+          ? <Spinner size={20} />
+          : error ? utility.tryAgain : utility.loadMore}
       </button>
     </div>;
 

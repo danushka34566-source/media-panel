@@ -15,6 +15,7 @@ import SelectMenu from './SelectMenu';
 
 export default function FieldsetWithStatus({
   id: _id,
+  name,
   label,
   icon,
   note,
@@ -55,6 +56,7 @@ export default function FieldsetWithStatus({
   maxLength,
 }: {
   id?: string
+  name?: string
   label: string
   icon?: ReactNode
   note?: string
@@ -106,7 +108,7 @@ export default function FieldsetWithStatus({
 
   const inputProps: InputHTMLAttributes<HTMLInputElement> = {
     id,
-    name: id,
+    name: name ?? id,
     type,
     value,
     checked: type === 'checkbox'
@@ -208,7 +210,7 @@ export default function FieldsetWithStatus({
           {selectOptions
             ? <SelectMenu
               id={id}
-              name={id}
+              name={name ?? id}
               tabIndex={tabIndex}
               className="w-full"
               value={value}
@@ -221,7 +223,7 @@ export default function FieldsetWithStatus({
             : tagOptions
               ? <TagInput
                 id={id}
-                name={id}
+                name={name ?? id}
                 value={value}
                 options={tagOptions}
                 labelForValueOverride={tagOptionsLabelOverride}
@@ -242,7 +244,7 @@ export default function FieldsetWithStatus({
               : type === 'textarea'
                 ? <textarea
                   id={id}
-                  name={id}
+                  name={name ?? id}
                   value={value}
                   placeholder={placeholder}
                   onChange={e => onChange?.(e.target.value)}

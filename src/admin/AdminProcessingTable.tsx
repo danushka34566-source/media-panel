@@ -17,6 +17,7 @@ import { Fragment, useEffect, useRef, useTransition } from 'react';
 import AdminPagination from './AdminPagination';
 import { pathForProcessingPage } from './processing/path';
 import { useRouter } from 'next/navigation';
+import ErrorNote from '@/components/ErrorNote';
 
 const PROCESSING_PAGE_SIZE = 15;
 export type RegistrationItem = {
@@ -311,21 +312,30 @@ export default function AdminProcessingTable({
   registering,
   registeringTotal,
   registrationPage,
+  registrationError,
   processing,
   processingTotal,
   processingPage,
+  processingError,
 }: {
   registering: RegistrationItem[]
   registeringTotal: number
   registrationPage: number
+  registrationError: boolean
   processing: Media[]
   processingTotal: number
   processingPage: number
+  processingError: boolean
 }) {
   const router = useRouter();
   const [isRefreshing, startRefresh] = useTransition();
   const refreshInFlight = useRef(false);
   const hasRegisteringItems = registeringTotal > 0;
+  const retry = () => {
+    if (refreshInFlight.current) { return; }
+    refreshInFlight.current = true;
+    startRefresh(() => router.refresh());
+  };
 
   useEffect(() => {
     if (!isRefreshing) { refreshInFlight.current = false; }
@@ -348,28 +358,52 @@ export default function AdminProcessingTable({
 
   return (
     <div className="space-y-4">
-      {hasRegisteringItems && <>
+      {(hasRegisteringItems || registrationError) && <>
         <div className="px-0.5 text-[10px] uppercase tracking-wide text-dim">
           Registering
         </div>
-        <RegisteringTable
-          items={registering}
-          total={registeringTotal}
-          page={registrationPage}
-          hrefForPage={page => pathForProcessingPage(page, processingPage)}
-        />
+        {registrationError
+          ? <ErrorNote>
+            Unable to load pending uploads.{' '}
+            <button
+              type="button"
+              className="underline underline-offset-3"
+              disabled={isRefreshing}
+              onClick={retry}
+            >
+              Try again
+            </button>
+          </ErrorNote>
+          : <RegisteringTable
+            items={registering}
+            total={registeringTotal}
+            page={registrationPage}
+            hrefForPage={page => pathForProcessingPage(page, processingPage)}
+          />}
         <div className="h-px w-full bg-medium" />
       </>}
 
       <div className="px-0.5 text-[10px] uppercase tracking-wide text-dim">
         Processing
       </div>
-      <ProcessingTable
-        items={processing}
-        total={processingTotal}
-        page={processingPage}
-        hrefForPage={page => pathForProcessingPage(registrationPage, page)}
-      />
+      {processingError
+        ? <ErrorNote>
+          Unable to load media processing.{' '}
+          <button
+            type="button"
+            className="underline underline-offset-3"
+            disabled={isRefreshing}
+            onClick={retry}
+          >
+            Try again
+          </button>
+        </ErrorNote>
+        : <ProcessingTable
+          items={processing}
+          total={processingTotal}
+          page={processingPage}
+          hrefForPage={page => pathForProcessingPage(registrationPage, page)}
+        />}
     </div>
   );
 }

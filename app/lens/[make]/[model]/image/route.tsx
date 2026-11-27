@@ -8,7 +8,7 @@ import { ImageResponse } from 'next/og';
 import { getImageResponseCacheControlHeaders } from '@/image-response/cache';
 import { getUniqueLenses } from '@/media/query';
 import {
-  getLensFromParams,
+  lensFromRouteSegments,
   LensProps,
   safelyGenerateLensStaticParams,
 } from '@/lens';
@@ -27,7 +27,7 @@ export async function GET(
   _: Request,
   context: LensProps,
 ) {
-  const lens = await getLensFromParams(context.params);
+  const lens = lensFromRouteSegments(await context.params);
 
   const [
     photos,

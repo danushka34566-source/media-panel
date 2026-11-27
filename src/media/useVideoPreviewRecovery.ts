@@ -83,11 +83,11 @@ export default function useVideoPreviewRecovery({
       onFatalErrorRef.current?.();
       return;
     }
-    retryCountRef.current += 1;
     retryTimerRef.current = window.setTimeout(() => {
       retryTimerRef.current = undefined;
       const video = videoRef.current;
       if (!video || !canRecover() || document.hidden) { return; }
+      retryCountRef.current += 1;
       // A media error leaves the element in a failed state until load() is
       // called. Calling it only on recovery attempts avoids needless reloads
       // during normal buffering.
@@ -191,11 +191,20 @@ export default function useVideoPreviewRecovery({
 
   return {
     onLoadStart: () => armDecodeWatchdog(),
+    onProgress: () => {
+      const video = videoRef.current;
+      if (video && video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) {
+        if (!video.error) { clearRetryTimer(); }
+        armDecodeWatchdog();
+      }
+    },
     onCanPlay: () => {
+      clearRetryTimer();
       clearDecodeWatchdog();
       playWithRetry();
     },
     onLoadedData: (forcePlay = false) => {
+      clearRetryTimer();
       clearDecodeWatchdog();
       playWithRetry(false, forcePlay);
     },
@@ -204,7 +213,14 @@ export default function useVideoPreviewRecovery({
       clearRetryTimer();
       clearDecodeWatchdog();
     },
-    onStalled: () => scheduleRetry(false),
+    onStalled: () => {
+      // The browser reports a stall before slower connections necessarily
+      // need a reload. Give the existing startup watchdog its full window.
+      if (activeRef.current &&
+        (videoRef.current?.readyState ?? 0) >= HTMLMediaElement.HAVE_CURRENT_DATA) {
+        scheduleRetry();
+      }
+    },
     onError: () => scheduleRetry(true),
     retryNow: () => playWithRetry(true),
   };

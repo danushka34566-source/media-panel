@@ -14,17 +14,20 @@ const headers = {
   'X-Goog-Api-Key': GOOGLE_PLACES_API_KEY ?? '',
 };
 
-export const getPlaceAutocomplete = async (
-  input: string,
-): Promise<PlaceAutocomplete[]> => {
-  await checkRateLimitAndThrow();
-  return fetch(
+const fetchPlaceAutocomplete = (input: string) =>
+  fetch(
     `${URL_BASE}:autocomplete`, {
       method: 'POST',
       body: JSON.stringify({ input }),
       headers,
     },
-  )
+  );
+
+export const getPlaceAutocomplete = async (
+  input: string,
+): Promise<PlaceAutocomplete[]> => {
+  await checkRateLimitAndThrow();
+  return fetchPlaceAutocomplete(input)
     .then(response => response.json())
     .then(json => (json?.suggestions ?? []).map(({ placePrediction }: any) => ({
       id: placePrediction?.placeId,
@@ -63,6 +66,9 @@ export const getPlaceDetails = async (id: string): Promise<Place> => {
 
 export const testGooglePlacesConnection = async () => {
   await checkRateLimitAndThrow();
-
-  return getPlaceAutocomplete('Test');
+  const response = await fetchPlaceAutocomplete('Test');
+  if (!response.ok) {
+    throw new Error(`Request failed with HTTP ${response.status}.`);
+  }
+  await response.json();
 };

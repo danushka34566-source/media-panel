@@ -21,20 +21,17 @@ import {
 } from '@/media/storage';
 import { getAlbumsWithMeta, getAlbumTitlesForMedia } from '@/album/query';
 import { isVideoMedia } from '@/media';
+import { getLocalPagePath } from '@/utility/url';
 
 export default async function MediaEditPage({
   params,
   searchParams,
 }: {
   params: Promise<{ photoId: string }>
-  searchParams: Promise<{ returnTo?: string }>
+  searchParams: Promise<{ returnTo?: string | string[] }>
 }) {
   const { photoId } = await params;
-  const requestedReturnTo = (await searchParams).returnTo;
-  const returnTo = requestedReturnTo?.startsWith('/') &&
-    !requestedReturnTo.startsWith('//')
-    ? requestedReturnTo
-    : undefined;
+  const returnTo = getLocalPagePath((await searchParams).returnTo);
 
   const [
     photo,

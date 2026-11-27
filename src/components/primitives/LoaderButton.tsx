@@ -60,11 +60,21 @@ export default function LoaderButton({
       onClick={async e => {
         if (shouldPreventDefault) { e.preventDefault(); }
         if (confirmText) {
+          const button = e.currentTarget;
+          const form = type === 'submit' && !e.defaultPrevented
+            ? button.form
+            : null;
+          if (form) { e.preventDefault(); }
           const didConfirm = await confirmDialog?.({
             description: confirmText,
             tone: 'danger',
           });
           if (!didConfirm) { return; }
+          onClick?.(e);
+          if (form && button.form === form && !button.disabled) {
+            form.requestSubmit(button);
+          }
+          return;
         }
         onClick?.(e);
       }}

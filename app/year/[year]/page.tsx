@@ -7,6 +7,7 @@ import { Metadata } from 'next/types';
 import { cache } from 'react';
 import { PATH_ROOT } from '@/app/path';
 import { redirect } from 'next/navigation';
+import { isValidMediaYear } from '@/year';
 import { staticallyGenerateCategoryIfConfigured } from '@/app/static';
 import { getAppText } from '@/i18n/state/server';
 
@@ -29,6 +30,7 @@ export async function generateMetadata({
   params,
 }: YearProps): Promise<Metadata> {
   const { year } = await params;
+  if (!isValidMediaYear(year)) { return {}; }
 
   const [
     photos,
@@ -67,6 +69,7 @@ export default async function YearPage({
   params,
 }: YearProps) {
   const { year } = await params;
+  if (!isValidMediaYear(year)) { redirect(PATH_ROOT); }
 
   const [
     photos,

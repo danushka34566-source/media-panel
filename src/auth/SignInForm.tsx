@@ -20,12 +20,14 @@ import Note from '@/components/Note';
 import {
   KEY_CALLBACK_URL,
   KEY_2FA_CODE_SENT,
+  KEY_2FA_CODE_AVAILABLE,
   KEY_CREDENTIALS_SIGN_IN_ERROR,
   KEY_CREDENTIALS_SUCCESS,
   parseTwoFactorResponse,
   type TwoFactorMethod,
 } from '.';
 import { useSearchParams } from 'next/navigation';
+import { getAuthCallbackPath } from './redirects';
 import { useAppState } from '@/app/AppState';
 import { clsx } from 'clsx/lite';
 import { PATH_ROOT } from '@/app/path';
@@ -52,6 +54,7 @@ export default function SignInForm({
   className?: string
 }) {
   const params = useSearchParams();
+  const callbackPath = getAuthCallbackPath(params.get(KEY_CALLBACK_URL)) ?? PATH_ROOT;
 
   const { setUserEmail } = useAppState();
 
@@ -64,10 +67,11 @@ export default function SignInForm({
     useState<ReturnType<typeof parseTwoFactorResponse>>();
   const [selectedTwoFactorMethod, setSelectedTwoFactorMethod] =
     useState<TwoFactorMethod>();
-  const [response, action] = useActionState(signInAction, undefined);
+  const [response, action, isActionPending] = useActionState(signInAction, undefined);
 
   const emailRef = useRef<HTMLInputElement>(null);
   const twoFactorCodeRef = useRef<HTMLInputElement>(null);
+  const resendRequestedRef = useRef(false);
   useEffect(() => {
     const timeout = setTimeout(() => emailRef.current?.focus(), 100);
     return () => clearTimeout(timeout);
@@ -84,9 +88,11 @@ export default function SignInForm({
     [response],
   );
   const twoFactorState = latestTwoFactorChallenge ?? twoFactorChallenge;
-  const twoFactorMethod: TwoFactorMethod =
-    selectedTwoFactorMethod ?? twoFactorState?.preferred ?? 'email';
   const twoFactorMethods = twoFactorState?.available ?? [];
+  const twoFactorMethod = selectedTwoFactorMethod &&
+    twoFactorMethods.includes(selectedTwoFactorMethod)
+    ? selectedTwoFactorMethod
+    : twoFactorState?.preferred ?? 'email';
 
   useEffect(() => {
     if (latestTwoFactorChallenge) {
@@ -95,6 +101,17 @@ export default function SignInForm({
       setTwoFactorChallenge(latestTwoFactorChallenge);
     }
   }, [latestTwoFactorChallenge]);
+
+  useEffect(() => {
+    if (isActionPending || !resendRequestedRef.current) { return; }
+    if (latestTwoFactorChallenge?.state === KEY_2FA_CODE_SENT) {
+      // Clear an old code only after the replacement was actually sent.
+      // A throttled or failed resend leaves the user's current code intact.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setTwoFactorCode('');
+    }
+    resendRequestedRef.current = false;
+  }, [isActionPending, latestTwoFactorChallenge]);
 
   useEffect(() => {
     return () => {
@@ -110,7 +127,9 @@ export default function SignInForm({
   const needsTwoFactor = Boolean(twoFactorState);
   const codeSent = twoFactorState?.state === KEY_2FA_CODE_SENT &&
     twoFactorState.preferred === twoFactorMethod;
-  const showCode = twoFactorMethod === 'authenticator' || codeSent;
+  const codeAvailable = twoFactorState?.state === KEY_2FA_CODE_AVAILABLE &&
+    twoFactorState.preferred === twoFactorMethod;
+  const showCode = twoFactorMethod === 'authenticator' || codeSent || codeAvailable;
   const verificationInstruction = twoFactorMethod === 'sms'
     ? appText.auth.enterSmsCode
     : twoFactorMethod === 'email'
@@ -119,16 +138,26 @@ export default function SignInForm({
   const codeSentMessage = twoFactorMethod === 'sms'
     ? appText.auth.newSmsCodeSent
     : appText.auth.newEmailCodeSent;
+  const signInError = latestTwoFactorChallenge?.error ?? (
+    response && response !== KEY_CREDENTIALS_SUCCESS &&
+    !latestTwoFactorChallenge
+    ? response === KEY_CREDENTIALS_SIGN_IN_ERROR
+      ? needsTwoFactor
+        ? appText.auth.invalidVerificationCode
+        : appText.auth.invalidEmailPassword
+      : response
+    : undefined
+  );
 
   useEffect(() => {
-    if (needsTwoFactor) {
+    if (needsTwoFactor && showCode) {
       const timeout = setTimeout(
         () => twoFactorCodeRef.current?.focus(),
         100,
       );
       return () => clearTimeout(timeout);
     }
-  }, [needsTwoFactor]);
+  }, [needsTwoFactor, showCode, twoFactorMethod]);
 
   return (
     <Container
@@ -147,7 +176,9 @@ export default function SignInForm({
             ? <FiShield size={21} />
             : <IconMedia size={23} />}
           title={needsTwoFactor ? appText.auth.verifyTitle : appText.auth.signIn}
-          description={needsTwoFactor ? verificationInstruction : undefined}
+          description={needsTwoFactor && showCode
+            ? verificationInstruction
+            : undefined}
           action={!needsTwoFactor && newRegistrationsEnabled
             ? <LinkWithStatus
               href="/sign-up"
@@ -162,13 +193,8 @@ export default function SignInForm({
           'space-y-5 w-full',
           includeTitle && 'mt-2',
         )}>
-          {response === KEY_CREDENTIALS_SIGN_IN_ERROR &&
-            <ErrorNote>
-              {needsTwoFactor
-                ? appText.auth.invalidVerificationCode
-                : appText.auth.invalidEmailPassword}
-            </ErrorNote>}
-          {needsTwoFactor &&
+          {signInError && <ErrorNote>{signInError}</ErrorNote>}
+          {needsTwoFactor && !includeTitle && showCode && !signInError &&
             <Note>
               {codeSent
                 ? codeSentMessage
@@ -185,6 +211,7 @@ export default function SignInForm({
                   id="email"
                   inputRef={emailRef}
                   label={appText.auth.email}
+                  autoComplete="username"
                   value={email}
                   onChange={setEmail}
                 />
@@ -193,6 +220,7 @@ export default function SignInForm({
                     id="password"
                     label={appText.auth.password}
                     type="password"
+                    autoComplete="current-password"
                     value={password}
                     onChange={setPassword}
                   />
@@ -211,10 +239,7 @@ export default function SignInForm({
               <input
                 type="hidden"
                 name={KEY_CALLBACK_URL}
-                value={params.get(KEY_CALLBACK_URL)?.startsWith('/') &&
-                  !params.get(KEY_CALLBACK_URL)?.startsWith('//')
-                  ? params.get(KEY_CALLBACK_URL)!
-                  : PATH_ROOT}
+                value={callbackPath}
               />}
           </div>
           {needsTwoFactor
@@ -224,6 +249,7 @@ export default function SignInForm({
               onChange={method => {
                 setSelectedTwoFactorMethod(method);
                 setTwoFactorCode('');
+                  resendRequestedRef.current = false;
               }}
             >
               <div className="space-y-4">
@@ -250,7 +276,7 @@ export default function SignInForm({
                       value="resend-2fa"
                       icon={<FiRefreshCw size={15} />}
                       hideText="never"
-                      onClick={() => setTwoFactorCode('')}
+                      onClick={() => { resendRequestedRef.current = true; }}
                       className="auth-flow-button w-full justify-center"
                     >
                       {appText.auth.resendCode}
@@ -276,6 +302,11 @@ export default function SignInForm({
           <span className="h-px flex-1 bg-medium" />
         </div>
         <form action={signInWithGoogleAction} className="w-full">
+          {shouldRedirect && <input
+            type="hidden"
+            name={KEY_CALLBACK_URL}
+            value={callbackPath}
+          />}
           <SubmitButtonWithStatus
             icon={<FcGoogle size={18} />}
             hideText="never"

@@ -3,7 +3,7 @@ import AppGrid from '@/components/AppGrid';
 import { getUniqueTags } from '@/media/query';
 
 export default async function AdminTagsPage() {
-  const tags = await getUniqueTags().catch(() => []);
+  const tags = await getUniqueTags();
 
   return (
     <AppGrid

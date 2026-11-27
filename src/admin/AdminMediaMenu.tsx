@@ -1,6 +1,6 @@
 'use client';
 
-import { ComponentProps, useMemo, useState } from 'react';
+import { ComponentProps, Suspense, useMemo, useState } from 'react';
 import {
   getPathComponents,
   PATH_ROOT,
@@ -18,7 +18,7 @@ import {
   downloadFileNameForMedia,
 } from '@/media';
 import { TAG_PRIVATE } from '@/tag';
-import { usePathname, useRouter } from 'next/navigation';
+import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import MoreMenu, { MoreMenuSection } from '@/components/more/MoreMenu';
 import { useAppState } from '@/app/AppState';
 import { RevalidateMedia } from '@/media/InfiniteMediaScroll';
@@ -40,18 +40,31 @@ import { monitorMediaDeletion } from './deletion-progress';
 import { toastSuccess, toastWarning } from '@/toast';
 import usePersonalFavorite from '@/auth/usePersonalFavorite';
 
-export default function AdminMediaMenu({
+type AdminMediaMenuProps = Omit<ComponentProps<typeof MoreMenu>, 'sections'> & {
+  photo: Media
+  revalidateMedia?: RevalidateMedia
+  includeFavorite?: boolean
+  showKeyCommands?: boolean
+};
+
+export default function AdminMediaMenu(props: AdminMediaMenuProps) {
+  const { canEdit, canDelete } = useAppState();
+  if (!canEdit && !canDelete) { return null; }
+
+  return (
+    <Suspense fallback={null}>
+      <AdminMediaMenuActions {...props} />
+    </Suspense>
+  );
+}
+
+function AdminMediaMenuActions({
   photo,
   revalidateMedia,
   includeFavorite = true,
   showKeyCommands,
   ...props
-}: Omit<ComponentProps<typeof MoreMenu>, 'sections'> & {
-  photo: Media
-  revalidateMedia?: RevalidateMedia
-  includeFavorite?: boolean
-  showKeyCommands?: boolean
-}) {
+}: AdminMediaMenuProps) {
   const {
     canDelete,
     canEdit,
@@ -71,6 +84,8 @@ export default function AdminMediaMenu({
   const appText = useAppText();
 
   const path = usePathname();
+  const query = useSearchParams().toString();
+  const returnTo = query ? `${path}?${query}` : path;
   const router = useRouter();
   const pathComponents = getPathComponents(path);
   const isOnMediaDetail = pathComponents.photoId === photo.id;
@@ -93,7 +108,7 @@ export default function AdminMediaMenu({
         size={14}
         className="translate-x-[0.5px] translate-y-[0.5px]"
       />,
-      href: pathForAdminMediaEdit(photo.id, path),
+      href: pathForAdminMediaEdit(photo.id, returnTo),
       ...showKeyCommands && { keyCommand: KEY_COMMANDS.edit },
     }, {
       label: appText.admin.quickEdit,
@@ -179,7 +194,7 @@ export default function AdminMediaMenu({
     isFavoriteLoading,
     toggleFavorite,
     redirectPathOnPrivateToggle,
-    path,
+    returnTo,
     revalidateMedia,
     setIsQuickEditOpen,
   ]);
@@ -244,19 +259,14 @@ export default function AdminMediaMenu({
   , [canDelete, sectionMain, sectionDelete]);
 
   return (
-    (canEdit || canDelete)
-      ? <>
-        <MoreMenu {...{
-          ...props,
-          sections,
-        }}/>
-        {isQuickEditOpen &&
-          <AdminMediaQuickEditModal
-            photo={photo}
-            onClose={() => setIsQuickEditOpen(false)}
-            onUpdated={() => revalidateMedia?.(photo.id)}
-          />}
-      </>
-      : null
+    <>
+      <MoreMenu {...props} sections={sections} />
+      {isQuickEditOpen &&
+        <AdminMediaQuickEditModal
+          photo={photo}
+          onClose={() => setIsQuickEditOpen(false)}
+          onUpdated={() => revalidateMedia?.(photo.id)}
+        />}
+    </>
   );
 }

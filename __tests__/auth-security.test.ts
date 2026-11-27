@@ -2,6 +2,7 @@ import crypto from 'crypto';
 import {
   buildTwoFactorResponse,
   KEY_2FA_REQUIRED,
+  KEY_2FA_CODE_AVAILABLE,
   parseTwoFactorResponse,
 } from '@/auth';
 import { hashPassword, passwordMatches } from '@/auth/password';
@@ -94,6 +95,22 @@ describe('two-factor method state', () => {
       state: KEY_2FA_REQUIRED,
       preferred: 'authenticator',
       available: ['authenticator', 'email', 'sms'],
+    });
+  });
+
+  it('preserves code entry during delivery cooldown without claiming a new send', () => {
+    const response = buildTwoFactorResponse(
+      KEY_2FA_CODE_AVAILABLE,
+      'email',
+      ['email', 'sms'],
+      'A previous code may still work.',
+    );
+
+    expect(parseTwoFactorResponse(response)).toEqual({
+      state: KEY_2FA_CODE_AVAILABLE,
+      preferred: 'email',
+      available: ['email', 'sms'],
+      error: 'A previous code may still work.',
     });
   });
 });

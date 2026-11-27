@@ -4,10 +4,12 @@ import { pathForProcessingPage } from '@/admin/processing/path';
 import AdminProcessingTable, {
   type RegistrationItem,
 } from '@/admin/AdminProcessingTable';
+import { getAdminPageNumber } from '@/admin/pagination';
 import {
   getUnregisteredStorageUploadsPage,
 } from '@/admin/processing/server';
 import {
+  getPendingMediaProcessingCount,
   getPendingMediaProcessingPage,
 } from '@/media/query';
 
@@ -17,10 +19,16 @@ export const revalidate = 0;
 
 const PROCESSING_PAGE_SIZE = 15;
 
-const getPageNumber = (page?: string | string[]) => {
-  const value = Array.isArray(page) ? page[0] : page;
-  const parsed = Number.parseInt(value || '', 10);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : 1;
+const getProcessingPage = async (page: number) => {
+  const offset = (page - 1) * PROCESSING_PAGE_SIZE;
+  const result = await getPendingMediaProcessingPage(PROCESSING_PAGE_SIZE, offset);
+  if (offset === 0 || result.total > 0) { return result; }
+
+  // The window count has no row to carry it past the end of the queue.
+  const total = await getPendingMediaProcessingCount();
+  return total > offset
+    ? getPendingMediaProcessingPage(PROCESSING_PAGE_SIZE, offset)
+    : { ...result, total };
 };
 
 const registrationRowToStatus = (
@@ -50,8 +58,14 @@ export default async function AdminProcessingPage({
   searchParams: Promise<Record<string, string | string[] | undefined>>
 }) {
   const params = await searchParams;
-  const registrationPage = getPageNumber(params.registrationPage);
-  const processingPage = getPageNumber(params.processingPage);
+  const registrationPage = getAdminPageNumber(
+    params.registrationPage,
+    PROCESSING_PAGE_SIZE,
+  );
+  const processingPage = getAdminPageNumber(
+    params.processingPage,
+    PROCESSING_PAGE_SIZE,
+  );
   const [
     registrationResult,
     processingResult,
@@ -59,35 +73,39 @@ export default async function AdminProcessingPage({
     getUnregisteredStorageUploadsPage(
       PROCESSING_PAGE_SIZE,
       (registrationPage - 1) * PROCESSING_PAGE_SIZE,
-    ).catch(() => undefined),
-    getPendingMediaProcessingPage(
-      PROCESSING_PAGE_SIZE,
-      (processingPage - 1) * PROCESSING_PAGE_SIZE,
-    ).catch(() => undefined),
+    ).then(value => ({ value, failed: false as const }))
+      .catch(() => ({ value: undefined, failed: true as const })),
+    getProcessingPage(processingPage)
+      .then(value => ({ value, failed: false as const }))
+      .catch(() => ({ value: undefined, failed: true as const })),
   ]);
+  const registrationData = registrationResult.value;
+  const processingData = processingResult.value;
 
   // Either queue may shrink while visiting its last page.
   const lastValidPage = (page: number, total?: number) => total === undefined
     ? page
     : Math.min(page, Math.max(1, Math.ceil(total / PROCESSING_PAGE_SIZE)));
-  const validRegistrationPage = lastValidPage(registrationPage, registrationResult?.total);
-  const validProcessingPage = lastValidPage(processingPage, processingResult?.total);
+  const validRegistrationPage = lastValidPage(registrationPage, registrationData?.total);
+  const validProcessingPage = lastValidPage(processingPage, processingData?.total);
   if (registrationPage !== validRegistrationPage || processingPage !== validProcessingPage) {
     redirect(pathForProcessingPage(validRegistrationPage, validProcessingPage));
   }
 
-  const registeringUrls = registrationResult?.uploads.map(registrationRowToStatus) ?? [];
+  const registeringUrls = registrationData?.uploads.map(registrationRowToStatus) ?? [];
 
   return (
     <AppGrid
       contentMain={
         <AdminProcessingTable
           registering={registeringUrls}
-          registeringTotal={registrationResult?.total ?? 0}
+          registeringTotal={registrationData?.total ?? 0}
           registrationPage={registrationPage}
-          processing={processingResult?.items ?? []}
-          processingTotal={processingResult?.total ?? 0}
+          registrationError={registrationResult.failed}
+          processing={processingData?.items ?? []}
+          processingTotal={processingData?.total ?? 0}
           processingPage={processingPage}
+          processingError={processingResult.failed}
         />
       }
     />

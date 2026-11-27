@@ -119,15 +119,19 @@ export const getAdminDataAction = async () =>
     } as const;
   });
 
-const scanForError = (
+const scanForError = async (
   shouldCheck: boolean,
-  promise: () => Promise<any>,
-): Promise<string> =>
-  shouldCheck
-    ? promise()
-      .then(() => '')
-      .catch(error => error.message)
-    : Promise.resolve('');
+  check: () => Promise<unknown>,
+): Promise<string> => {
+  if (!shouldCheck) { return ''; }
+  try {
+    await check();
+    return '';
+  } catch (error) {
+    return (error instanceof Error && error.message.trim()) ||
+      'Connection check failed.';
+  }
+};
 
 export const testConnectionsAction = async () =>
   runAuthenticatedAdminServerAction(async () => {

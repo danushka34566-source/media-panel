@@ -6,6 +6,13 @@ export type PlayOptions = {
   preserveVideoUntilPlaying?: HTMLVideoElement | null;
 };
 
+const getDocumentPiP = () => (window as Window & {
+  documentPictureInPicture?: { requestWindow: (size: {
+    width: number
+    height: number
+  }) => Promise<Window> }
+}).documentPictureInPicture;
+
 class VideoPlaybackManagerImpl {
   private currentVideo?: HTMLVideoElement;
   private pipWindow: Window | null = null;
@@ -17,22 +24,23 @@ class VideoPlaybackManagerImpl {
 
   isPiPEnabled(): boolean {
     try {
-      return !!(document as any).pictureInPictureEnabled ||
+      return this.supportsDocumentPiP() ||
+        Boolean(document.pictureInPictureEnabled) ||
         ('webkitSupportsPresentationMode' in (HTMLVideoElement.prototype as any));
     } catch {
       return false;
     }
   }
 
-  private supportsDocumentPiP(): boolean {
+  supportsDocumentPiP(): boolean {
     try {
-      return typeof (document as any).documentPictureInPicture?.requestWindow === 'function';
+      return typeof getDocumentPiP()?.requestWindow === 'function';
     } catch { return false; }
   }
 
   isPiPActive(): boolean {
     try {
-      return Boolean((document as any).pictureInPictureElement);
+      return Boolean(this.pipWindow || document.pictureInPictureElement);
     } catch {
       return false;
     }
@@ -53,12 +61,12 @@ class VideoPlaybackManagerImpl {
     }
   }
 
-  private async requestPiP(video: HTMLVideoElement): Promise<void> {
+  private async requestPiP(video: HTMLVideoElement): Promise<boolean> {
     const v = video as any;
     try {
       // Prefer Document PiP if available; it allows full control and captions overlay
       if (this.supportsDocumentPiP()) {
-        const dpi = (document as any).documentPictureInPicture;
+        const dpi = getDocumentPiP()!;
         // Attempt to size roughly like the source element
         const rect = video.getBoundingClientRect?.();
         const width = Math.max(320, Math.round(rect?.width || 640));
@@ -76,7 +84,10 @@ class VideoPlaybackManagerImpl {
         pipVid.style.objectFit = 'contain';
         pipVid.playsInline = true;
         pipVid.controls = false; // Keep window clean; use original page controls
-        pipVid.crossOrigin = 'anonymous';
+        if (video.crossOrigin) { pipVid.crossOrigin = video.crossOrigin; }
+        const sourceWasMuted = video.muted;
+        pipVid.muted = sourceWasMuted;
+        pipVid.volume = video.volume;
 
         // Use the same source URL (currentSrc so we get preview/full appropriately)
         try { pipVid.src = (video.currentSrc || video.src); } catch { pipVid.src = video.src; }
@@ -122,8 +133,6 @@ class VideoPlaybackManagerImpl {
           this.pipSelectedTrackIndex = captionsOn ? activeIndex : -1;
           this.pipCaptionsOn = captionsOn;
         } catch { /* ignore */ }
-        try { await pipVid.play(); } catch {}
-
         // Simple captions overlay that mirrors activeCue in the PiP window
         try {
           const overlay = doc.createElement('div');
@@ -165,7 +174,7 @@ class VideoPlaybackManagerImpl {
             try { pvTracks[i].addEventListener('cuechange', updateOverlay); } catch {}
           }
           const poll = pipWin.setInterval(updateOverlay, 250);
-          pipWin.addEventListener('unload', () => { try { pipWin.clearInterval(poll); } catch {} }, { once: true });
+          pipWin.addEventListener('pagehide', () => { try { pipWin.clearInterval(poll); } catch {} }, { once: true });
           updateOverlay();
         } catch { /* ignore */ }
 
@@ -173,14 +182,14 @@ class VideoPlaybackManagerImpl {
         this.pipVideo = pipVid as any;
 
         // When the PiP window closes, restore playback/time and unmute original
-        pipWin.addEventListener('unload', () => {
+        pipWin.addEventListener('pagehide', () => {
           try {
             if (this.currentVideo === video) {
               const t = pipVid.currentTime;
               if (Number.isFinite(t)) { try { video.currentTime = t; } catch {} }
               if (this.wasPlayingBeforePiP) { video.play?.().catch(() => {}); }
             }
-            video.muted = false;
+            video.muted = sourceWasMuted;
           } catch {}
           this.pipWindow = null;
           this.pipVideo = null;
@@ -188,20 +197,32 @@ class VideoPlaybackManagerImpl {
           this.pipSelectedTrackIndex = -1;
           this.pipCaptionsOn = false;
         }, { once: true });
-        return;
+        void pipVid.play().catch(() => {});
+        return true;
       }
+    } catch {
+      // A Document PiP request can be blocked even when native video PiP works.
+      if (this.pipWindow) { await this.exitPiP(); }
+    }
 
-      if ('requestPictureInPicture' in v) {
+    try {
+      if (document.pictureInPictureEnabled !== false && 'requestPictureInPicture' in v) {
         await v.requestPictureInPicture();
         v.play?.().catch(() => {});
-        return;
+        return true;
       }
+    } catch { /* try the Safari presentation mode */ }
+
+    try {
       if ('webkitSupportsPresentationMode' in v && v.webkitSupportsPresentationMode('picture-in-picture')) {
         v.webkitSetPresentationMode('picture-in-picture');
+        v.play?.().catch(() => {});
+        return true;
       }
     } catch {
       // ignore
     }
+    return false;
   }
 
   private pauseVideo(video?: HTMLVideoElement) {
@@ -234,15 +255,14 @@ class VideoPlaybackManagerImpl {
     }
     if (leavingPiP) { await leavingPiP; }
 
-    if (this.currentVideo === video && (opts.preferPiP || wasPiPActive)) {
-      if (this.isPiPEnabled() || this.supportsDocumentPiP()) {
-        await this.requestPiP(video);
-      }
+    if (this.currentVideo === video && (opts.preferPiP || wasPiPActive) &&
+      (switchingVideo || !wasPiPActive) && this.isPiPEnabled()) {
+      await this.requestPiP(video);
     }
     return 'playing';
   }
 
-  async togglePiP(video: HTMLVideoElement): Promise<void> {
+  async togglePiP(video: HTMLVideoElement): Promise<boolean> {
     // Ensure this video is the current one
     if (this.currentVideo && this.currentVideo !== video) {
       this.pauseVideo(this.currentVideo);
@@ -251,11 +271,22 @@ class VideoPlaybackManagerImpl {
 
     if (this.pipWindow || (document as any).pictureInPictureElement) {
       await this.exitPiP();
-      return;
+      return true;
     }
-    if (this.isPiPEnabled() || this.supportsDocumentPiP()) {
-      await this.requestPiP(video);
+    const webkitVideo = video as HTMLVideoElement & {
+      webkitPresentationMode?: string
+      webkitSetPresentationMode?: (mode: string) => void
+    };
+    if (webkitVideo.webkitPresentationMode === 'picture-in-picture' &&
+      webkitVideo.webkitSetPresentationMode) {
+      try {
+        webkitVideo.webkitSetPresentationMode('inline');
+        return true;
+      } catch {
+        return false;
+      }
     }
+    return this.isPiPEnabled() && this.requestPiP(video);
   }
 
   // Keep PiP text tracks in sync with source (for Document PiP)

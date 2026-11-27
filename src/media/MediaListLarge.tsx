@@ -7,12 +7,14 @@ import { MEDIA_ENTRANCE_STAGGER_DELAY } from './media-entrance-animation';
 export default function MediaListLarge({
   photos,
   animate = true,
+  prioritizeInitialMedia = true,
   prefetchFirstMediaLinks,
   onLastMediaVisible,
   revalidateMedia,
 }: {
   photos: Media[]
   animate?: boolean
+  prioritizeInitialMedia?: boolean
   prefetchFirstMediaLinks?: boolean
   onLastMediaVisible?: () => void
   revalidateMedia?: RevalidateMedia
@@ -31,10 +33,10 @@ export default function MediaListLarge({
         <MediaLarge
           key={photo.id}
           photo={photo}
-          priority={index === 0}
+          priority={prioritizeInitialMedia && index === 0}
           // Keep the first posters immediate. Remaining rows are promoted
           // when they approach the viewport in MediaLarge.
-          initiallyLoadPreviewImage={index < 2}
+          initiallyLoadPreviewImage={prioritizeInitialMedia && index < 2}
           preloadFullVideoDownload
           prefetch={index < 3}
           prefetchRelatedLinks={prefetchFirstMediaLinks && index === 0}

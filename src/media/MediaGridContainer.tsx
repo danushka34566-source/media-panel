@@ -5,7 +5,13 @@ import MediaGrid from './MediaGrid';
 import MediaGridInfinite from './MediaGridInfinite';
 import { clsx } from 'clsx/lite';
 import AnimateItems from '@/components/AnimateItems';
-import { ComponentProps, useCallback, useState, ReactNode } from 'react';
+import {
+  ComponentProps,
+  Fragment,
+  useCallback,
+  useState,
+  ReactNode,
+} from 'react';
 import { GRID_SPACE_CLASSNAME } from '@/components';
 import { SortBy } from './sort';
 import useMediaScrollRestoration from './useMediaScrollRestoration';
@@ -14,6 +20,7 @@ export default function MediaGridContainer({
   cacheKey,
   photos,
   count,
+  initialHasMore,
   sortBy,
   sortWithPriority,
   excludeFromFeeds,
@@ -25,6 +32,7 @@ export default function MediaGridContainer({
 }: {
   cacheKey: string
   count: number
+  initialHasMore?: boolean
   sortBy?: SortBy
   sortWithPriority?: boolean
   excludeFromFeeds?: boolean
@@ -33,7 +41,13 @@ export default function MediaGridContainer({
   sidebar?: ReactNode
   className?: string
 } & ComponentProps<typeof MediaGrid>) {
-  const restoredEntry = useMediaScrollRestoration(cacheKey);
+  const hasMore = initialHasMore ?? count > photos.length;
+  const restoredEntry = useMediaScrollRestoration(
+    cacheKey,
+    false,
+    !hasMore,
+    query,
+  );
   const shouldAnimate = !restoredEntry && categories.animate !== false;
   const [
     shouldAnimateDynamicItems,
@@ -51,11 +65,11 @@ export default function MediaGridContainer({
         {header &&
           <AnimateItems
             type="bottom"
-            items={[header]}
+            items={[<Fragment key="header">{header}</Fragment>]}
             animateOnFirstLoadOnly
           />}
         <div className={GRID_SPACE_CLASSNAME}>
-          {count > photos.length
+          {hasMore
             ?
             <MediaGridInfinite key={cacheKey} {...{
               cacheKey,
@@ -73,6 +87,7 @@ export default function MediaGridContainer({
             : <MediaGrid {...{
               photos,
               sortBy,
+              query,
               ...categories,
               animate: shouldAnimate,
               onAnimationComplete,

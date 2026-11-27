@@ -3,7 +3,7 @@ import AppGrid from '@/components/AppGrid';
 import { getUniqueCategories } from '@/media/query';
 
 export default async function AdminCategoriesPage() {
-  const categories = await getUniqueCategories().catch(() => []);
+  const categories = await getUniqueCategories();
 
   return (
     <AppGrid

@@ -54,7 +54,10 @@ export default function SiteAccessConfigurationForm({
         <ConfigToggle
           name="loginVerificationRequired"
           label="Sign-in verification"
-          description="Require a verification code after every email and password sign-in."
+          description={
+            'Require a code after every email and password sign-in. ' +
+            'Enabling verification runs a Resend delivery check.'
+          }
           checked={loginVerificationRequired}
           onChange={setLoginVerificationRequired}
         />
@@ -70,10 +73,13 @@ export default function SiteAccessConfigurationForm({
     </div>
 
     <div className="flex min-h-10 flex-col gap-3 border-t border-medium pt-4 sm:flex-row sm:items-center sm:justify-between">
-      <span className={clsx(
-        'min-h-5 text-sm',
-        state.error ? 'text-red-600' : 'text-dim',
-      )}>
+      <span
+        role={state.error ? 'alert' : 'status'}
+        className={clsx(
+          'min-h-5 text-sm',
+          state.error ? 'text-red-600' : 'text-dim',
+        )}
+      >
         {state.error || (state.saved ? 'Site access settings saved' : '')}
       </span>
       <button

@@ -9,6 +9,7 @@ jest.mock('next/navigation', () => ({
   useSearchParams: () => new URLSearchParams(window.location.search),
 }));
 jest.mock('../src/app/AppState', () => ({ useAppState: () => ({ canEdit: true }) }));
+jest.mock('../src/tag', () => ({ TAG_PRIVATE: 'private' }));
 jest.mock('../src/utility/dom', () => ({ isElementPartiallyInViewport: () => true }));
 
 function Grid() {

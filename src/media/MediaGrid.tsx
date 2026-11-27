@@ -8,7 +8,7 @@ import AnimateItems from '@/components/AnimateItems';
 import { GRID_ASPECT_RATIO } from '@/app/config';
 import { useAppState } from '@/app/AppState';
 import SelectTileOverlay from '@/components/SelectTileOverlay';
-import { ReactNode, useEffect, useId, useRef, useState } from 'react';
+import { Fragment, ReactNode, useEffect, useId, useRef, useState } from 'react';
 import { GRID_GAP_CLASSNAME } from '@/components';
 import { useSelectMediaState } from '@/admin/select/SelectMediaState';
 import { DATA_KEY_MEDIA_GRID } from '@/admin/select/SelectMediaProvider';
@@ -49,6 +49,7 @@ export default function MediaGrid({
   photos,
   selectedMedia,
   sortBy,
+  query,
   prioritizeInitialMedia,
   className,
   classNameMedia,
@@ -71,6 +72,7 @@ export default function MediaGrid({
   photos: Media[]
   selectedMedia?: Media
   sortBy?: SortBy
+  query?: string
   prioritizeInitialMedia?: boolean
   className?: string
   classNameMedia?: string
@@ -290,6 +292,7 @@ export default function MediaGrid({
               {...{
                 photo,
                 sortBy,
+                query,
                 ...categories,
                 enableVideoPreview: enableVideoPreviews,
                 // Limit route prefetching to the first viewport. Prefetching
@@ -346,7 +349,9 @@ export default function MediaGrid({
                 )}
               />}
           </div>;
-        }).concat(additionalTile ? <>{additionalTile}</> : [])}
+        }).concat(additionalTile
+          ? <Fragment key="more">{additionalTile}</Fragment>
+          : [])}
         itemKeys={photos.map(photo => photo.id)
           .concat(additionalTile ? ['more'] : [])}
       />

@@ -78,6 +78,7 @@ import MediaContentType from '@/content-type/MediaContentType';
 import useVideoPreviewLifecycle, {
   setFullVideoPlaybackActive,
   shouldSuspendVideoPreviews,
+  usePriorityVideoPreviewAllowed,
 } from './video-preview-lifecycle';
 import useVideoPreviewRecovery from './useVideoPreviewRecovery';
 import { announceDetailNavigationStart } from './detail-navigation-status';
@@ -106,9 +107,12 @@ import PersonalFavoriteButton from './PersonalFavoriteButton';
 import PersonalFavoriteBadge from './PersonalFavoriteBadge';
 import {
   useAdaptiveFullVideoPlayback,
+  useFullVideoPlaybackWatchdog,
   type FullVideoTelemetry,
 } from './full-video-playback';
 import { getFullVideoBridgeUrl } from './full-video-bridge';
+import { rememberMediaScrollPosition } from './useMediaScrollRestoration';
+import VideoZoomOverlay from './VideoZoomOverlay';
 
 const SWIPE_NAVIGATION_DISTANCE = 50;
 const SWIPE_NAVIGATION_VERTICAL_TOLERANCE = 70;
@@ -181,13 +185,13 @@ const formatVideoDuration = (seconds?: number) => {
 const formatVideoLibraryLabel = (value?: string) =>
   value?.replaceAll('-', ' ');
 
-function FullVideoLoadingStatus() {
+function FullVideoLoadingStatus({ buffering }: { buffering: boolean }) {
   const showStatus = useDelay(350);
   if (!showStatus) { return null; }
   return (
     <div role="status" className="pointer-events-none absolute inset-x-0 bottom-14 z-30 flex justify-center">
       <span className="rounded bg-black/75 px-3 py-1 text-sm text-white">
-        Loading video…
+        {buffering ? 'Buffering video…' : 'Loading video…'}
       </span>
     </div>
   );
@@ -299,6 +303,7 @@ export default function MediaLarge({
     ignoreSwipe: boolean
   } | undefined>(undefined);
   const [isVideoZoomOpen, setIsVideoZoomOpen] = useState(false);
+  const videoZoomTriggerRef = useRef<HTMLButtonElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const previewVideoRef = useRef<HTMLVideoElement>(null);
   const fullVideoRef = useRef<HTMLVideoElement>(null);
@@ -325,8 +330,13 @@ export default function MediaLarge({
     useState<number>();
   const fullVideoRenewalRef = useRef<Promise<boolean> | null>(null);
   const retriedPlaybackUrls = useRef(new Set<string>());
+  const fullVideoResumeTime = useRef(0);
+  const fullVideoAttemptRef = useRef(0);
+  const pipRequested = useRef(false);
   const [fullVideoRetryCount, setFullVideoRetryCount] = useState(0);
   const [needsManualFullVideoPlay, setNeedsManualFullVideoPlay] = useState(false);
+  const [needsManualPiP, setNeedsManualPiP] = useState(false);
+  const [isFullVideoBuffering, setIsFullVideoBuffering] = useState(false);
   const [preparedFullVideoDownloads, setPreparedFullVideoDownloads] = useState<Record<string, {
     url: string
     expiresAt: number
@@ -405,7 +415,12 @@ export default function MediaLarge({
     setIsFullVideoFrameReady(false);
     setHasFullVideoPlaybackError(false);
     setNeedsManualFullVideoPlay(false);
+    setNeedsManualPiP(false);
+    setIsFullVideoBuffering(false);
     retriedPlaybackUrls.current.clear();
+    fullVideoResumeTime.current = 0;
+    fullVideoAttemptRef.current += 1;
+    pipRequested.current = false;
     setHasDecodedPreviewFrame(false);
     setHasStartedMainVideoPlayback(false);
     setFailedGeneratedPreviewSrc(undefined);
@@ -433,7 +448,7 @@ export default function MediaLarge({
   }, [isMainVideoActuallyPlaying, isVideoFullscreen]);
 
   const shouldSuspendRelatedPreviews =
-    isFullVideoPlaying || isMainVideoActuallyPlaying;
+    isFullVideoPlaying || isMainVideoActuallyPlaying || isVideoZoomOpen;
   useEffect(() => {
     if (!broadcastDetailVideoPlayback || !isVideo) { return; }
     const dispatch = (playing: boolean) => window.dispatchEvent(
@@ -483,19 +498,8 @@ export default function MediaLarge({
 
   useEffect(() => {
     if (!isVideo) { return; }
-    try {
-      const enabled = typeof document !== 'undefined' &&
-        !!(document as any).pictureInPictureEnabled;
-      const hasMethod = typeof HTMLVideoElement !== 'undefined' &&
-        (
-          'requestPictureInPicture' in (HTMLVideoElement.prototype as any) ||
-          'webkitSupportsPresentationMode' in (HTMLVideoElement.prototype as any)
-        );
-      // eslint-disable-next-line react-hooks/set-state-in-effect
-      setCanUsePiP(Boolean(enabled) || Boolean(hasMethod));
-    } catch {
-      setCanUsePiP(false);
-    }
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setCanUsePiP(VideoPlaybackManager.isPiPEnabled());
   }, [isVideo]);
 
   
@@ -524,17 +528,22 @@ export default function MediaLarge({
     failedGeneratedPreviewSrc !== previewSrc
     ? previewSrc
     : undefined;
-  const previewsEnabled = broadcastDetailVideoPlayback || videoPreviewMode !== 'off';
+  const priorityPreviewAllowed = usePriorityVideoPreviewAllowed(
+    isVideo && videoPreviewMode !== 'off' && Boolean(broadcastDetailVideoPlayback || priority),
+  );
+  const previewsEnabled = videoPreviewMode !== 'off' &&
+    (!(broadcastDetailVideoPlayback || priority) || priorityPreviewAllowed);
   useEffect(() => {
     if (!broadcastDetailVideoPlayback) { return; }
     beginDetailPreviewStartup(photo.id);
-    if (!automaticPreviewSrc) {
+    if (!automaticPreviewSrc || !previewsEnabled) {
       completeDetailPreviewStartup(photo.id);
     }
   }, [
     automaticPreviewSrc,
     broadcastDetailVideoPlayback,
     photo.id,
+    previewsEnabled,
   ]);
   const hasPosterFailed = posterFailedMediaId === photo.id;
   const displayTranscodeStatus = getDisplayTranscodeStatus(photo);
@@ -555,7 +564,26 @@ export default function MediaLarge({
     ? getFullVideoBridgeUrl(compatibilityPlaybackUrl)
     : undefined;
 
-  const recoverFullVideoStartup = useCallback((video: HTMLVideoElement, errorCode = video.error?.code) => {
+  const handleFullVideoPlayFailure = useCallback((
+    video: HTMLVideoElement,
+    attempt: number,
+    blocked: boolean,
+  ) => {
+    // A retry can replace the request without replacing the video or its URL.
+    if (
+      video === fullVideoRef.current &&
+      attempt === fullVideoAttemptRef.current &&
+      video.paused &&
+      (blocked || video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA)
+    ) {
+      setNeedsManualFullVideoPlay(true);
+    }
+  }, []);
+
+  const recoverFullVideoPlayback = useCallback((
+    video: HTMLVideoElement,
+    errorCode = video.error?.code,
+  ) => {
     // load() and route changes can abort an obsolete media request.
     if (video !== fullVideoRef.current || !errorCode || errorCode === 1 ||
       video.dataset.fullVideoHlsInitializing === 'true') { return; }
@@ -573,23 +601,26 @@ export default function MediaLarge({
       errorCode,
       retriedUrls: usedUrls,
     });
+    const attempt = ++fullVideoAttemptRef.current;
     if (!retryUrl) {
+      pipRequested.current = false;
       setIsFullVideoPlaying(false);
       setIsPreparingFullVideo(false);
+      setIsMainVideoActuallyPlaying(false);
       setHasFullVideoPlaybackError(true);
       return;
     }
     usedUrls.add(retryUrl);
     const resumeTime = video.currentTime;
     if (Number.isFinite(resumeTime) && resumeTime > 0) {
-      video.addEventListener('loadedmetadata', () => {
-        try { video.currentTime = resumeTime; } catch {}
-      }, { once: true });
+      fullVideoResumeTime.current = resumeTime;
     }
     flushSync(() => {
       setFullVideoRetryCount(count => count + 1);
       setNeedsManualFullVideoPlay(false);
       setIsFullVideoFrameReady(false);
+      setIsMainVideoActuallyPlaying(false);
+      setHasStartedMainVideoPlayback(false);
       setShouldUseCompatibilityPlayback(retryUrl === compatibility);
       setFullVideoDeliveryUrl(retryUrl);
       setFullVideoDeliveryExpiresAt(Date.now() + FULL_VIDEO_URL_TTL_MS);
@@ -598,23 +629,30 @@ export default function MediaLarge({
     // cancel that request, along with any concurrent play() promise.
     if (retryUrl === currentUrl) { video.load(); }
     void video.play().catch((error: unknown) => {
-      if (video === fullVideoRef.current && video.getAttribute('src') === retryUrl &&
-        error instanceof Error && error.name === 'NotAllowedError') {
-        setNeedsManualFullVideoPlay(true);
-      }
+      handleFullVideoPlayFailure(
+        video,
+        attempt,
+        error instanceof Error && error.name === 'NotAllowedError',
+      );
     });
-  }, [compatibilityPlaybackUrl, fullVideoCompatibilityUrl, photo.url, shouldUseCompatibilityPlayback]);
+  }, [
+    compatibilityPlaybackUrl, fullVideoCompatibilityUrl, handleFullVideoPlayFailure,
+    photo.url, shouldUseCompatibilityPlayback,
+  ]);
 
   const isStartingFullVideo = isFullVideoPlaying && !hasStartedMainVideoPlayback &&
     !needsManualFullVideoPlay;
-  useEffect(() => {
-    if (!isStartingFullVideo || isVideoZoomOpen) { return; }
-    const video = fullVideoRef.current;
-    if (!video) { return; }
-    // Some browsers leave play() pending without firing a media error.
-    const timeout = window.setTimeout(() => recoverFullVideoStartup(video, 2), 15_000);
-    return () => window.clearTimeout(timeout);
-  }, [fullVideoRetryCount, isStartingFullVideo, isVideoZoomOpen, recoverFullVideoStartup]);
+  const showManualFullVideoPlay = useCallback(() => {
+    setNeedsManualFullVideoPlay(true);
+  }, []);
+  useFullVideoPlaybackWatchdog({
+    active: isFullVideoPlaying && !needsManualFullVideoPlay && !isVideoZoomOpen,
+    attempt: fullVideoRetryCount,
+    videoRef: fullVideoRef,
+    onTimeout: recoverFullVideoPlayback,
+    onBufferingChange: setIsFullVideoBuffering,
+    onDecodedPause: hasStartedMainVideoPlayback ? undefined : showManualFullVideoPlay,
+  });
 
   const renewFullVideoPlayback = useCallback(async () => {
     if (!isVideo || !isFullVideoPlaying || fullVideoRenewalRef.current) {
@@ -656,6 +694,7 @@ export default function MediaLarge({
         if (wasPlaying) { void video.play().catch(() => undefined); }
       };
       video.addEventListener('loadedmetadata', restorePlayback, { once: true });
+      fullVideoAttemptRef.current += 1;
       setFullVideoDeliveryExpiresAt(expiresAt);
       setFullVideoDeliveryUrl(signedUrl);
       return true;
@@ -753,9 +792,13 @@ export default function MediaLarge({
   const startFullVideo = () => {
     const source = getPlaybackSource();
     retriedPlaybackUrls.current.clear();
+    fullVideoResumeTime.current = 0;
+    fullVideoAttemptRef.current += 1;
+    pipRequested.current = false;
     flushSync(() => {
       setHasFullVideoPlaybackError(false);
       setNeedsManualFullVideoPlay(false);
+      setNeedsManualPiP(false);
       setHasStartedMainVideoPlayback(false);
       setIsFullVideoFrameReady(false);
       setShouldUseCompatibilityPlayback(source.useCompatibility);
@@ -765,6 +808,10 @@ export default function MediaLarge({
       setIsPiPLocked(false);
     });
     return fullVideoRef.current;
+  };
+  const toggleFullVideoPiP = async (video: HTMLVideoElement) => {
+    const succeeded = await VideoPlaybackManager.togglePiP(video);
+    if (fullVideoRef.current === video) { setNeedsManualPiP(!succeeded); }
   };
   const warmPreferredFullVideoDownload = useCallback(() => {
     warmFullVideoDownload(photo.url);
@@ -807,47 +854,45 @@ export default function MediaLarge({
     ref,
     enabled: Boolean(
       isVideo &&
-      previewsEnabled && !broadcastDetailVideoPlayback &&
+      previewsEnabled &&
       automaticPreviewSrc &&
       !isFullVideoPlaying,
     ),
     preloadEnabled: Boolean(
       isVideo &&
-      previewsEnabled && !broadcastDetailVideoPlayback &&
+      previewsEnabled && !broadcastDetailVideoPlayback && !priority &&
       automaticPreviewSrc &&
       !isFullVideoPlaying &&
       !mountPreviewOnlyWhenVisible,
     ),
-    mountOnlyWhenVisible: mountPreviewOnlyWhenVisible,
+    mountOnlyWhenVisible:
+      Boolean(priority || broadcastDetailVideoPlayback || mountPreviewOnlyWhenVisible),
+    startupPriority: Boolean(priority || broadcastDetailVideoPlayback),
     preloadUrl: automaticPreviewSrc,
   });
   const shouldRenderPreview = shouldMountPreview || isPreviewExiting;
-  // Priority media is the detail hero (or one of the first full-list items).
-  // Include its preview in the initial HTML so the browser can request it
-  // immediately instead of waiting for the observer effect after first paint.
-  const shouldStartPriorityPreview = Boolean(
-    (broadcastDetailVideoPlayback || priority) &&
-    isVideo &&
-    previewsEnabled &&
-    automaticPreviewSrc &&
-    !isFullVideoPlaying,
-  );
-  const shouldRenderAutomaticPreview = shouldRenderPreview ||
-    shouldStartPriorityPreview;
-  const isAutomaticPreviewActive = isPreviewActive ||
-    shouldStartPriorityPreview;
+  const isAutomaticPreviewActive = !isVideoZoomOpen && isPreviewActive;
   const shouldKeepPreviewVideo = Boolean(
     automaticPreviewSrc &&
     previewsEnabled &&
     (isFullVideoPlaying
       ? hasDecodedPreviewFrame && !isFullVideoFrameReady
-      : shouldRenderAutomaticPreview),
+      : shouldRenderPreview),
   );
+  useEffect(() => {
+    if (!broadcastDetailVideoPlayback || isPreviewActive || !ref.current) {
+      return;
+    }
+    const bounds = ref.current.getBoundingClientRect();
+    if (bounds.bottom <= 0 || bounds.top >= window.innerHeight) {
+      completeDetailPreviewStartup(photo.id);
+    }
+  }, [broadcastDetailVideoPlayback, isPreviewActive, photo.id]);
   const isAutomaticPreviewReady =
     readyPreviewSrc === automaticPreviewSrc &&
     (broadcastDetailVideoPlayback || readyPreviewActivationId === previewActivationId);
   const showDetailPoster = broadcastDetailVideoPlayback &&
-    !(isAutomaticPreviewReady || (isFullVideoPlaying && hasDecodedPreviewFrame));
+    (!shouldKeepPreviewVideo || !isAutomaticPreviewReady);
 
   // Mobile browsers can suspend the compositor and media decoder while the
   // device is locked. Re-assert the visible image/video state on resume so a
@@ -910,6 +955,13 @@ export default function MediaLarge({
       }
     },
   });
+  const markPreviewFrameReady = () => {
+    if (!automaticPreviewSrc) { return; }
+    setHasDecodedPreviewFrame(true);
+    setReadyPreviewSrc(automaticPreviewSrc);
+    setReadyPreviewActivationId(previewActivationId);
+    if (broadcastDetailVideoPlayback) { completeDetailPreviewStartup(photo.id); }
+  };
   // Full-mode tiles are large, so prepare several upcoming images before the
   // user reaches them. Video previews use a separate strict viewport hook.
   const fullImagePreloadDistance = typeof window === 'undefined'
@@ -976,7 +1028,7 @@ export default function MediaLarge({
         return Math.min(idx, Math.max(0, max));
       });
     } catch {
-      setSubtitleTracks(null);
+      if (!signal?.aborted) { setSubtitleTracks(null); }
     }
   };
 
@@ -984,7 +1036,7 @@ export default function MediaLarge({
   // present on the first full-player mount. List cards still wait for explicit
   // playback to avoid fetching a manifest for every item.
   useEffect(() => {
-    if (!isVideo || (!isFullVideoPlaying && !preloadSubtitleManifest)) {
+    if (!isVideo || (!isFullVideoPlaying && !isVideoZoomOpen && !preloadSubtitleManifest)) {
       return;
     }
     const controller = new AbortController();
@@ -995,6 +1047,7 @@ export default function MediaLarge({
     photo.id,
     isVideo,
     isFullVideoPlaying,
+    isVideoZoomOpen,
     photo.url,
     preloadSubtitleManifest,
   ]);
@@ -1593,6 +1646,9 @@ export default function MediaLarge({
                     controls={isFullVideoElement}
                     controlsList="nodownload noplaybackrate"
                     onContextMenu={(e) => e.preventDefault()}
+                    onPlay={() => {
+                      if (isFullVideoElement) { setNeedsManualFullVideoPlay(false); }
+                    }}
                     onPause={() => {
                       if (isFullVideoElement) {
                         setIsMainVideoActuallyPlaying(false);
@@ -1618,31 +1674,30 @@ export default function MediaLarge({
                     onLoadedData={() => {
                       if (isFullVideoElement) { setIsFullVideoFrameReady(true); }
                       if (!isFullVideoElement && automaticPreviewSrc) {
-                        if (broadcastDetailVideoPlayback) {
-                          completeDetailPreviewStartup(photo.id);
-                        }
-                        setHasDecodedPreviewFrame(true);
-                        setReadyPreviewSrc(automaticPreviewSrc);
-                        setReadyPreviewActivationId(previewActivationId);
+                        markPreviewFrameReady();
                         previewRecovery.onLoadedData();
                       }
                     }}
                     onCanPlay={() => {
-                      if (!isFullVideoElement && isAutomaticPreviewActive) {
+                      if (isFullVideoElement) { setIsFullVideoFrameReady(true); }
+                      else if (isAutomaticPreviewActive) {
+                        markPreviewFrameReady();
                         previewRecovery.onCanPlay();
                       }
+                    }}
+                    onProgress={() => {
+                      if (!isFullVideoElement) { previewRecovery.onProgress(); }
                     }}
                     onPlaying={() => {
                       if (isFullVideoElement) {
                         setIsFullVideoFrameReady(true);
                         setHasStartedMainVideoPlayback(true);
                         setIsMainVideoActuallyPlaying(true);
+                        setNeedsManualFullVideoPlay(false);
                         previewVideoRef.current?.pause();
                       }
                       if (!isFullVideoElement && automaticPreviewSrc) {
-                        setHasDecodedPreviewFrame(true);
-                        setReadyPreviewSrc(automaticPreviewSrc);
-                        setReadyPreviewActivationId(previewActivationId);
+                        markPreviewFrameReady();
                         previewRecovery.onPlaying();
                       }
                     }}
@@ -1651,7 +1706,7 @@ export default function MediaLarge({
                     }}
                     onError={event => {
                       if (isFullVideoElement) {
-                        recoverFullVideoStartup(event.currentTarget);
+                        recoverFullVideoPlayback(event.currentTarget);
                       } else {
                         setHasDecodedPreviewFrame(false);
                         setReadyPreviewSrc(undefined);
@@ -1664,6 +1719,16 @@ export default function MediaLarge({
                     }}
                     onLoadedMetadata={(e) => {
                       const v = e.currentTarget as HTMLVideoElement;
+                      if (isFullVideoElement) {
+                        if (fullVideoResumeTime.current > 0) {
+                          try { v.currentTime = fullVideoResumeTime.current; } catch {}
+                          fullVideoResumeTime.current = 0;
+                        }
+                        if (pipRequested.current) {
+                          pipRequested.current = false;
+                          void toggleFullVideoPiP(v);
+                        }
+                      }
                       // Apply caption mode when tracks are present
                       try {
                         const tracks = v.textTracks;
@@ -1744,12 +1809,32 @@ export default function MediaLarge({
               preload="metadata"
             />
           )}
-          {isVideo && isStartingFullVideo && <FullVideoLoadingStatus />}
+          {isVideo && (isStartingFullVideo || isFullVideoBuffering) &&
+            <FullVideoLoadingStatus buffering={isFullVideoBuffering} />}
+          {isVideo && needsManualFullVideoPlay && isFullVideoPlaying &&
+            !hasStartedMainVideoPlayback &&
+            <div role="status" className="pointer-events-none absolute inset-x-0 bottom-14 z-30 flex justify-center">
+              <span className="rounded bg-black/75 px-3 py-1 text-sm text-white">
+                Press play in the video controls to start.
+              </span>
+            </div>}
+          {isVideo && needsManualPiP && isFullVideoPlaying &&
+            <div role="status" className="pointer-events-none absolute inset-x-0 top-4 z-30 flex justify-center">
+              <span className="rounded bg-black/75 px-3 py-1 text-sm text-white">
+                Picture in Picture did not open. Select Picture in Picture to retry.
+              </span>
+            </div>}
+          {isVideo && hasFullVideoPlaybackError && !isFullVideoPlaying &&
+            <div role="status" className="pointer-events-none absolute inset-x-0 bottom-4 z-30 flex justify-center">
+              <span className="rounded bg-black/75 px-3 py-1 text-sm text-white">
+                Video could not play. Select Retry video to try again.
+              </span>
+            </div>}
           {isVideo && !isFullVideoPlaying && (
             <button
               type="button"
               data-media-play-overlay="true"
-              aria-label="Play video"
+              aria-label={hasFullVideoPlaybackError ? 'Retry video' : 'Play video'}
               disabled={isPreparingFullVideo}
               className={clsx(
                 'absolute inset-0 grid place-items-center',
@@ -1765,14 +1850,17 @@ export default function MediaLarge({
                 try {
                   const video = startFullVideo();
                   if (!video) { return; }
+                  const attempt = fullVideoAttemptRef.current;
                   // Keep the preview frame visible while freeing its decoder.
                   previewVideoRef.current?.pause();
                   const result = await VideoPlaybackManager.requestPlay(video, {
                     preferPiP: VideoPlaybackManager.isPiPActive(),
                     preserveVideoUntilPlaying: previewVideoRef.current,
                   });
-                  if (result === 'blocked' && fullVideoRef.current === video) {
-                    setNeedsManualFullVideoPlay(true);
+                  if (result !== 'playing') {
+                    handleFullVideoPlayFailure(
+                      video, attempt, result === 'blocked',
+                    );
                   }
                 } finally {
                   setIsPreparingFullVideo(false);
@@ -1786,10 +1874,6 @@ export default function MediaLarge({
               )}>
                 <LuPlay size={28} />
               </span>
-              {hasFullVideoPlaybackError &&
-                <span className="absolute bottom-4 rounded bg-black/75 px-3 py-1 text-sm text-white">
-                  Video could not start. Tap to retry.
-                </span>}
             </button>
           )}
         </div>}
@@ -1871,6 +1955,11 @@ export default function MediaLarge({
               href={pathForMedia({ photo, sortBy: feedSortBy })}
               className={largeMediaContainerClassName}
               prefetch={prefetch}
+              onNavigate={() => {
+                if (!broadcastDetailVideoPlayback) {
+                  rememberMediaScrollPosition(photo.id);
+                }
+              }}
             >
               {renderLargeMedia}
             </Link>)
@@ -2129,6 +2218,8 @@ export default function MediaLarge({
                         />
                         : isVideo &&
                         <LoaderButton
+                          ref={videoZoomTriggerRef}
+                          aria-label="Expand video"
                           tooltip={appText.tooltip.zoom}
                           icon={<LuExpand size={15} />}
                           onClick={() => {
@@ -2150,41 +2241,36 @@ export default function MediaLarge({
                           }}
                           styleAs="link"
                           className="text-medium translate-y-[0.25px]"
-                          hideFocusOutline
                         />}
                       {isVideo && canUsePiP && (
                         <LoaderButton
+                          aria-label="Picture in Picture"
                           tooltip={'Picture in Picture'}
                           icon={<LuPictureInPicture size={15} />}
                           onClick={async () => {
-                            const video = videoRef.current;
+                            const video = isFullVideoPlaying
+                              ? fullVideoRef.current
+                              : startFullVideo();
                             if (!video) { return; }
-                            if (!isFullVideoPlaying) {
-                              startFullVideo();
-                              requestAnimationFrame(() => {
-                                const fullVideo = videoRef.current;
-                                if (!fullVideo) { return; }
-                                const open = async () => {
-                                  setIsPiPLocked(false);
-                                  await VideoPlaybackManager.togglePiP(fullVideo);
-                                };
-                                if (fullVideo.readyState >= 2) {
-                                  void open();
-                                } else {
-                                  fullVideo.addEventListener(
-                                    'loadeddata',
-                                    open,
-                                    { once: true },
-                                  );
-                                }
-                              });
-                            } else {
-                              await VideoPlaybackManager.togglePiP(video);
+                            setNeedsManualPiP(false);
+                            if (VideoPlaybackManager.supportsDocumentPiP() ||
+                              video.readyState >= HTMLMediaElement.HAVE_METADATA) {
+                              await toggleFullVideoPiP(video);
+                              return;
+                            }
+                            // Native PiP needs metadata. Begin inline playback
+                            // in the original tap and open as soon as it loads.
+                            pipRequested.current = true;
+                            const attempt = fullVideoAttemptRef.current;
+                            const result = await VideoPlaybackManager.requestPlay(video);
+                            if (result !== 'playing') {
+                              handleFullVideoPlayFailure(
+                                video, attempt, result === 'blocked',
+                              );
                             }
                           }}
                           styleAs="link"
                           className="text-medium translate-y-[0.25px]"
-                          hideFocusOutline
                         />
                       )}
                       {shouldShare &&
@@ -2310,8 +2396,8 @@ export default function MediaLarge({
       />
       {isVideo && isVideoZoomOpen && zoomSource &&
       <VideoZoomOverlay
-        open={isVideoZoomOpen}
         onClose={() => setIsVideoZoomOpen(false)}
+        returnFocusRef={videoZoomTriggerRef}
         videoUrl={photo.url}
         playbackUrl={zoomSource.url}
         usingCompatibility={zoomSource.useCompatibility}
@@ -2326,220 +2412,17 @@ export default function MediaLarge({
         captionsOn={captionsOn}
         subtitleTracks={subtitleTracks ?? undefined}
         activeCaptionIndex={activeCaptionIndex}
-        onCloseWithState={(state) => {
-          const v = videoRef.current;
+        onCloseWithTime={(currentTime) => {
+          const v = fullVideoRef.current;
           if (!v) { return; }
-          try { v.currentTime = state.currentTime || 0; } catch {}
+          try { v.currentTime = currentTime; } catch {}
           if (lastInlineWasPlaying) {
-            v.play?.().catch(() => {});
+            void VideoPlaybackManager.requestPlay(v, {
+              preferPiP: VideoPlaybackManager.isPiPActive(),
+            });
           }
         }}
       />}
     </>
   );
 };
-
-function VideoZoomOverlay({
-  usingCompatibility,
-  open,
-  onClose,
-  videoUrl,
-  playbackUrl,
-  manifestUrl,
-  mediaId,
-  compatibilityUrl,
-  posterUrl,
-  onPlayManaged,
-  startTime,
-  captionsOn,
-  subtitleTracks,
-  activeCaptionIndex,
-  onCloseWithState,
-}: {
-  usingCompatibility: boolean
-  open: boolean
-  onClose: () => void
-  videoUrl: string
-  playbackUrl?: string
-  manifestUrl?: string
-  mediaId?: string
-  compatibilityUrl?: string
-  posterUrl?: string
-  onPlayManaged?: (video: HTMLVideoElement) => void
-  startTime?: number
-  captionsOn?: boolean
-  subtitleTracks?: { src: string, lang: string, label?: string }[]
-  activeCaptionIndex?: number
-  onCloseWithState?: (state: { currentTime: number, wasPlaying: boolean }) => void
-}) {
-  const videoRef = useRef<HTMLVideoElement>(null);
-  const [wasPlaying, setWasPlaying] = useState(true);
-  const progressiveUrlRef = useRef<{ source: string, url: string } | undefined>(undefined);
-  const [retrySource, setRetrySource] = useState<string>();
-  const retriedUrls = useRef(new Set<string>());
-  const [needsCrossOriginCaptions] = useState(() => !subtitleTracks?.length);
-  const activePlaybackUrl = retrySource ?? playbackUrl ?? videoUrl;
-  const resumeAt = useRef(startTime);
-  const activeManifestUrl = open && manifestUrl
-    ? getFullVideoBridgeUrl(manifestUrl)
-    : undefined;
-  const progressiveUrl = progressiveUrlRef.current?.source === activePlaybackUrl
-    ? progressiveUrlRef.current.url
-    : undefined;
-  useAdaptiveFullVideoPlayback({
-    active: open,
-    videoRef,
-    sourceUrl: activePlaybackUrl,
-    compatibilityUrl,
-    manifestUrl: activeManifestUrl,
-    onTelemetry: (telemetry) => {
-      try {
-        window.dispatchEvent(new CustomEvent('media-full-video-telemetry', {
-          detail: { mediaId, ...telemetry },
-        }));
-      } catch { /* page may be tearing down */ }
-    },
-    onProgressiveFallback: (url) => {
-      progressiveUrlRef.current = { source: activePlaybackUrl, url };
-    },
-  });
-  useEffect(() => {
-    if (!open) { return; }
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') { onClose(); }
-    };
-    document.addEventListener('keydown', handleKeyDown);
-    const originalOverflow = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
-    return () => {
-      document.removeEventListener('keydown', handleKeyDown);
-      document.body.style.overflow = originalOverflow;
-    };
-  }, [open, onClose]);
-
-  useEffect(() => {
-    if (!open) { return; }
-    const v = videoRef.current;
-    if (!v) { return; }
-    const onPlay = () => setWasPlaying(true);
-    const onPause = () => setWasPlaying(false);
-    v.addEventListener('play', onPlay);
-    v.addEventListener('pause', onPause);
-    return () => {
-      v.removeEventListener('play', onPlay);
-      v.removeEventListener('pause', onPause);
-    };
-  }, [open, startTime, captionsOn]);
-
-  // React to external toggle changes while overlay is open
-  useEffect(() => {
-    if (!open) { return; }
-    const v = videoRef.current;
-    if (!v || !v.textTracks) { return; }
-    try {
-      for (let i = 0; i < v.textTracks.length; i++) {
-        v.textTracks[i].mode = captionsOn && i === (activeCaptionIndex ?? 0) ? 'showing' : 'hidden';
-      }
-    } catch { /* ignore */ }
-  }, [open, captionsOn]);
-
-  if (!open || typeof document === 'undefined') {
-    return null;
-  }
-
-  return createPortal(
-    <div
-      className="fixed inset-0 z-[1000] flex items-center justify-center bg-black/80 backdrop-blur-sm p-4"
-      onClick={() => {
-        const v = videoRef.current;
-        onCloseWithState?.({ currentTime: v?.currentTime || 0, wasPlaying });
-        onClose();
-      }}
-    >
-      <div
-        className="relative w-full max-w-5xl"
-        onClick={(event) => event.stopPropagation()}
-      >
-        {/* Close via backdrop click or Escape key; remove visible label */}
-        <video
-          ref={videoRef}
-          className="w-full h-full max-h-[80vh] object-contain rounded-md bg-black"
-          src={progressiveUrl ?? activePlaybackUrl}
-          crossOrigin={needsCrossOriginCaptions ? 'anonymous' : undefined}
-          poster={posterUrl}
-          controls
-          controlsList="nodownload noplaybackrate"
-          autoPlay
-          playsInline
-          onContextMenu={(e) => e.preventDefault()}
-          onError={event => {
-            const video = event.currentTarget;
-            if (!video.error || video.dataset.fullVideoHlsInitializing === 'true') { return; }
-            const next = selectRetryVideoPlaybackUrl({
-              sourceUrl: getFullVideoBridgeUrl(videoUrl),
-              compatibilityUrl,
-              wasUsingCompatibility: retrySource ? retrySource === compatibilityUrl : usingCompatibility,
-              errorCode: video.error.code,
-              retriedUrls: retriedUrls.current,
-            });
-            if (!next) { return; }
-            retriedUrls.current.add(next);
-            if (video.currentTime > 0) { resumeAt.current = video.currentTime; }
-            if (next === activePlaybackUrl) { video.load(); }
-            else { setRetrySource(next); }
-          }}
-          onLoadedMetadata={(e) => {
-            const v = e.currentTarget as HTMLVideoElement;
-            if (typeof resumeAt.current === 'number' && Number.isFinite(resumeAt.current)) {
-              try { v.currentTime = Math.max(0, resumeAt.current); } catch {}
-            }
-            if (v.textTracks && v.textTracks.length > 0) {
-              for (let i = 0; i < v.textTracks.length; i++) {
-                v.textTracks[i].mode = captionsOn && i === (activeCaptionIndex ?? 0) ? 'showing' : 'hidden';
-              }
-            }
-          }}
-          onPlay={(e) => {
-            const el = e.currentTarget as HTMLVideoElement;
-            onPlayManaged?.(el);
-          }}
-        >
-          {(() => {
-            const tracks = (subtitleTracks && subtitleTracks.length > 0)
-              ? subtitleTracks
-              : (() => {
-                const actualUrl = videoUrl;
-                const base = (() => {
-                  try {
-                    const { pathname } = new URL(actualUrl);
-                    const last = pathname.split('/').pop() || '';
-                    return actualUrl.replace(last, (last.split('.').slice(0, -1).join('.')) || last);
-                  } catch {
-                    const pathOnly = actualUrl.split('?')[0] ?? actualUrl;
-                    const parts = pathOnly.split('/');
-                    const file = parts.pop() || '';
-                    const baseNoExt = file.includes('.') ? file.substring(0, file.lastIndexOf('.')) : file;
-                    return [...parts, baseNoExt].join('/');
-                  }
-                })();
-                return [{ src: `${base}-subtitles.vtt`, lang: 'default', label: 'Subtitles' }];
-              })();
-            return <>
-              {tracks.map((t: any, i: number) => (
-                <track
-                  key={`${t.src}-${i}`}
-                  kind="captions"
-                  src={t.src}
-                  srcLang={t.lang}
-                  label={t.label || t.lang}
-                  {...(captionsOn && i === (activeCaptionIndex ?? 0) ? { default: true } : {})}
-                />
-              ))}
-            </>;
-          })()}
-        </video>
-      </div>
-    </div>,
-    document.body,
-  );
-}

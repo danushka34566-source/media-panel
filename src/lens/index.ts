@@ -29,22 +29,23 @@ export type LensWithMeta = {
 
 export type Lenses = LensWithMeta[];
 
-export const getLensFromParams = async (
-  params: Promise<Lens>,
-): Promise<Lens> => {
-  const { make, model } = await params;
-  return make === MISSING_FIELD
-    ? { model }
-    : { make, model };
-};
+export const lensFromRouteSegments = ({ make, model }: Lens): Lens =>
+  make === MISSING_FIELD ? { model } : { make, model };
+
+const lensFromPageSegments = ({ make, model }: Lens): Lens =>
+  lensFromRouteSegments({
+    make: make === undefined ? undefined : decodeURIComponent(make),
+    model: decodeURIComponent(model),
+  });
+
+export const getLensFromParams = async (params: Promise<Lens>): Promise<Lens> =>
+  lensFromPageSegments(await params);
 
 export const getLensMediaFromParams = async (
   params: Promise<LensWithMediaId>,
 ): Promise<LensWithMediaId> => {
-  const { make, model, photoId } = await params;
-  return make === MISSING_FIELD
-    ? { model, photoId }
-    : { make, model, photoId };
+  const { photoId, ...lens } = await params;
+  return { ...lensFromPageSegments(lens), photoId };
 };
 
 export const safelyGenerateLensStaticParams = (

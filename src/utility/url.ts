@@ -18,6 +18,29 @@ export const makeUrlAbsolute = (url?: string) => url !== undefined
     .replace(/\/$/, '')
   : undefined;
 
+const LOCAL_PATH_ORIGIN = 'https://site.invalid';
+
+export const getLocalPagePath = (value: unknown) => {
+  if (typeof value !== 'string' || !value.startsWith('/')) { return; }
+
+  const isNetworkPath = (path: string) =>
+    /^\/(?:[\/\\]|%(?:25)*(?:2f|5c))/i.test(path);
+  if (isNetworkPath(value)) { return; }
+
+  try {
+    const url = new URL(value, LOCAL_PATH_ORIGIN);
+    const decodedPath = decodeURIComponent(url.pathname).replace(/[\t\r\n]/g, '');
+    if (
+      url.origin !== LOCAL_PATH_ORIGIN ||
+      isNetworkPath(url.pathname) ||
+      isNetworkPath(decodedPath)
+    ) { return; }
+    return url.pathname + url.search + url.hash;
+  } catch {
+    return undefined;
+  }
+};
+
 export const removeParamsFromUrl = (urlString: string, params: string[]) => {
   const url = new URL(urlString);
   for (const param of params) {

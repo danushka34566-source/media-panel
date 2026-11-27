@@ -1,8 +1,22 @@
 import crypto from 'crypto';
+import type { PoolClient } from 'pg';
 import { query, withPostgresTransaction } from '@/platforms/postgres';
 import { hashPassword, passwordMatches } from './password';
-import { AUTH_CODE_TTL_MINUTES } from '.';
+import {
+  AUTH_CODE_RESEND_COOLDOWN_SECONDS,
+  AUTH_CODE_TTL_MINUTES,
+} from '.';
 import { roleForNewGoogleUser } from './google-role';
+import { sendAuthEmail } from './email-delivery';
+import {
+  createLocalAuditUser,
+  isLocalAuthBypassEnabled,
+  LOCAL_AUDIT_USER_ID,
+} from './local-audit-bypass';
+import {
+  getVerifiedLoginNonce,
+  VerificationCodeCooldownError,
+} from './login-verification';
 import type { SortBy } from '@/media/sort';
 
 export { hashPassword, passwordMatches } from './password';
@@ -66,14 +80,44 @@ type UserRow = {
   updated_at: Date
 };
 
-type VerificationPurpose = 'signup' | 'login' | 'password-reset';
+type VerificationPurpose = 'signup' | 'login' | 'password-reset' | 'email-change';
 type SmsVerificationPurpose = 'mobile-setup' | 'login' | 'password-reset';
+type CodePurpose = VerificationPurpose | SmsVerificationPurpose;
 
 const AUTH_USERS_TABLE = 'auth_users';
 export const AUTH_USERS_CACHE_TAG = 'auth-users';
 const AUTH_CODES_TABLE = 'auth_verification_codes';
 const AUTH_SMS_CODES_TABLE = 'auth_sms_verification_codes';
+type VerificationCodeTable = typeof AUTH_CODES_TABLE | typeof AUTH_SMS_CODES_TABLE;
 const AUTH_USER_FAVORITES_TABLE = 'auth_user_favorites';
+const MAX_VERIFICATION_ATTEMPTS = 5;
+const VERIFICATION_REQUEST_TIMESTAMPS = {
+  signup: 'signup_verification_requested_at',
+  email: 'login_email_verification_requested_at',
+  sms: 'login_sms_verification_requested_at',
+  mobileSetup: 'mobile_setup_verification_requested_at',
+  emailChange: 'email_change_verification_requested_at',
+} as const;
+
+const reserveVerificationRequest = async (
+  client: PoolClient,
+  userId: string,
+  channel: keyof typeof VERIFICATION_REQUEST_TIMESTAMPS,
+) => {
+  const timestamp = VERIFICATION_REQUEST_TIMESTAMPS[channel];
+  const { rowCount } = await client.query(`
+    UPDATE ${AUTH_USERS_TABLE}
+    SET ${timestamp}=now()
+    WHERE id=$1 AND status='active' AND ($3::boolean OR NOT email_verified)
+      AND (
+        ${timestamp} IS NULL OR
+        ${timestamp} <= now() - $2::int * interval '1 second'
+      )
+  `, [userId, AUTH_CODE_RESEND_COOLDOWN_SECONDS, channel !== 'signup']);
+  if (!rowCount) {
+    throw new VerificationCodeCooldownError();
+  }
+};
 
 let authTablesReady: Promise<void> | undefined;
 
@@ -99,6 +143,11 @@ export const ensureAuthTables = async () => {
       totp_secret TEXT,
       totp_last_used_counter INTEGER,
       login_verification_nonce TEXT,
+      signup_verification_requested_at TIMESTAMPTZ,
+      login_email_verification_requested_at TIMESTAMPTZ,
+      login_sms_verification_requested_at TIMESTAMPTZ,
+      mobile_setup_verification_requested_at TIMESTAMPTZ,
+      email_change_verification_requested_at TIMESTAMPTZ,
       wide_grid_enabled BOOLEAN,
       video_preview_mode TEXT NOT NULL DEFAULT 'smart',
       media_sort_by TEXT,
@@ -116,6 +165,11 @@ export const ensureAuthTables = async () => {
       ADD COLUMN IF NOT EXISTS totp_secret TEXT,
       ADD COLUMN IF NOT EXISTS totp_last_used_counter INTEGER,
       ADD COLUMN IF NOT EXISTS login_verification_nonce TEXT,
+      ADD COLUMN IF NOT EXISTS signup_verification_requested_at TIMESTAMPTZ,
+      ADD COLUMN IF NOT EXISTS login_email_verification_requested_at TIMESTAMPTZ,
+      ADD COLUMN IF NOT EXISTS login_sms_verification_requested_at TIMESTAMPTZ,
+      ADD COLUMN IF NOT EXISTS mobile_setup_verification_requested_at TIMESTAMPTZ,
+      ADD COLUMN IF NOT EXISTS email_change_verification_requested_at TIMESTAMPTZ,
       ADD COLUMN IF NOT EXISTS wide_grid_enabled BOOLEAN,
       ADD COLUMN IF NOT EXISTS video_preview_mode TEXT NOT NULL DEFAULT 'smart',
       ADD COLUMN IF NOT EXISTS media_sort_by TEXT;
@@ -128,6 +182,11 @@ export const ensureAuthTables = async () => {
         NEW.role <> 'superadmin' OR
         NEW.status <> 'active'
       ) THEN
+        -- Serialize removals before the READ COMMITTED recheck. Otherwise
+        -- two transactions can each see the other administrator as active.
+        PERFORM pg_advisory_xact_lock(
+          hashtext('media-panel'), hashtext('auth:last-active-superadmin')
+        );
         PERFORM 1
         FROM ${AUTH_USERS_TABLE}
         WHERE id <> OLD.id AND role = 'superadmin' AND status = 'active'
@@ -154,9 +213,12 @@ export const ensureAuthTables = async () => {
       purpose TEXT NOT NULL,
       code_hash TEXT NOT NULL,
       attempts INTEGER NOT NULL DEFAULT 0,
+      delivery_pending BOOLEAN NOT NULL DEFAULT FALSE,
       expires_at TIMESTAMPTZ NOT NULL,
       created_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
+    ALTER TABLE ${AUTH_CODES_TABLE}
+      ADD COLUMN IF NOT EXISTS delivery_pending BOOLEAN NOT NULL DEFAULT FALSE;
 
     CREATE TABLE IF NOT EXISTS ${AUTH_SMS_CODES_TABLE} (
       id UUID PRIMARY KEY,
@@ -165,9 +227,12 @@ export const ensureAuthTables = async () => {
       purpose TEXT NOT NULL,
       code_hash TEXT NOT NULL,
       attempts INTEGER NOT NULL DEFAULT 0,
+      delivery_pending BOOLEAN NOT NULL DEFAULT FALSE,
       expires_at TIMESTAMPTZ NOT NULL,
       created_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
+    ALTER TABLE ${AUTH_SMS_CODES_TABLE}
+      ADD COLUMN IF NOT EXISTS delivery_pending BOOLEAN NOT NULL DEFAULT FALSE;
 
     CREATE TABLE IF NOT EXISTS ${AUTH_USER_FAVORITES_TABLE} (
       user_id UUID NOT NULL REFERENCES ${AUTH_USERS_TABLE}(id) ON DELETE CASCADE,
@@ -327,6 +392,7 @@ export const hasActiveSuperAdmin = async () => {
 };
 
 export const getUserFavoriteMediaIds = async (userId: string) => {
+  if (isLocalAuthBypassEnabled() && userId === LOCAL_AUDIT_USER_ID) { return []; }
   await ensureAuthTables();
   const { rows } = await query<{ media_id: string }>(`
     SELECT media_id
@@ -338,6 +404,7 @@ export const getUserFavoriteMediaIds = async (userId: string) => {
 };
 
 export const getActiveUserFavoriteMediaIds = async (userId: string) => {
+  if (isLocalAuthBypassEnabled() && userId === LOCAL_AUDIT_USER_ID) { return []; }
   await ensureAuthTables();
   const { rows } = await query<{
     status: UserStatus
@@ -363,6 +430,7 @@ export const getActiveUserFavoriteMediaIds = async (userId: string) => {
 };
 
 export const isUserFavorite = async (userId: string, mediaId: string) => {
+  if (isLocalAuthBypassEnabled() && userId === LOCAL_AUDIT_USER_ID) { return false; }
   await ensureAuthTables();
   const { rows } = await query<{ exists: boolean }>(`
     SELECT EXISTS (
@@ -498,6 +566,9 @@ export const findUserByEmail = async (email: string) => {
 };
 
 export const findUserById = async (id: string) => {
+  if (isLocalAuthBypassEnabled() && id === LOCAL_AUDIT_USER_ID) {
+    return createLocalAuditUser();
+  }
   await ensureAuthTables();
   const { rows } = await query<UserRow>(`
     SELECT * FROM ${AUTH_USERS_TABLE} WHERE id=$1 LIMIT 1
@@ -522,6 +593,18 @@ export type UserSessionState = Pick<
 export const findUserSessionStateById = async (
   id: string,
 ): Promise<UserSessionState | undefined> => {
+  if (isLocalAuthBypassEnabled() && id === LOCAL_AUDIT_USER_ID) {
+    const user = createLocalAuditUser();
+    return {
+      id: user.id,
+      name: user.name,
+      email: user.email,
+      role: user.role,
+      status: user.status,
+      profileImageUrl: user.profileImageUrl,
+      loginVerificationNonce: undefined,
+    };
+  }
   const { rows } = await query<Pick<
     UserRow,
     | 'id'
@@ -634,6 +717,7 @@ export const upsertGoogleUser = async ({
   profileImageUrl,
   allowInitialSuperAdmin = false,
   allowNewUser = true,
+  expectedLinkUserId,
 }: {
   googleSub: string
   email: string
@@ -641,6 +725,7 @@ export const upsertGoogleUser = async ({
   profileImageUrl?: string
   allowInitialSuperAdmin?: boolean
   allowNewUser?: boolean
+  expectedLinkUserId?: string
 }) => {
   await ensureAuthTables();
   return withPostgresTransaction(async client => {
@@ -660,10 +745,19 @@ export const upsertGoogleUser = async ({
     );
     const isInitialSuperAdmin = initialGoogleRole === 'superadmin';
     const normalizedEmail = normalizeEmail(email);
+    const assertLinkAccount = (row: UserRow | undefined) => {
+      if (expectedLinkUserId && (
+        row?.id !== expectedLinkUserId || row.email !== normalizedEmail ||
+        !row.email_verified || row.status !== 'active'
+      )) {
+        throw new Error('This Google account does not match your profile email');
+      }
+    };
     const existingByGoogle = await client.query<UserRow>(`
       SELECT * FROM ${AUTH_USERS_TABLE} WHERE google_sub=$1 LIMIT 1
     `, [googleSub]);
     if (existingByGoogle.rows[0]) {
+      assertLinkAccount(existingByGoogle.rows[0]);
       const { rows } = await client.query<UserRow>(`
         UPDATE ${AUTH_USERS_TABLE}
         SET email=$2,
@@ -692,10 +786,16 @@ export const upsertGoogleUser = async ({
     const existingByEmail = await client.query<UserRow>(`
       SELECT * FROM ${AUTH_USERS_TABLE} WHERE email=$1 LIMIT 1
     `, [normalizedEmail]);
+    assertLinkAccount(existingByEmail.rows[0]);
     if (existingByEmail.rows[0]) {
+      if (existingByEmail.rows[0].google_sub &&
+          existingByEmail.rows[0].google_sub !== googleSub) {
+        throw new Error('This email is already linked to a different Google account');
+      }
       const { rows } = await client.query<UserRow>(`
         UPDATE ${AUTH_USERS_TABLE}
-        SET google_linked=TRUE,
+        SET password_hash=CASE WHEN $5::boolean THEN NULL ELSE password_hash END,
+            google_linked=TRUE,
             google_sub=$2,
             email_verified=TRUE,
             profile_image_url=$3,
@@ -709,6 +809,7 @@ export const upsertGoogleUser = async ({
         googleSub,
         profileImageUrl ?? null,
         isInitialSuperAdmin,
+        !existingByEmail.rows[0].email_verified,
       ]);
       return mapUser(rows[0]);
     }
@@ -779,6 +880,7 @@ export const updateUser = async (
     videoPreviewMode: VideoPreviewMode
     mediaSortBy: SortBy | null
   }>,
+  expectedEmail?: string,
 ) => {
   await ensureAuthTables();
   const setters: string[] = [];
@@ -826,15 +928,38 @@ export const updateUser = async (
     add('media_sort_by', updates.mediaSortBy);
   }
   if (setters.length === 0) { throw new Error('No user changes supplied'); }
-  values.push(id);
+  const idParameter = values.push(id);
+  const emailCondition = expectedEmail === undefined
+    ? ''
+    : `AND email=$${values.push(normalizeEmail(expectedEmail))}`;
   const { rows } = await query<UserRow>(`
     UPDATE ${AUTH_USERS_TABLE}
     SET ${setters.join(', ')}, updated_at=now()
-    WHERE id=$${values.length}
+    WHERE id=$${idParameter} ${emailCondition}
     RETURNING ${publicFields}
   `, values);
   if (!rows[0]) { throw new Error('User not found'); }
   return mapUser(rows[0]);
+};
+
+export const completeProfileEmailChange = async (
+  userId: string,
+  previousEmail: string,
+  nextEmail: string,
+) => {
+  await ensureAuthTables();
+  const { rowCount } = await query(`
+    WITH changed AS (
+      UPDATE ${AUTH_USERS_TABLE}
+      SET email=$3, email_verified=TRUE, updated_at=now()
+      WHERE id=$1 AND email=$2 AND status='active' AND NOT google_linked
+      RETURNING id
+    ), revoked_codes AS (
+      DELETE FROM ${AUTH_CODES_TABLE} WHERE user_id IN (SELECT id FROM changed)
+    )
+    SELECT id FROM changed
+  `, [userId, normalizeEmail(previousEmail), normalizeEmail(nextEmail)]);
+  if (!rowCount) { throw new Error('Your account email has changed. Try again.'); }
 };
 
 export const deleteUser = async (id: string) => {
@@ -852,32 +977,94 @@ export const normalizeSriLankaMobile = (value: string) => {
   throw new Error('Enter a valid Sri Lankan mobile number');
 };
 
+const createStoredVerificationCode = (
+  table: VerificationCodeTable,
+  recipientColumn: 'email' | 'mobile_number',
+  recipient: string,
+  userId: string,
+  purpose: CodePurpose,
+  hash: (code: string) => string,
+  cooldownChannel?: keyof typeof VERIFICATION_REQUEST_TIMESTAMPS,
+) => withPostgresTransaction(async client => {
+  if (cooldownChannel) {
+    await reserveVerificationRequest(client, userId, cooldownChannel);
+  }
+  const staged = usesStagedDelivery(purpose);
+  // A replacement leaves the last delivered code usable while the
+  // provider is sending. Clear any expired rows left by interrupted sends.
+  await client.query(`
+    DELETE FROM ${table}
+    WHERE user_id=$1 AND purpose=$2 AND (NOT $3::boolean OR expires_at <= now())
+  `, [userId, purpose, staged]);
+
+  while (true) {
+    const code = generateCode();
+    const { rowCount } = await client.query(`
+      INSERT INTO ${table} (
+        id, user_id, ${recipientColumn}, purpose, code_hash, expires_at,
+        delivery_pending
+      )
+      SELECT $1, $2, $3, $4, $5, now() + ($6 || ' minutes')::interval, $7
+      WHERE NOT $7::boolean OR NOT EXISTS (
+        SELECT 1 FROM ${table} WHERE user_id=$2 AND purpose=$4 AND code_hash=$5
+      )
+    `, [
+      crypto.randomUUID(), userId, recipient, purpose, hash(code),
+      AUTH_CODE_TTL_MINUTES, staged,
+    ]);
+    // A staged code must be distinguishable from every unexpired predecessor.
+    if (rowCount) { return code; }
+  }
+});
+
+const usesStagedDelivery = (purpose: CodePurpose) =>
+  purpose === 'login' || purpose === 'mobile-setup' || purpose === 'email-change';
+
+const confirmVerificationCodeDelivery = async (
+  table: VerificationCodeTable,
+  userId: string,
+  purpose: CodePurpose,
+  codeHash: string,
+) => {
+  const { rowCount } = await query(`
+    WITH replacement AS (
+      UPDATE ${table} SET delivery_pending=FALSE
+      WHERE user_id=$1 AND purpose=$2 AND code_hash=$3
+        AND delivery_pending AND expires_at > now()
+      RETURNING id, created_at
+    ), retired AS (
+      DELETE FROM ${table} AS prior USING replacement
+      WHERE prior.user_id=$1 AND prior.purpose=$2
+        AND (prior.created_at, prior.id) < (replacement.created_at, replacement.id)
+    )
+    SELECT id FROM replacement
+  `, [userId, purpose, codeHash]);
+  if (!rowCount) { throw new Error('This verification code is no longer available'); }
+};
+
+const discardFailedVerificationCode = (
+  table: VerificationCodeTable,
+  userId: string,
+  purpose: CodePurpose,
+  codeHash: string,
+) => query(`
+  DELETE FROM ${table}
+  WHERE user_id=$1 AND purpose=$2 AND code_hash=$3
+    AND (NOT $4::boolean OR delivery_pending)
+`, [userId, purpose, codeHash, usesStagedDelivery(purpose)]).catch(() => undefined);
+
 export const createSmsVerificationCode = async (
   userId: string,
   mobileNumber: string,
   purpose: SmsVerificationPurpose,
 ) => {
   await ensureAuthTables();
-  const code = generateCode();
   const normalizedMobile = normalizeSriLankaMobile(mobileNumber);
-  await withPostgresTransaction(async client => {
-    await client.query(`
-      DELETE FROM ${AUTH_SMS_CODES_TABLE}
-      WHERE user_id=$1 AND purpose=$2
-    `, [userId, purpose]);
-    await client.query(`
-      INSERT INTO ${AUTH_SMS_CODES_TABLE} (
-        id, user_id, mobile_number, purpose, code_hash, expires_at
-      ) VALUES ($1, $2, $3, $4, $5, now() + ($6 || ' minutes')::interval)
-    `, [
-      crypto.randomUUID(),
-      userId,
-      normalizedMobile,
-      purpose,
-      hashSmsCode(userId, normalizedMobile, purpose, code),
-      AUTH_CODE_TTL_MINUTES,
-    ]);
-  });
+  const code = await createStoredVerificationCode(
+    AUTH_SMS_CODES_TABLE, 'mobile_number', normalizedMobile, userId, purpose,
+    value => hashSmsCode(userId, normalizedMobile, purpose, value),
+    purpose === 'login' ? 'sms' : purpose === 'mobile-setup' ? 'mobileSetup' : undefined,
+  );
   return { code, mobileNumber: normalizedMobile };
 };
 
@@ -897,7 +1084,7 @@ export const verifySmsCode = async (
   }>(`
     SELECT id, code_hash, attempts, expires_at
     FROM ${AUTH_SMS_CODES_TABLE}
-    WHERE user_id=$1 AND mobile_number=$2 AND purpose=$3
+    WHERE user_id=$1 AND mobile_number=$2 AND purpose=$3 AND NOT delivery_pending
     ORDER BY created_at DESC
     LIMIT 1
   `, [userId, normalizedMobile, purpose]);
@@ -908,18 +1095,21 @@ export const verifySmsCode = async (
     }
     throw new Error('Verification code is invalid or expired');
   }
-  if (row.attempts >= 5) {
+  if (row.attempts >= MAX_VERIFICATION_ATTEMPTS) {
     await query(`DELETE FROM ${AUTH_SMS_CODES_TABLE} WHERE id=$1`, [row.id]);
     throw new Error('Too many failed attempts. Request a new code.');
   }
   if (row.code_hash !== hashSmsCode(userId, normalizedMobile, purpose, code)) {
     await query(`
-      UPDATE ${AUTH_SMS_CODES_TABLE} SET attempts=attempts + 1 WHERE id=$1
+      UPDATE ${AUTH_SMS_CODES_TABLE} SET attempts=attempts + 1
+      WHERE id=$1 AND attempts < ${MAX_VERIFICATION_ATTEMPTS} AND expires_at > now()
     `, [row.id]);
     throw new Error('Verification code is invalid');
   }
   const consumed = await query(`
-    DELETE FROM ${AUTH_SMS_CODES_TABLE} WHERE id=$1 RETURNING id
+    DELETE FROM ${AUTH_SMS_CODES_TABLE}
+    WHERE id=$1 AND attempts < ${MAX_VERIFICATION_ATTEMPTS} AND expires_at > now()
+    RETURNING id
   `, [row.id]);
   if (!consumed.rowCount) { throw new Error('Verification code was already used'); }
   return normalizedMobile;
@@ -940,29 +1130,33 @@ export const sendSmsVerificationCode = async ({
   const senderId = process.env.TEXTLK_SENDER_ID ||
     process.env.TEXT_LK_SENDER_ID ||
     'MediaPanel';
+  const codeHash = hashSmsCode(userId, mobileNumber, purpose, code);
   try {
     if (!token) { throw new Error('SMS verification is not configured'); }
     const response = await fetch('https://app.text.lk/api/v3/sms/send', {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${token}`,
-      'Content-Type': 'application/json',
-      Accept: 'application/json',
-    },
-    body: JSON.stringify({
-      recipient: mobileNumber.replace(/^\+/, ''),
-      sender_id: senderId,
-      type: 'plain',
-      message: `Your Media Panel verification code is ${code}. It expires in ${AUTH_CODE_TTL_MINUTES} minutes.`,
-    }),
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
+      },
+      body: JSON.stringify({
+        recipient: mobileNumber.replace(/^\+/, ''),
+        sender_id: senderId,
+        type: 'plain',
+        message: `Your Media Panel verification code is ${code}. It expires in ${AUTH_CODE_TTL_MINUTES} minutes.`,
+      }),
+      signal: AbortSignal.timeout(10_000),
     });
     if (!response.ok) { throw new Error('Unable to send SMS code'); }
   } catch (error) {
-    await query(`
-      DELETE FROM ${AUTH_SMS_CODES_TABLE}
-      WHERE user_id=$1 AND purpose=$2
-    `, [userId, purpose]).catch(() => undefined);
+    await discardFailedVerificationCode(
+      AUTH_SMS_CODES_TABLE, userId, purpose, codeHash,
+    );
     throw error;
+  }
+  if (usesStagedDelivery(purpose)) {
+    await confirmVerificationCodeDelivery(AUTH_SMS_CODES_TABLE, userId, purpose, codeHash);
   }
 };
 
@@ -1012,39 +1206,44 @@ export const clearLoginVerificationChallenge = async (
   `, [userId]);
 };
 
+export const completeLoginVerificationChallenge = async (
+  userId: string,
+  nonce: string,
+) => {
+  await ensureAuthTables();
+  const { rowCount } = await query(`
+    UPDATE ${AUTH_USERS_TABLE}
+    SET login_verification_nonce=$3, updated_at=now()
+    WHERE id=$1 AND login_verification_nonce=$2
+  `, [userId, nonce, getVerifiedLoginNonce(nonce)]);
+  return Boolean(rowCount);
+};
+
 export const createVerificationCode = async (
   userId: string,
   email: string,
   purpose: VerificationPurpose,
 ) => {
   await ensureAuthTables();
-  const code = generateCode();
   const normalizedEmail = normalizeEmail(email);
-  await withPostgresTransaction(async client => {
-    await client.query(`
-      DELETE FROM ${AUTH_CODES_TABLE}
-      WHERE user_id=$1 AND purpose=$2
-    `, [userId, purpose]);
-    await client.query(`
-      INSERT INTO ${AUTH_CODES_TABLE} (
-        id, user_id, email, purpose, code_hash, expires_at
-      ) VALUES ($1, $2, $3, $4, $5, now() + ($6 || ' minutes')::interval)
-    `, [
-      crypto.randomUUID(),
-      userId,
-      normalizedEmail,
-      purpose,
-      hashCode(userId, normalizedEmail, purpose, code),
-      AUTH_CODE_TTL_MINUTES,
-    ]);
-  });
-  return code;
+  const cooldownChannel = {
+    login: 'email',
+    signup: 'signup',
+    'email-change': 'emailChange',
+    'password-reset': undefined,
+  } as const;
+  return createStoredVerificationCode(
+    AUTH_CODES_TABLE, 'email', normalizedEmail, userId, purpose,
+    value => hashCode(userId, normalizedEmail, purpose, value),
+    cooldownChannel[purpose],
+  );
 };
 
 export const verifyCode = async (
   email: string,
   code: string,
   purpose: VerificationPurpose,
+  userId?: string,
 ) => {
   await ensureAuthTables();
   const normalizedEmail = normalizeEmail(email);
@@ -1057,10 +1256,11 @@ export const verifyCode = async (
   }>(`
     SELECT id, user_id, code_hash, attempts, expires_at
     FROM ${AUTH_CODES_TABLE}
-    WHERE email=$1 AND purpose=$2
+    WHERE email=$1 AND purpose=$2 AND NOT delivery_pending
+      AND ($3::uuid IS NULL OR user_id=$3)
     ORDER BY created_at DESC
     LIMIT 1
-  `, [normalizedEmail, purpose]);
+  `, [normalizedEmail, purpose, userId ?? null]);
   const row = rows[0];
   if (!row || row.expires_at.getTime() <= Date.now()) {
     if (row) {
@@ -1068,18 +1268,21 @@ export const verifyCode = async (
     }
     throw new Error('Verification code is invalid or expired');
   }
-  if (row.attempts >= 5) {
+  if (row.attempts >= MAX_VERIFICATION_ATTEMPTS) {
     await query(`DELETE FROM ${AUTH_CODES_TABLE} WHERE id=$1`, [row.id]);
     throw new Error('Too many failed attempts. Request a new code.');
   }
   if (row.code_hash !== hashCode(row.user_id, normalizedEmail, purpose, code.replace(/\D/g, ''))) {
     await query(`
-      UPDATE ${AUTH_CODES_TABLE} SET attempts=attempts + 1 WHERE id=$1
+      UPDATE ${AUTH_CODES_TABLE} SET attempts=attempts + 1
+      WHERE id=$1 AND attempts < ${MAX_VERIFICATION_ATTEMPTS} AND expires_at > now()
     `, [row.id]);
     throw new Error('Verification code is invalid');
   }
   const consumed = await query(`
-    DELETE FROM ${AUTH_CODES_TABLE} WHERE id=$1 RETURNING id
+    DELETE FROM ${AUTH_CODES_TABLE}
+    WHERE id=$1 AND attempts < ${MAX_VERIFICATION_ATTEMPTS} AND expires_at > now()
+    RETURNING id
   `, [row.id]);
   if (!consumed.rowCount) { throw new Error('Verification code was already used'); }
   return row.user_id;
@@ -1098,37 +1301,25 @@ export const sendVerificationEmail = async ({
   code: string
   purpose: VerificationPurpose
 }) => {
-  const apiKey = process.env.RESEND_API_KEY;
-  const from = process.env.RESEND_FROM_EMAIL || process.env.RESEND_FROM ||
-    'Media Panel <onboarding@resend.dev>';
   const subject = purpose === 'password-reset'
     ? 'Your Media Panel password reset code'
     : purpose === 'login'
       ? 'Your Media Panel sign-in code'
-    : 'Verify your Media Panel account';
+      : purpose === 'email-change'
+        ? 'Verify your new Media Panel email address'
+        : 'Verify your Media Panel account';
   const text = `Hello ${name || 'there'}, your Media Panel verification code is ${code}. It expires in ${AUTH_CODE_TTL_MINUTES} minutes.`;
+  const codeHash = hashCode(userId, normalizeEmail(email), purpose, code);
 
   try {
-    if (!apiKey) { throw new Error('Email verification is not configured'); }
-    const response = await fetch('https://api.resend.com/emails', {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      from,
-      to: [email],
-      subject,
-      text,
-    }),
-    });
-    if (!response.ok) { throw new Error('Unable to send verification email'); }
+    await sendAuthEmail({ to: email, subject, text });
   } catch (error) {
-    await query(`
-      DELETE FROM ${AUTH_CODES_TABLE}
-      WHERE user_id=$1 AND purpose=$2
-    `, [userId, purpose]).catch(() => undefined);
+    await discardFailedVerificationCode(
+      AUTH_CODES_TABLE, userId, purpose, codeHash,
+    );
     throw error;
+  }
+  if (usesStagedDelivery(purpose)) {
+    await confirmVerificationCodeDelivery(AUTH_CODES_TABLE, userId, purpose, codeHash);
   }
 };

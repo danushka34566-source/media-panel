@@ -27,4 +27,34 @@ describe('detail primary lookup', () => {
     await expect(resolveDetailPrimary('a', [], async () => undefined))
       .resolves.toEqual({ photo: undefined, photos: [] });
   });
+
+  it('drops a cached processing video that is no longer visible publicly', async () => {
+    const loadPrimary = jest.fn(async () => ({ id: 'a', hidden: true }));
+    const result = await resolveDetailPrimary(
+      'a', [photo('a'), photo('b')], loadPrimary, { shouldRefresh: () => true },
+    );
+
+    expect(loadPrimary).toHaveBeenCalledWith(false);
+    expect(result).toEqual({ photo: undefined, photos: [photo('b')] });
+  });
+
+  it('drops a cached processing video that left the private collection', async () => {
+    const loadPrimary = jest.fn(async () => ({ id: 'a', hidden: false }));
+    const result = await resolveDetailPrimary(
+      'a', [{ id: 'a', hidden: true }], loadPrimary,
+      { hidden: 'only', shouldRefresh: () => true },
+    );
+
+    expect(loadPrimary).toHaveBeenCalledWith(true);
+    expect(result).toEqual({ photo: undefined, photos: [] });
+  });
+
+  it('keeps the last visible status when a processing refresh fails', async () => {
+    const cached = { id: 'a', hidden: false, transcodeStatus: 'processing' };
+    const result = await resolveDetailPrimary('a', [cached], async () => {
+      throw new Error('database unavailable');
+    }, { shouldRefresh: () => true });
+
+    expect(result).toEqual({ photo: cached, photos: [cached] });
+  });
 });

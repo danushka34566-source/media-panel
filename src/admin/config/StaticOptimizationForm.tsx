@@ -43,7 +43,11 @@ export default function StaticOptimizationForm({
     saveApplicationSettingsAction,
     initialState,
   );
-  const [values, setValues] = useState(settings);
+  const [draft, setDraft] = useState({ saved: settings, values: settings });
+  if (OPTIONS.some(({ name }) => draft.saved[name] !== settings[name])) {
+    setDraft({ saved: settings, values: settings });
+  }
+  const { values } = draft;
 
   const enabledCount = Object.values(values).filter(Boolean).length;
 
@@ -67,9 +71,9 @@ export default function StaticOptimizationForm({
             label={option.label}
             description={option.description}
             checked={values[option.name]}
-            onChange={checked => setValues(current => ({
+            onChange={checked => setDraft(current => ({
               ...current,
-              [option.name]: checked,
+              values: { ...current.values, [option.name]: checked },
             }))}
           />
         ))}
@@ -77,7 +81,7 @@ export default function StaticOptimizationForm({
     </div>
 
     <div className="flex min-h-10 flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-      <span className={clsx(
+      <span role="status" className={clsx(
         'min-h-5 text-sm',
         state.error ? 'text-red-600' : 'text-dim',
       )}>

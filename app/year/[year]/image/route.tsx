@@ -9,6 +9,7 @@ import { ImageResponse } from 'next/og';
 import { getImageResponseCacheControlHeaders } from '@/image-response/cache';
 import { getUniqueYears } from '@/media/query';
 import { staticallyGenerateCategoryIfConfigured } from '@/app/static';
+import { isValidMediaYear } from '@/year';
 
 export const generateStaticParams = staticallyGenerateCategoryIfConfigured(
   'years',
@@ -23,6 +24,7 @@ export async function GET(
   context: { params: Promise<{ year: string }> },
 ) {
   const { year } = await context.params;
+  if (!isValidMediaYear(year)) { return new Response(null, { status: 404 }); }
 
   const [
     photos,

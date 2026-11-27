@@ -1,6 +1,103 @@
 'use client';
 
-import { useLayoutEffect, useRef, type RefObject } from 'react';
+import { useEffect, useLayoutEffect, useRef, type RefObject } from 'react';
+
+const FULL_VIDEO_STALL_MS = 15_000;
+const MEDIA_ERR_NETWORK = 2;
+
+export const useFullVideoPlaybackWatchdog = ({
+  active,
+  attempt,
+  videoRef,
+  onTimeout,
+  onBufferingChange,
+  onDecodedPause,
+}: {
+  active: boolean
+  attempt: number
+  videoRef: RefObject<HTMLVideoElement | null>
+  onTimeout: (video: HTMLVideoElement, code: number) => void
+  onBufferingChange?: (buffering: boolean) => void
+  onDecodedPause?: () => void
+}) => {
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!active || !video) { return; }
+    let timer: number | undefined;
+    let started = !video.paused &&
+      video.readyState >= HTMLMediaElement.HAVE_FUTURE_DATA;
+    let waitingAt: number | undefined;
+    const clear = () => window.clearTimeout(timer);
+    const arm = () => {
+      clear();
+      if (document.hidden || (started && waitingAt === undefined)) { return; }
+      timer = window.setTimeout(() => {
+        if (document.hidden || video.ended) { return; }
+        if (!video.paused || (
+          !started && video.readyState < HTMLMediaElement.HAVE_FUTURE_DATA
+        )) {
+          onTimeout(video, MEDIA_ERR_NETWORK);
+        } else if (!started) {
+          // The element can already be paused when a new attempt attaches.
+          onDecodedPause?.();
+        }
+      }, FULL_VIDEO_STALL_MS);
+    };
+    const stopWaiting = () => {
+      clear();
+      if (waitingAt !== undefined) {
+        waitingAt = undefined;
+        onBufferingChange?.(false);
+      }
+    };
+    const onPlaying = () => {
+      started = true;
+      stopWaiting();
+    };
+    const onLoadStart = () => {
+      started = false;
+      stopWaiting();
+      arm();
+    };
+    const onProgress = () => { if (!started) { arm(); } };
+    const onWaiting = () => {
+      if (!started || video.paused || video.ended || waitingAt !== undefined) {
+        return;
+      }
+      waitingAt = video.currentTime;
+      onBufferingChange?.(true);
+      arm();
+    };
+    const onStalled = () => {
+      if (video.readyState < HTMLMediaElement.HAVE_FUTURE_DATA) { onWaiting(); }
+    };
+    const onTimeUpdate = () => {
+      if (waitingAt !== undefined && !video.seeking && video.currentTime !== waitingAt) {
+        stopWaiting();
+      }
+    };
+    const onPause = () => {
+      const hasPausedOnFrame = video.paused &&
+        video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA;
+      if (started || (hasPausedOnFrame && onDecodedPause)) { stopWaiting(); }
+      if (hasPausedOnFrame) { onDecodedPause?.(); }
+    };
+    const events: Array<[string, EventListener]> = [
+      ['loadstart', onLoadStart], ['progress', onProgress], ['play', onProgress],
+      ['playing', onPlaying],
+      ['waiting', onWaiting], ['stalled', onStalled], ['timeupdate', onTimeUpdate],
+      ['pause', onPause], ['ended', stopWaiting],
+    ];
+    events.forEach(([name, handler]) => video.addEventListener(name, handler));
+    document.addEventListener('visibilitychange', arm);
+    arm();
+    return () => {
+      stopWaiting();
+      events.forEach(([name, handler]) => video.removeEventListener(name, handler));
+      document.removeEventListener('visibilitychange', arm);
+    };
+  }, [active, attempt, onBufferingChange, onDecodedPause, onTimeout, videoRef]);
+};
 
 export type FullVideoSource = {
   sourceUrl: string
