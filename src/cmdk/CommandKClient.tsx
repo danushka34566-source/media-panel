@@ -1181,7 +1181,8 @@ export default function CommandKClient({
           <DialogDescription>{DIALOG_DESCRIPTION}</DialogDescription>
         </VisuallyHidden.Root>
         <div className={clsx(
-          'flex h-12 items-center gap-2 px-4',
+          'flex items-center justify-center gap-2',
+          'py-1 px-4.5',
           'rounded-none bg-transparent',
           'border-b border-b-gray-400/25 dark:border-b-gray-800',
         )}>
@@ -1193,8 +1194,9 @@ export default function CommandKClient({
               updateMask();
             }}
             className={clsx(
-              'min-h-10 min-w-0 grow border-0 py-1 text-base leading-6',
-              'shadow-none ring-0 focus:border-0 focus:ring-0',
+              'grow p-0',
+              'focus:ring-0',
+              'border-transparent focus:border-transparent',
               'bg-transparent rounded-none',
               'placeholder:text-gray-400/80',
               'dark:placeholder:text-gray-700',
@@ -1211,8 +1213,9 @@ export default function CommandKClient({
             : <span>
               <LoaderButton
                 className={clsx(
-                  'h-8! w-8! shrink-0 self-center justify-center rounded-md p-0!',
-                  'text-xs',
+                  'h-auto! py-1 mr-[-9px]',
+                  'px-1',
+                  'text-[12px]',
                   'text-gray-400/90 dark:text-gray-700',
                 )}
                 onClick={() => {
@@ -1251,7 +1254,7 @@ export default function CommandKClient({
           className="overflow-y-auto"
           style={{ ...styleMask, maxHeight }}
         >
-          <div className="flex flex-col gap-2 px-3 py-2">
+          <div className="flex flex-col pt-2 pb-3 px-3 gap-2">
             <Command.Empty className="mt-1 px-2 text-dim text-[0.9rem] pb-0.5">
               {isLoading
                 ? appText.cmdk.searching
@@ -1291,15 +1294,19 @@ export default function CommandKClient({
                 <Command.Group
                   key={heading}
                   heading={<div className={clsx(
-                    'flex items-center px-2 py-1',
-                    'text-xs font-medium uppercase tracking-wider text-dim',
+                    'flex items-center',
+                    'px-2 py-1',
+                    'text-xs font-medium text-dim tracking-wider',
                     isPending && 'opacity-20',
                   )}>
                     {accessory &&
-                      <div className="flex h-5 w-6 shrink-0 items-center">{accessory}</div>}
+                      <div className="w-5">{accessory}</div>}
                     {heading}
                   </div>}
-                  className="select-none"
+                  className={clsx(
+                    'uppercase',
+                    'select-none',
+                  )}
                 >
                   {items.map(({
                     label,
@@ -1366,14 +1373,15 @@ export default function CommandKClient({
                 </Command.Group>)}
             {footer && !queryLive &&
               <div className={clsx(
-                'px-2 py-2 text-center text-sm text-dim',
+                'text-center text-base text-dim pt-1',
+                'pb-2',
               )}>
                 {footer}
               </div>}
           </div>
           {hasMoreMediaSearchResults && !hasMoreSearchError && <button
             type="button"
-            className="mb-3 ml-9 mt-1 rounded px-2 py-1 text-sm hover:underline disabled:opacity-50"
+            className="mb-3 ml-5 text-sm hover:underline disabled:opacity-50"
             disabled={isLoading || isPending}
             onClick={() => loadMoreMediaSearchResults()}
             onKeyDown={stopCommandItemActivation}
