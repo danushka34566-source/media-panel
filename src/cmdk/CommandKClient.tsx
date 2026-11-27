@@ -50,7 +50,7 @@ import { useDebounce } from 'use-debounce';
 import Spinner from '../components/Spinner';
 import { usePathname, useRouter } from 'next/navigation';
 import { useTheme } from 'next-themes';
-import { BiDesktop, BiLockAlt, BiMoon, BiSun } from 'react-icons/bi';
+import { BiBoltCircle, BiDesktop, BiLockAlt, BiMoon, BiSun } from 'react-icons/bi';
 import { IoClose, IoInvertModeSharp } from 'react-icons/io5';
 import { useAppState } from '@/app/AppState';
 import { searchMediaAction } from '@/media/actions';
@@ -972,6 +972,7 @@ export default function CommandKClient({
   }
   const quickAccessSection: CommandKSection = {
     heading: 'Quick Access',
+    accessory: <BiBoltCircle size={16} />,
     items: quickAccessItems,
   };
 
