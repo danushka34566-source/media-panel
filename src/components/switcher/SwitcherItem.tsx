@@ -41,7 +41,8 @@ export default function SwitcherItem({
 }) {
   const widthClass = width === 'narrow' ? WIDTH_CLASS_NARROW : WIDTH_CLASS;
   const className = clsx(
-    'flex items-center justify-center',
+    'flex items-center justify-center border-0 bg-transparent p-0 shadow-none',
+    'rounded-none focus:outline-none focus-visible:outline-none focus-visible:ring-0',
     `${widthClass} h-[28px]`,
     isInteractive && 'cursor-pointer',
     isInteractive && 'hover:bg-gray-100/60 active:bg-gray-100',
