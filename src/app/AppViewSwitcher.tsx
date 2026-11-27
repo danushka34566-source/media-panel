@@ -326,6 +326,7 @@ export default function AppViewSwitcher({
         />
       </motion.span>}
       ariaLabel={appText.nav.grid}
+      className="focus-visible:outline-none focus-visible:bg-dim focus-visible:text-main"
       href={currentSelection === 'grid' ? undefined : pathGrid}
       hrefRef={refHrefGrid}
       active={currentSelection === 'grid'}
@@ -375,7 +376,10 @@ export default function AppViewSwitcher({
               searchFeedbackTimeoutRef.current = undefined;
             }, 180);
           }}
-          className="translate-y-[-0.5px]"
+          className={clsx(
+            'translate-y-[-0.5px]',
+            'focus-visible:outline-none focus-visible:bg-dim focus-visible:text-main',
+          )}
           tooltip={{...SHOW_KEYBOARD_SHORTCUT_TOOLTIPS && {
             content: appText.nav.search,
             keyCommandModifier: KEY_COMMANDS.search[0],

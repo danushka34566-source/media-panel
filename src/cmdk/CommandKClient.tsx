@@ -86,7 +86,6 @@ import { formatLensText } from '@/lens';
 import IconTag from '../components/icons/IconTag';
 import IconCamera from '../components/icons/IconCamera';
 import IconMedia from '../components/icons/IconMedia';
-import IconSearch from '../components/icons/IconSearch';
 import IconRecipe from '../components/icons/IconRecipe';
 import IconFocalLength from '../components/icons/IconFocalLength';
 import IconFilm from '../components/icons/IconFilm';
@@ -101,7 +100,6 @@ import LoaderButton from '@/components/primitives/LoaderButton';
 import IconRecents from '@/components/icons/IconRecents';
 import { CgClose, CgFileDocument } from 'react-icons/cg';
 import { FaRegUserCircle } from 'react-icons/fa';
-import { formatDistanceToNow } from 'date-fns';
 import IconCheck from '@/components/icons/IconCheck';
 import { getPathForSortBy, getSortStateFromPath } from '@/media/sort/path';
 import IconSort from '@/components/icons/IconSort';
@@ -615,12 +613,8 @@ export default function CommandKClient({
   const recent = recents[0];
   const recentsStatus = useMemo(() => {
     if (!recent) { return undefined; }
-    const { count, lastModified } = recent;
-    const subhead = appText.category.recentSubhead(
-      formatDistanceToNow(lastModified),
-    );
-    return count ? { count, subhead } : undefined;
-  }, [recent, appText]);
+    return recent.count ? { count: recent.count } : undefined;
+  }, [recent]);
 
   // Years only accessible by search
   const years = useMemo(() =>
@@ -638,18 +632,9 @@ export default function CommandKClient({
 
   const categorySections: CommandKSection[] = useMemo(() =>
     CATEGORY_VISIBILITY
+      .filter(category => category !== 'recents')
       .map(category => {
         switch (category) {
-          case 'recents': return {
-            heading: appText.category.recentPlural,
-            accessory: <IconRecents size={15} />,
-            items: recentsStatus ? [{
-              label: recentsStatus.subhead,
-              annotation: formatCount(recentsStatus.count),
-              annotationAria: formatCountDescriptive(recentsStatus.count),
-              path: PREFIX_RECENTS,
-            }] : [],
-          };
           case 'years': return {
             heading: appText.category.yearPlural,
             accessory: <IconYear size={14} />,
@@ -943,7 +928,7 @@ export default function CommandKClient({
   };
 
   const searchScopeItems: CommandKItem[] = [{
-    label: isUserSearchLive ? 'Search media' : 'Search users',
+    label: isUserSearchLive ? 'Search media' : 'Users',
     explicitKey: 'toggle-user-search',
     keywords: [queryLive, 'search users media'],
     accessory: <FaRegUserCircle size={18} />,
@@ -964,24 +949,30 @@ export default function CommandKClient({
       action: () => keepSearchOpen(`users:${role} `),
     })));
   }
-  const searchScopeSection: CommandKSection = {
-    heading: 'Search',
-    accessory: <IconSearch width={14} includeTitle={false} />,
-    items: canManageUsers ? searchScopeItems : [],
-  };
-
+  const quickAccessItems: CommandKItem[] = [];
+  if (isUserSignedIn) {
+    quickAccessItems.push({
+      label: 'Favorites',
+      explicitKey: 'favorites',
+      keywords: ['favorites liked saved'],
+      accessory: <IconFavs size={18} highlight />,
+      path: PATH_FAVORITES,
+    });
+  }
+  if (recentsStatus) {
+    quickAccessItems.push({
+      label: appText.category.recentPlural,
+      explicitKey: 'recents',
+      keywords: ['recent uploads'],
+      accessory: <IconRecents size={18} />,
+      annotation: formatCount(recentsStatus.count),
+      annotationAria: formatCountDescriptive(recentsStatus.count),
+      path: PREFIX_RECENTS,
+    });
+  }
   const quickAccessSection: CommandKSection = {
     heading: 'Quick Access',
-    accessory: <IconFavs size={14} highlight />,
-    items: isUserSignedIn
-      ? [{
-        label: 'Favorites',
-        explicitKey: 'favorites',
-        keywords: ['favorites liked saved'],
-        accessory: <IconFavs size={18} highlight />,
-        path: PATH_FAVORITES,
-      }]
-      : [],
+    items: quickAccessItems,
   };
 
   const isGridPage = pathname === PATH_GRID_INFERRED ||
@@ -1040,6 +1031,9 @@ export default function CommandKClient({
     />,
     items: [],
   };
+  if (canManageUsers) {
+    adminSection.items.push(...searchScopeItems);
+  }
 
   if (canEdit) {
     if (canUpload) {
@@ -1186,8 +1180,7 @@ export default function CommandKClient({
           <DialogDescription>{DIALOG_DESCRIPTION}</DialogDescription>
         </VisuallyHidden.Root>
         <div className={clsx(
-          'flex items-center justify-center gap-2',
-          'py-1 px-4.5',
+          'flex h-12 items-center gap-2 px-4',
           'rounded-none bg-transparent',
           'border-b border-b-gray-400/25 dark:border-b-gray-800',
         )}>
@@ -1199,9 +1192,8 @@ export default function CommandKClient({
               updateMask();
             }}
             className={clsx(
-              'grow p-0',
-              'focus:ring-0',
-              'border-transparent focus:border-transparent',
+              'min-h-10 min-w-0 grow border-0 py-1 text-base leading-6',
+              'shadow-none ring-0 focus:border-0 focus:ring-0',
               'bg-transparent rounded-none',
               'placeholder:text-gray-400/80',
               'dark:placeholder:text-gray-700',
@@ -1218,9 +1210,8 @@ export default function CommandKClient({
             : <span>
               <LoaderButton
                 className={clsx(
-                  'h-auto! py-1 mr-[-9px]',
-                  'px-1',
-                  'text-[12px]',
+                  'h-8! w-8! shrink-0 self-center justify-center rounded-md p-0!',
+                  'text-xs',
                   'text-gray-400/90 dark:text-gray-700',
                 )}
                 onClick={() => {
@@ -1259,7 +1250,7 @@ export default function CommandKClient({
           className="overflow-y-auto"
           style={{ ...styleMask, maxHeight }}
         >
-          <div className="flex flex-col pt-2 pb-3 px-3 gap-2">
+          <div className="flex flex-col gap-2 px-3 py-2">
             <Command.Empty className="mt-1 px-2 text-dim text-[0.9rem] pb-0.5">
               {isLoading
                 ? appText.cmdk.searching
@@ -1287,7 +1278,6 @@ export default function CommandKClient({
             {(quickAccessSection.items.length > 0
               ? [quickAccessSection]
               : [])
-              .concat(searchScopeSection)
               .concat(isUserSearch ? queriedSections : mediaQueriedSections)
               .concat(categorySections)
               .concat(librarySections)
@@ -1300,19 +1290,15 @@ export default function CommandKClient({
                 <Command.Group
                   key={heading}
                   heading={<div className={clsx(
-                    'flex items-center',
-                    'px-2 py-1',
-                    'text-xs font-medium text-dim tracking-wider',
+                    'flex items-center px-2 py-1',
+                    'text-xs font-medium uppercase tracking-wider text-dim',
                     isPending && 'opacity-20',
                   )}>
                     {accessory &&
-                      <div className="w-5">{accessory}</div>}
+                      <div className="flex h-5 w-6 shrink-0 items-center">{accessory}</div>}
                     {heading}
                   </div>}
-                  className={clsx(
-                    'uppercase',
-                    'select-none',
-                  )}
+                  className="select-none"
                 >
                   {items.map(({
                     label,
@@ -1379,15 +1365,14 @@ export default function CommandKClient({
                 </Command.Group>)}
             {footer && !queryLive &&
               <div className={clsx(
-                'text-center text-base text-dim pt-1',
-                'pb-2',
+                'px-2 py-2 text-center text-sm text-dim',
               )}>
                 {footer}
               </div>}
           </div>
           {hasMoreMediaSearchResults && !hasMoreSearchError && <button
             type="button"
-            className="mb-3 ml-5 text-sm hover:underline disabled:opacity-50"
+            className="mb-3 ml-9 mt-1 rounded px-2 py-1 text-sm hover:underline disabled:opacity-50"
             disabled={isLoading || isPending}
             onClick={() => loadMoreMediaSearchResults()}
             onKeyDown={stopCommandItemActivation}

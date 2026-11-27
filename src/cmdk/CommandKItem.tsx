@@ -28,10 +28,9 @@ export default function CommandKItem({
     <Command.Item
       value={value}
       keywords={keywords}
-      className={clsx (
-        'px-2',
-        accessory ? 'py-2' : 'py-1',
-        'rounded-md cursor-pointer tracking-wide',
+      className={clsx(
+        'min-h-9 px-2 py-1.5 text-sm leading-5',
+        'rounded-md cursor-pointer tracking-normal',
         'active:bg-gray-200/75! dark:active:bg-gray-800/55!',
         ...loading
           ? [
@@ -46,14 +45,16 @@ export default function CommandKItem({
       onSelect={onSelect}
       disabled={loading || disabled}
     >
-      <div className="flex items-center gap-2 sm:gap-3">
-        {accessory}
-        <span className="grow truncate">
+      <div className="flex min-w-0 items-center gap-2">
+        <span className="flex size-6 shrink-0 items-center justify-center">
+          {accessory}
+        </span>
+        <span className="min-w-0 grow truncate">
           {label}
         </span>
         {annotation && !loading &&
           <span
-            className="text-dim whitespace-nowrap"
+            className="shrink-0 whitespace-nowrap text-xs leading-5 text-dim"
             aria-label={annotationAria}
           >
             <span aria-hidden={Boolean(annotationAria)}>
